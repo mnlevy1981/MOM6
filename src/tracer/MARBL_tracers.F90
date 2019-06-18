@@ -39,7 +39,7 @@ public MARBL_tracer_stock, MARBL_tracers_end
 ! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
 ! vary with the Boussinesq approximation, the Boussinesq variant is given first.
 
-!> The control structure for the regional dyes tracer package
+!> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
@@ -57,6 +57,7 @@ type, public :: MARBL_tracers_CS ; private
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 end type MARBL_tracers_CS
 
+!> All calls to MARBL are done via the interface class
 type(MARBL_interface_class), private :: MARBL_instances
 
 contains
