@@ -34,6 +34,7 @@ use ISOMIP_tracer, only : ISOMIP_tracer_end, ISOMIP_tracer_CS
 use ideal_age_example, only : register_ideal_age_tracer, initialize_ideal_age_tracer
 use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_surface_state
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
+use MARBL_tracers, only : register_MARBL_tracers, MARBL_tracers_CS
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
 use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
@@ -75,6 +76,7 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_DOME_tracer = .false.             !< If true, use the DOME_tracer package
   logical :: use_ISOMIP_tracer = .false.           !< If true, use the ISOMPE_tracer package
   logical :: use_ideal_age = .false.               !< If true, use the ideal age tracer package
+  logical :: use_MARBL_tracers = .false.           !< If true, use the MARBL tracer package
   logical :: use_regional_dyes = .false.           !< If true, use the regional dyes tracer package
   logical :: use_oil = .false.                     !< If true, use the oil tracer package
   logical :: use_advection_test_tracer = .false.   !< If true, use the advection_test_tracer package
@@ -88,6 +90,7 @@ type, public :: tracer_flow_control_CS ; private
   type(DOME_tracer_CS), pointer :: DOME_tracer_CSp => NULL()
   type(ISOMIP_tracer_CS), pointer :: ISOMIP_tracer_CSp => NULL()
   type(ideal_age_tracer_CS), pointer :: ideal_age_tracer_CSp => NULL()
+  type(MARBL_tracers_CS), pointer :: MARBL_tracers_CSp => NULL()
   type(dye_tracer_CS), pointer :: dye_tracer_CSp => NULL()
   type(oil_tracer_CS), pointer :: oil_tracer_CSp => NULL()
   type(advection_test_tracer_CS), pointer :: advection_test_tracer_CSp => NULL()
@@ -190,6 +193,9 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   call get_param(param_file, mdl, "USE_IDEAL_AGE_TRACER", CS%use_ideal_age, &
                  "If true, use the ideal_age_example tracer package.", &
                  default=.false.)
+  call get_param(param_file, mdl, "USE_MARBL_TRACERS", CS%use_marbl_tracers, &
+                 "If true, use the MARBL tracer package.", &
+                 default=.false.)
   call get_param(param_file, mdl, "USE_REGIONAL_DYES", CS%use_regional_dyes, &
                  "If true, use the regional_dyes tracer package.", &
                  default=.false.)
@@ -238,6 +244,9 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   if (CS%use_ideal_age) CS%use_ideal_age = &
     register_ideal_age_tracer(HI, GV, param_file,  CS%ideal_age_tracer_CSp, &
                               tr_Reg, restart_CS)
+  if (CS%use_MARBL_tracers) CS%use_MARBL_tracers = &
+    register_MARBL_tracers(HI, GV, US, param_file,  CS%MARBL_tracers_CSp, &
+                        tr_Reg, restart_CS)
   if (CS%use_regional_dyes) CS%use_regional_dyes = &
     register_dye_tracer(HI, GV, US, param_file,  CS%dye_tracer_CSp, &
                         tr_Reg, restart_CS)

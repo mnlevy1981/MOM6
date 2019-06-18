@@ -21,6 +21,7 @@ use MOM_tracer_Z_init,      only : tracer_Z_init
 use MOM_unit_scaling,       only : unit_scale_type
 use MOM_variables,          only : surface
 use MOM_verticalGrid,       only : verticalGrid_type
+use MARBL_interface,        only : MARBL_interface_class
 
 use coupler_types_mod,      only : coupler_type_set_data, ind_csurf
 use atmos_ocean_fluxes_mod, only : aof_set_coupler_flux
@@ -42,12 +43,6 @@ public MARBL_tracer_stock, MARBL_tracers_end
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
-  real, allocatable, dimension(:) :: dye_source_minlon !< Minimum longitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_maxlon !< Maximum longitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_minlat !< Minimum latitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_maxlat !< Maximum latitude of region dye will be injected.
-  real, allocatable, dimension(:) :: dye_source_mindepth !< Minimum depth of region dye will be injected [Z ~> m].
-  real, allocatable, dimension(:) :: dye_source_maxdepth !< Maximum depth of region dye will be injected [Z ~> m].
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
   real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine, in g m-3?
 
@@ -61,6 +56,8 @@ type, public :: MARBL_tracers_CS ; private
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 end type MARBL_tracers_CS
+
+type(MARBL_interface_class), private :: MARBL_instances
 
 contains
 
@@ -84,10 +81,14 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=200) :: inputdir ! The directory where the input files are.
   character(len=48)  :: var_name ! The variable's name.
   character(len=48)  :: desc_name ! The variable's descriptor.
+  character(len=48)  :: units ! The variable's units.
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_MARBL_tracers
   integer :: isd, ied, jsd, jed, nz, m
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
+
+  ! Read all relevant parameters and write them to the model log.
+  call log_version(param_file, mdl, version, "")
 
   if (associated(CS)) then
     call MOM_error(WARNING, "register_MARBL_tracers called with an "// &
@@ -96,68 +97,26 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   endif
   allocate(CS)
 
-  ! Read all relevant parameters and write them to the model log.
-  call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "NUM_MARBL_TRACERS", CS%ntr, &
-                 "The number of tracers MARBL computes in this run. Each tracer \n"//&
-                 "should have a separate region.", default=0)
-  allocate(CS%dye_source_minlon(CS%ntr), &
-           CS%dye_source_maxlon(CS%ntr), &
-           CS%dye_source_minlat(CS%ntr), &
-           CS%dye_source_maxlat(CS%ntr), &
-           CS%dye_source_mindepth(CS%ntr), &
-           CS%dye_source_maxdepth(CS%ntr))
+  call MARBL_instances%init(&
+                            gcm_num_levels = nz, &
+                            gcm_num_PAR_subcols = 1, &
+                            gcm_num_elements_surface_flux = 1, &
+                            gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
+                            gcm_zw = GV%sInterface(2:nz+1), &
+                            gcm_zt = GV%sLayer, &
+                            lgcm_has_global_ops = .true. &
+                           )
+
+  CS%ntr = size(marbl_instances%tracer_metadata)
   allocate(CS%ind_tr(CS%ntr))
   allocate(CS%tr_desc(CS%ntr))
-
-  CS%dye_source_minlon(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MINLON", CS%dye_source_minlon, &
-                 "This is the starting longitude at which we start injecting dyes.", &
-                 fail_if_missing=.true.)
-  if (minval(CS%dye_source_minlon(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_MARBL_tracers: Not enough values provided for DYE_SOURCE_MINLON ")
-
-  CS%dye_source_maxlon(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MAXLON", CS%dye_source_maxlon, &
-                 "This is the ending longitude at which we finish injecting dyes.", &
-                 fail_if_missing=.true.)
-  if (minval(CS%dye_source_maxlon(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_MARBL_tracers: Not enough values provided for DYE_SOURCE_MAXLON ")
-
-  CS%dye_source_minlat(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MINLAT", CS%dye_source_minlat, &
-                 "This is the starting latitude at which we start injecting dyes.", &
-                 fail_if_missing=.true.)
-  if (minval(CS%dye_source_minlat(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_MARBL_tracers: Not enough values provided for DYE_SOURCE_MINLAT ")
-
-  CS%dye_source_maxlat(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MAXLAT", CS%dye_source_maxlat, &
-                 "This is the ending latitude at which we finish injecting dyes.", &
-                 fail_if_missing=.true.)
-  if (minval(CS%dye_source_maxlat(:)) < -1.e29) &
-    call MOM_error(FATAL, "register_MARBL_tracers: Not enough values provided for DYE_SOURCE_MAXLAT ")
-
-  CS%dye_source_mindepth(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MINDEPTH", CS%dye_source_mindepth, &
-                 "This is the minumum depth at which we inject dyes.", &
-                 units="m", scale=US%m_to_Z, fail_if_missing=.true.)
-  if (minval(CS%dye_source_mindepth(:)) < -1.e29*US%m_to_Z) &
-    call MOM_error(FATAL, "register_MARBL_tracers: Not enough values provided for DYE_SOURCE_MINDEPTH")
-
-  CS%dye_source_maxdepth(:) = -1.e30
-  call get_param(param_file, mdl, "DYE_SOURCE_MAXDEPTH", CS%dye_source_maxdepth, &
-                 "This is the maximum depth at which we inject dyes.", &
-                 units="m", scale=US%m_to_Z, fail_if_missing=.true.)
-  if (minval(CS%dye_source_maxdepth(:)) < -1.e29*US%m_to_Z) &
-    call MOM_error(FATAL, "register_MARBL_tracers: Not enough values provided for DYE_SOURCE_MAXDEPTH ")
-
   allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr)) ; CS%tr(:,:,:,:) = 0.0
 
   do m = 1, CS%ntr
-    write(var_name(:),'(A,I3.3)') "dye",m
-    write(desc_name(:),'(A,I3.3)') "Dye Tracer ",m
-    CS%tr_desc(m) = var_desc(trim(var_name), "conc", trim(desc_name), caller=mdl)
+    write(var_name(:),'(A)') trim(marbl_instances%tracer_metadata(m)%short_name)
+    write(desc_name(:),'(A)') trim(marbl_instances%tracer_metadata(m)%long_name)
+    write(units(:),'(A)') trim(marbl_instances%tracer_metadata(m)%units)
+    CS%tr_desc(m) = var_desc(trim(var_name), trim(units), trim(desc_name), caller=mdl)
 
     ! This is needed to force the compiler not to do a copy in the registration
     ! calls.  Curses on the designers and implementers of Fortran90.
@@ -165,7 +124,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     call query_vardesc(CS%tr_desc(m), name=var_name, &
                        caller="register_MARBL_tracers")
     ! Register the tracer for horizontal advection, diffusion, and restarts.
-    call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, &
+    call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, units = units, &
                          tr_desc=CS%tr_desc(m), registry_diags=.true., &
                          restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
 
@@ -222,18 +181,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, h, diag, OBC, CS, spong
   do m= 1, CS%ntr
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (CS%dye_source_minlon(m)<G%geoLonT(i,j) .and. &
-          CS%dye_source_maxlon(m)>=G%geoLonT(i,j) .and. &
-          CS%dye_source_minlat(m)<G%geoLatT(i,j) .and. &
-          CS%dye_source_maxlat(m)>=G%geoLatT(i,j) .and. &
-          G%mask2dT(i,j) > 0.0 ) then
+      if (G%mask2dT(i,j) > 0.0 ) then
         z_bot = -G%bathyT(i,j)
         do k = GV%ke, 1, -1
           z_center = z_bot + 0.5*h(i,j,k)*GV%H_to_Z
-          if ( z_center > -CS%dye_source_maxdepth(m) .and. &
-               z_center < -CS%dye_source_mindepth(m) ) then
-            CS%tr(i,j,k,m) = 1.0
-          endif
           z_bot = z_bot + h(i,j,k)*GV%H_to_Z
         enddo
       endif
@@ -305,18 +256,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   do m=1,CS%ntr
     do j=G%jsd,G%jed ; do i=G%isd,G%ied
       ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (CS%dye_source_minlon(m)<G%geoLonT(i,j) .and. &
-          CS%dye_source_maxlon(m)>=G%geoLonT(i,j) .and. &
-          CS%dye_source_minlat(m)<G%geoLatT(i,j) .and. &
-          CS%dye_source_maxlat(m)>=G%geoLatT(i,j) .and. &
-          G%mask2dT(i,j) > 0.0 ) then
+      if (G%mask2dT(i,j) > 0.0 ) then
         z_bot = -G%bathyT(i,j)
         do k=nz,1,-1
           z_center = z_bot + 0.5*h_new(i,j,k)*GV%H_to_Z
-          if ( z_center > -CS%dye_source_maxdepth(m) .and. &
-               z_center < -CS%dye_source_mindepth(m) ) then
-            CS%tr(i,j,k,m) = 1.0
-          endif
           z_bot = z_bot + h_new(i,j,k)*GV%H_to_Z
         enddo
       endif
