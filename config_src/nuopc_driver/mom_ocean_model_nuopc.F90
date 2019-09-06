@@ -1,5 +1,5 @@
 !> Top-level module for the MOM6 ocean model in coupled mode.
-module MOM_ocean_model
+module MOM_ocean_model_nuopc
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
@@ -11,57 +11,57 @@ module MOM_ocean_model
 ! This code is a stop-gap wrapper of the MOM6 code to enable it to be called
 ! in the same way as MOM4.
 
-use MOM, only : initialize_MOM, step_MOM, MOM_control_struct, MOM_end
-use MOM, only : extract_surface_state, allocate_surface_state, finish_MOM_initialization
-use MOM, only : get_MOM_state_elements, MOM_state_is_synchronized
-use MOM, only : get_ocean_stocks, step_offline
-use MOM_constants, only : CELSIUS_KELVIN_OFFSET, hlf
-use MOM_diag_mediator, only : diag_ctrl, enable_averaging, disable_averaging
-use MOM_diag_mediator, only : diag_mediator_close_registration, diag_mediator_end
-use MOM_domains, only : pass_var, pass_vector, AGRID, BGRID_NE, CGRID_NE
-use MOM_domains, only : TO_ALL, Omit_Corners
-use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
-use MOM_error_handler, only : callTree_enter, callTree_leave
-use MOM_file_parser, only : get_param, log_version, close_param_file, param_file_type
-use MOM_forcing_type, only : allocate_forcing_type
-use MOM_forcing_type, only : forcing, mech_forcing
-use MOM_forcing_type, only : forcing_accumulate, copy_common_forcing_fields
-use MOM_forcing_type, only : copy_back_forcing_fields, set_net_mass_forcing
-use MOM_forcing_type, only : set_derived_forcing_fields
-use MOM_forcing_type, only : forcing_diagnostics, mech_forcing_diags
-use MOM_get_input, only : Get_MOM_Input, directories
-use MOM_grid, only : ocean_grid_type
-use MOM_io, only : close_file, file_exists, read_data, write_version_number
-use MOM_marine_ice, only : iceberg_forces, iceberg_fluxes, marine_ice_init, marine_ice_CS
-use MOM_restart, only : MOM_restart_CS, save_restart
-use MOM_string_functions, only : uppercase
-use MOM_surface_forcing, only : surface_forcing_init, convert_IOB_to_fluxes
-use MOM_surface_forcing, only : convert_IOB_to_forces, ice_ocn_bnd_type_chksum
-use MOM_surface_forcing, only : ice_ocean_boundary_type, surface_forcing_CS
-use MOM_surface_forcing, only : forcing_save_restart
-use MOM_time_manager, only : time_type, get_time, set_time, operator(>)
-use MOM_time_manager, only : operator(+), operator(-), operator(*), operator(/)
-use MOM_time_manager, only : operator(/=), operator(<=), operator(>=)
-use MOM_time_manager, only : operator(<), real_to_time_type, time_type_to_real
+use MOM,                     only : initialize_MOM, step_MOM, MOM_control_struct, MOM_end
+use MOM,                     only : extract_surface_state, allocate_surface_state, finish_MOM_initialization
+use MOM,                     only : get_MOM_state_elements, MOM_state_is_synchronized
+use MOM,                     only : get_ocean_stocks, step_offline
+use MOM_constants,           only : CELSIUS_KELVIN_OFFSET, hlf
+use MOM_diag_mediator,       only : diag_ctrl, enable_averaging, disable_averaging
+use MOM_diag_mediator,       only : diag_mediator_close_registration, diag_mediator_end
+use MOM_domains,             only : pass_var, pass_vector, AGRID, BGRID_NE, CGRID_NE
+use MOM_domains,             only : TO_ALL, Omit_Corners
+use MOM_error_handler,       only : MOM_error, FATAL, WARNING, is_root_pe
+use MOM_error_handler,       only : callTree_enter, callTree_leave
+use MOM_file_parser,         only : get_param, log_version, close_param_file, param_file_type
+use MOM_forcing_type,        only : allocate_forcing_type
+use MOM_forcing_type,        only : forcing, mech_forcing
+use MOM_forcing_type,        only : forcing_accumulate, copy_common_forcing_fields
+use MOM_forcing_type,        only : copy_back_forcing_fields, set_net_mass_forcing
+use MOM_forcing_type,        only : set_derived_forcing_fields
+use MOM_forcing_type,        only : forcing_diagnostics, mech_forcing_diags
+use MOM_get_input,           only : Get_MOM_Input, directories
+use MOM_grid,                only : ocean_grid_type
+use MOM_io,                  only : close_file, file_exists, read_data, write_version_number
+use MOM_marine_ice,          only : iceberg_forces, iceberg_fluxes, marine_ice_init, marine_ice_CS
+use MOM_restart,             only : MOM_restart_CS, save_restart
+use MOM_string_functions,    only : uppercase
+use MOM_time_manager,        only : time_type, get_time, set_time, operator(>)
+use MOM_time_manager,        only : operator(+), operator(-), operator(*), operator(/)
+use MOM_time_manager,        only : operator(/=), operator(<=), operator(>=)
+use MOM_time_manager,        only : operator(<), real_to_time_type, time_type_to_real
 use MOM_tracer_flow_control, only : call_tracer_register, tracer_flow_control_init
 use MOM_tracer_flow_control, only : call_tracer_flux_init
 use MOM_unit_scaling,        only : unit_scale_type
-use MOM_variables, only : surface
-use MOM_verticalGrid, only : verticalGrid_type
-use MOM_ice_shelf, only : initialize_ice_shelf, shelf_calc_flux, ice_shelf_CS
-use MOM_ice_shelf, only : add_shelf_forces, ice_shelf_end, ice_shelf_save_restart
-use coupler_types_mod, only : coupler_1d_bc_type, coupler_2d_bc_type
-use coupler_types_mod, only : coupler_type_spawn, coupler_type_write_chksums
-use coupler_types_mod, only : coupler_type_initialized, coupler_type_copy_data
-use coupler_types_mod, only : coupler_type_set_diags, coupler_type_send_data
-use mpp_domains_mod, only : domain2d, mpp_get_layout, mpp_get_global_domain
-use mpp_domains_mod, only : mpp_define_domains, mpp_get_compute_domain, mpp_get_data_domain
-use atmos_ocean_fluxes_mod, only : aof_set_coupler_flux
-use fms_mod, only : stdout
-use mpp_mod, only : mpp_chksum
-use MOM_EOS, only : gsw_sp_from_sr, gsw_pt_from_ct
-use MOM_wave_interface, only: wave_parameters_CS, MOM_wave_interface_init
-use MOM_wave_interface, only: MOM_wave_interface_init_lite, Update_Surface_Waves
+use MOM_variables,           only : surface
+use MOM_verticalGrid,        only : verticalGrid_type
+use MOM_ice_shelf,           only : initialize_ice_shelf, shelf_calc_flux, ice_shelf_CS
+use MOM_ice_shelf,           only : add_shelf_forces, ice_shelf_end, ice_shelf_save_restart
+use coupler_types_mod,       only : coupler_1d_bc_type, coupler_2d_bc_type
+use coupler_types_mod,       only : coupler_type_spawn, coupler_type_write_chksums
+use coupler_types_mod,       only : coupler_type_initialized, coupler_type_copy_data
+use coupler_types_mod,       only : coupler_type_set_diags, coupler_type_send_data
+use mpp_domains_mod,         only : domain2d, mpp_get_layout, mpp_get_global_domain
+use mpp_domains_mod,         only : mpp_define_domains, mpp_get_compute_domain, mpp_get_data_domain
+use atmos_ocean_fluxes_mod,  only : aof_set_coupler_flux
+use fms_mod,                 only : stdout
+use mpp_mod,                 only : mpp_chksum
+use MOM_EOS,                 only : gsw_sp_from_sr, gsw_pt_from_ct
+use MOM_wave_interface,      only: wave_parameters_CS, MOM_wave_interface_init
+use MOM_wave_interface,      only: MOM_wave_interface_init_lite, Update_Surface_Waves
+use MOM_surface_forcing_nuopc, only : surface_forcing_init, convert_IOB_to_fluxes
+use MOM_surface_forcing_nuopc, only : convert_IOB_to_forces, ice_ocn_bnd_type_chksum
+use MOM_surface_forcing_nuopc, only : ice_ocean_boundary_type, surface_forcing_CS
+use MOM_surface_forcing_nuopc, only : forcing_save_restart
 
 #include <MOM_memory.h>
 
@@ -80,6 +80,7 @@ public ice_ocn_bnd_type_chksum
 public ocean_public_type_chksum
 public ocean_model_data_get
 public get_ocean_grid
+public get_eps_omesh
 
 !> This interface extracts a named scalar field or array from the ocean surface or public type
 interface ocean_model_data_get
@@ -182,6 +183,9 @@ type, public :: ocean_state_type ; private
   logical :: diabatic_first   !< If true, apply diabatic and thermodynamic
                               !! processes before time stepping the dynamics.
 
+  real :: eps_omesh           !< Max allowable difference between ESMF mesh and MOM6
+                              !! domain coordinates
+
   type(directories) :: dirs   !< A structure containing several relevant directory paths.
   type(mech_forcing) :: forces !< A structure with the driving mechanical surface forces
   type(forcing)   :: fluxes   !< A structure containing pointers to
@@ -260,7 +264,6 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
   integer :: secs, days
   type(param_file_type) :: param_file !< A structure to parse for run-time parameters
   logical :: use_temperature
-  type(time_type) :: dt_geometric, dt_savedays, dt_from_base
 
   call callTree_enter("ocean_model_init(), ocean_model_MOM.F90")
   if (associated(OS)) then
@@ -286,41 +289,41 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
   call log_version(param_file, mdl, version, "")
 
   call get_param(param_file, mdl, "SINGLE_STEPPING_CALL", OS%single_step_call, &
-                 "If true, advance the state of MOM with a single step \n"//&
-                 "including both dynamics and thermodynamics.  If false, \n"//&
+                 "If true, advance the state of MOM with a single step "//&
+                 "including both dynamics and thermodynamics.  If false, "//&
                  "the two phases are advanced with separate calls.", default=.true.)
   call get_param(param_file, mdl, "DT", OS%dt, &
-                 "The (baroclinic) dynamics time step.  The time-step that \n"//&
-                 "is actually used will be an integer fraction of the \n"//&
+                 "The (baroclinic) dynamics time step.  The time-step that "//&
+                 "is actually used will be an integer fraction of the "//&
                  "forcing time-step.", units="s", fail_if_missing=.true.)
   call get_param(param_file, mdl, "DT_THERM", OS%dt_therm, &
-                 "The thermodynamic and tracer advection time step. \n"//&
-                 "Ideally DT_THERM should be an integer multiple of DT \n"//&
-                 "and less than the forcing or coupling time-step, unless \n"//&
-                 "THERMO_SPANS_COUPLING is true, in which case DT_THERM \n"//&
-                 "can be an integer multiple of the coupling timestep.  By \n"//&
+                 "The thermodynamic and tracer advection time step. "//&
+                 "Ideally DT_THERM should be an integer multiple of DT "//&
+                 "and less than the forcing or coupling time-step, unless "//&
+                 "THERMO_SPANS_COUPLING is true, in which case DT_THERM "//&
+                 "can be an integer multiple of the coupling timestep.  By "//&
                  "default DT_THERM is set to DT.", units="s", default=OS%dt)
   call get_param(param_file, "MOM", "THERMO_SPANS_COUPLING", OS%thermo_spans_coupling, &
-                 "If true, the MOM will take thermodynamic and tracer \n"//&
-                 "timesteps that can be longer than the coupling timestep. \n"//&
-                 "The actual thermodynamic timestep that is used in this \n"//&
-                 "case is the largest integer multiple of the coupling \n"//&
+                 "If true, the MOM will take thermodynamic and tracer "//&
+                 "timesteps that can be longer than the coupling timestep. "//&
+                 "The actual thermodynamic timestep that is used in this "//&
+                 "case is the largest integer multiple of the coupling "//&
                  "timestep that is less than or equal to DT_THERM.", default=.false.)
   call get_param(param_file, mdl, "DIABATIC_FIRST", OS%diabatic_first, &
-                 "If true, apply diabatic and thermodynamic processes, \n"//&
-                 "including buoyancy forcing and mass gain or loss, \n"//&
+                 "If true, apply diabatic and thermodynamic processes, "//&
+                 "including buoyancy forcing and mass gain or loss, "//&
                  "before stepping the dynamics forward.", default=.false.)
 
   call get_param(param_file, mdl, "RESTART_CONTROL", OS%Restart_control, &
-                 "An integer whose bits encode which restart files are \n"//&
-                 "written. Add 2 (bit 1) for a time-stamped file, and odd \n"//&
-                 "(bit 0) for a non-time-stamped file.  A restart file \n"//&
-                 "will be saved at the end of the run segment for any \n"//&
+                 "An integer whose bits encode which restart files are "//&
+                 "written. Add 2 (bit 1) for a time-stamped file, and odd "//&
+                 "(bit 0) for a non-time-stamped file.  A restart file "//&
+                 "will be saved at the end of the run segment for any "//&
                  "non-negative value.", default=1)
   call get_param(param_file, mdl, "OCEAN_SURFACE_STAGGER", stagger, &
-                 "A case-insensitive character string to indicate the \n"//&
-                 "staggering of the surface velocity field that is \n"//&
-                 "returned to the coupler.  Valid values include \n"//&
+                 "A case-insensitive character string to indicate the "//&
+                 "staggering of the surface velocity field that is "//&
+                 "returned to the coupler.  Valid values include "//&
                  "'A', 'B', or 'C'.", default="C")
   if (uppercase(stagger(1:1)) == 'A') then ; Ocean_sfc%stagger = AGRID
   elseif (uppercase(stagger(1:1)) == 'B') then ; Ocean_sfc%stagger = BGRID_NE
@@ -328,18 +331,22 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
   else ; call MOM_error(FATAL,"ocean_model_init: OCEAN_SURFACE_STAGGER = "// &
                         trim(stagger)//" is invalid.") ; endif
 
+  call get_param(param_file, mdl, "EPS_OMESH",OS%eps_omesh, &
+                 "Maximum allowable difference between ESMF mesh and "//&
+                 "MOM6 domain coordinates in nuopc cap.", &
+                 units="degrees", default=1.e-4)
   call get_param(param_file, mdl, "RESTORE_SALINITY",OS%restore_salinity, &
-                 "If true, the coupled driver will add a globally-balanced \n"//&
-                 "fresh-water flux that drives sea-surface salinity \n"//&
+                 "If true, the coupled driver will add a globally-balanced "//&
+                 "fresh-water flux that drives sea-surface salinity "//&
                  "toward specified values.", default=.false.)
   call get_param(param_file, mdl, "RESTORE_TEMPERATURE",OS%restore_temp, &
-                 "If true, the coupled driver will add a  \n"//&
-                 "heat flux that drives sea-surface temperauture \n"//&
+                 "If true, the coupled driver will add a "//&
+                 "heat flux that drives sea-surface temperature "//&
                  "toward specified values.", default=.false.)
   call get_param(param_file, mdl, "RHO_0", Rho0, &
-                 "The mean ocean density used with BOUSSINESQ true to \n"//&
-                 "calculate accelerations and the mass for conservation \n"//&
-                 "properties, or with BOUSSINSEQ false to convert some \n"//&
+                 "The mean ocean density used with BOUSSINESQ true to "//&
+                 "calculate accelerations and the mass for conservation "//&
+                 "properties, or with BOUSSINSEQ false to convert some "//&
                  "parameters from vertical units of m to kg m-2.", &
                  units="kg m-3", default=1035.0)
   call get_param(param_file, mdl, "G_EARTH", G_Earth, &
@@ -354,10 +361,10 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
 
   OS%press_to_z = 1.0/(Rho0*G_Earth)
 
-    call get_param(param_file, mdl, "HFREEZE", HFrz, &
-                 "If HFREEZE > 0, melt potential will be computed. The actual depth \n"//&
-                 "over which melt potential is computed will be min(HFREEZE, OBLD), \n"//&
-                 "where OBLD is the boundary layer depth. If HFREEZE <= 0 (default), \n"//&
+  call get_param(param_file, mdl, "HFREEZE", HFrz, &
+                 "If HFREEZE > 0, melt potential will be computed. The actual depth "//&
+                 "over which melt potential is computed will be min(HFREEZE, OBLD), "//&
+                 "where OBLD is the boundary layer depth. If HFREEZE <= 0 (default), "//&
                  "melt potential will not be computed.", units="m", default=-1.0, do_not_log=.true.)
 
   if (HFrz .gt. 0.0) then
@@ -476,7 +483,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
   integer :: secs, days
   integer :: is, ie, js, je
 
-  call callTree_enter("update_ocean_model(), ocean_model_MOM.F90")
+  call callTree_enter("update_ocean_model(), MOM_ocean_model_nuopc.F90")
   call get_time(Ocean_coupling_time_step, secs, days)
   dt_coupling = 86400.0*real(days) + real(secs)
 
@@ -1175,4 +1182,10 @@ subroutine get_ocean_grid(OS, Gridp)
   return
 end subroutine get_ocean_grid
 
-end module MOM_ocean_model
+!> Returns eps_omesh read from param file
+real function get_eps_omesh(OS)
+  type(ocean_state_type) :: OS
+  get_eps_omesh = OS%eps_omesh; return
+end function
+
+end module MOM_ocean_model_nuopc

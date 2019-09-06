@@ -35,11 +35,11 @@
 !! of model code, making calls into it and exposing model data structures in a
 !! standard way.
 !!
-!! The MOM cap package includes the cap code itself (mom_cap.F90, mom_cap_methods.F90
-!! and mom_cap_time.F90), a set of time utilities (time_utils.F90) for converting between ESMF and FMS
-!! time type and two modules MOM_ocean_model.F90 and MOM_surface_forcing.F90. MOM_surface_forcing.F90
+!! The MOM cap package includes the cap code itself (MOM_cap.F90, MOM_cap_methods.F90
+!! and MOM_cap_time.F90), a set of time utilities (time_utils.F90) for converting between ESMF and FMS
+!! time type and two modules MOM_ocean_model_nuopc.F90 and MOM_surface_forcing_nuopc.F90. MOM_surface_forcing_nuopc.F90
 !! converts the input ESMF data (import data) to a MOM-specific data type (surface_forcing_CS).
-!! MOM_ocean_model.F90 contains routines for initialization, update and finalization of the ocean model state.
+!! MOM_ocean_model_nuopc.F90 contains routines for initialization, update and finalization of the ocean model state.
 !!
 !! @subsection CapSubroutines Cap Subroutines
 !!
@@ -60,15 +60,15 @@
 !!
 !! Phase    | MOM Cap Subroutine                                                 |  Description
 !! ---------|--------------------------------------------------------------------|--------------------------------------
-!! Init     | [InitializeP0] (@ref mom_cap_mod::initializep0)                    | Sets the Initialize Phase Definition
+!! Init     | [InitializeP0] (@ref MOM_cap_mod::initializep0)                    | Sets the Initialize Phase Definition
 !!                                                                               |  (IPD) version to use
-!! Init     | [InitializeAdvertise] (@ref mom_cap_mod::initializeadvertise)      | Advertises standard names of import
+!! Init     | [InitializeAdvertise] (@ref MOM_cap_mod::initializeadvertise)      | Advertises standard names of import
 !!                                                                               |  and export fields
-!! Init     | [InitializeRealize] (@ref mom_cap_mod::initializerealize)          | Creates an ESMF_Grid or ESMF_Mesh
+!! Init     | [InitializeRealize] (@ref MOM_cap_mod::initializerealize)          | Creates an ESMF_Grid or ESMF_Mesh
 !!                                                                               |  as well as ESMF_Fields for import
 !!                                                                               |  and export fields
-!! Run      | [ModelAdvance] (@ref mom_cap_mod::modeladvance)                    | Advances the model by a timestep
-!! Final    | [Finalize] (@ref mom_cap_mod::ocean_model_finalize)                | Cleans up
+!! Run      | [ModelAdvance] (@ref MOM_cap_mod::modeladvance)                    | Advances the model by a timestep
+!! Final    | [Finalize] (@ref MOM_cap_mod::ocean_model_finalize)                | Cleans up
 !!
 !! @section UnderlyingModelInterfaces Underlying Model Interfaces
 !!
@@ -81,7 +81,7 @@
 !! Note that for either the `ESMF_Grid` or `ESMF_Mesh` representation, the fields are translated into
 !! a 2D MOM specific surface boundary type and the distinction between the two is no longer there.
 !! Calls related to creating the grid are located in the [InitializeRealize]
-!! (@ref mom_cap_mod::initializerealize) subroutine, which is called by the NUOPC infrastructure
+!! (@ref MOM_cap_mod::initializerealize) subroutine, which is called by the NUOPC infrastructure
 !! during the intialization sequence.
 !!
 !! The cap determines parameters for setting up the grid by calling subroutines in the
@@ -112,7 +112,7 @@
 !!
 !! @subsection Initialization Initialization
 !!
-!! During the [InitializeAdvertise] (@ref mom_cap_mod::initializeadvertise) phase, calls are
+!! During the [InitializeAdvertise] (@ref MOM_cap_mod::initializeadvertise) phase, calls are
 !! made to MOM's native initialization subroutines, including `fms_init()`, `constants_init()`,
 !! `field_manager_init()`, `diag_manager_init()`, and `set_calendar_type()`.  The MPI communicator
 !! is pulled in through the ESMF VM object for the MOM component. The dt and start time are set
@@ -121,7 +121,7 @@
 !!
 !! @subsection Run Run
 !!
-!! The [ModelAdvance] (@ref mom_cap_mod::modeladvance) subroutine is called by the NUOPC
+!! The [ModelAdvance] (@ref MOM_cap_mod::modeladvance) subroutine is called by the NUOPC
 !! infrastructure when it's time for MOM to advance in time. During this subroutine, there is a
 !! call into the MOM update routine:
 !!
@@ -184,7 +184,7 @@
 !! \f]
 !! @subsection Finalization Finalization
 !!
-!! NUOPC infrastructure calls [ocean_model_finalize] (@ref mom_cap_mod::ocean_model_finalize)
+!! NUOPC infrastructure calls [ocean_model_finalize] (@ref MOM_cap_mod::ocean_model_finalize)
 !! at the end of the run. This subroutine is a hook to call into MOM's native shutdown
 !! procedures:
 !!
@@ -272,11 +272,11 @@
 !! so that it can maintain state there if desired.
 !! The member of type `ice_ocean_boundary_type` is populated by this cap
 !! with incoming coupling fields from other components. These three derived types are allocated during the
-!! [InitializeAdvertise] (@ref mom_cap_mod::initializeadvertise) phase.  Also during that
+!! [InitializeAdvertise] (@ref MOM_cap_mod::initializeadvertise) phase.  Also during that
 !! phase, the `ice_ocean_boundary` type members are all allocated using bounds retrieved
 !! from `mpp_get_compute_domain()`.
 !!
-!! During the [InitializeRealize] (@ref mom_cap_mod::initializerealize) phase,
+!! During the [InitializeRealize] (@ref MOM_cap_mod::initializerealize) phase,
 !! `ESMF_Field`s are created for each of the coupling fields in the `ice_ocean_boundary`
 !! and `ocean_public_type` members of the internal state. These fields directly reference into the members of
 !! the `ice_ocean_boundary` and `ocean_public_type` so that memory-to-memory copies are not required to move
@@ -289,7 +289,7 @@
 !! "DumpFields" has been set to "true". In this case the cap will write out NetCDF files
 !! with names "field_ocn_import_<fieldname>.nc" and "field_ocn_export_<fieldname>.nc".
 !! Additionally, calls will be made to the cap subroutine [dumpMomInternal]
-!! (@ref mom_cap_mod::dumpmominternal) to write out model internal fields to files
+!! (@ref MOM_cap_mod::dumpmominternal) to write out model internal fields to files
 !! named "field_ocn_internal_<fieldname>.nc".  In all cases these NetCDF files will
 !! contain a time series of field data.
 !!
@@ -303,7 +303,7 @@
 !! * `DumpFields` - when set to "true", write out diagnostic NetCDF files for import/export/internal fields
 !! * `ProfileMemory` - when set to "true", write out memory usage information to the ESMF log files; this
 !!    information is written when entering and leaving the [ModelAdvance]
-!!    (@ref mom_cap_mod::modeladvance) subroutine and before and after the call to
+!!    (@ref MOM_cap_mod::modeladvance) subroutine and before and after the call to
 !!   `update_ocean_model()`.
 !! * `restart_interval` - integer number of seconds indicating the interval at
 !!    which to call `ocean_model_restart()`; no restarts written if set to 0
@@ -311,7 +311,7 @@
 !!
 
 !> This module contains a set of subroutines that are required by NUOPC.
-module mom_cap_mod
+module MOM_cap_mod
 use constants_mod,            only: constants_init
 use diag_manager_mod,         only: diag_manager_init, diag_manager_end
 use field_manager_mod,        only: field_manager_init, field_manager_end
@@ -322,7 +322,6 @@ use mpp_domains_mod,          only: domain2d, mpp_get_compute_domain, mpp_get_co
 use mpp_domains_mod,          only: mpp_get_ntile_count, mpp_get_pelist, mpp_get_global_domain
 use mpp_domains_mod,          only: mpp_get_domain_npes
 use mpp_io_mod,               only: mpp_open, MPP_RDONLY, MPP_ASCII, MPP_OVERWR, MPP_APPEND, mpp_close, MPP_SINGLE
-use mpp_mod,                  only: input_nml_file, mpp_error, FATAL, NOTE, mpp_pe, mpp_npes, mpp_set_current_pelist
 use mpp_mod,                  only: stdlog, stdout, mpp_root_pe, mpp_clock_id
 use mpp_mod,                  only: mpp_clock_begin, mpp_clock_end, MPP_CLOCK_SYNC
 use mpp_mod,                  only: MPP_CLOCK_DETAILED, CLOCK_COMPONENT, MAXPES
@@ -339,14 +338,15 @@ use MOM_domains,              only: MOM_infra_init, num_pes, root_pe, pe_here
 use MOM_file_parser,          only: get_param, log_version, param_file_type, close_param_file
 use MOM_get_input,            only: Get_MOM_Input, directories
 use MOM_domains,              only: pass_var
-use MOM_error_handler,        only: is_root_pe
-use MOM_ocean_model,          only: ice_ocean_boundary_type
+use MOM_error_handler,        only: MOM_error, FATAL, is_root_pe
+use MOM_ocean_model_nuopc,    only: ice_ocean_boundary_type
 use MOM_grid,                 only: ocean_grid_type, get_global_grid_size
-use MOM_ocean_model,          only: ocean_model_restart, ocean_public_type, ocean_state_type
-use MOM_ocean_model,          only: ocean_model_init_sfc
-use MOM_ocean_model,          only: ocean_model_init, update_ocean_model, ocean_model_end, get_ocean_grid
-use mom_cap_time,             only: AlarmInit
-use mom_cap_methods,          only: mom_import, mom_export, mom_set_geomtype
+use MOM_ocean_model_nuopc,    only: ocean_model_restart, ocean_public_type, ocean_state_type
+use MOM_ocean_model_nuopc,    only: ocean_model_init_sfc
+use MOM_ocean_model_nuopc,    only: ocean_model_init, update_ocean_model, ocean_model_end
+use MOM_ocean_model_nuopc,    only: get_ocean_grid, get_eps_omesh
+use MOM_cap_time,             only: AlarmInit
+use MOM_cap_methods,          only: mom_import, mom_export, mom_set_geomtype
 #ifdef CESMCOUPLED
 use shr_file_mod,             only: shr_file_setLogUnit, shr_file_getLogUnit
 #endif
@@ -366,7 +366,7 @@ use ESMF,  only: ESMF_GEOMTYPE_MESH, ESMF_GEOMTYPE_GRID, ESMF_SUCCESS
 use ESMF,  only: ESMF_METHOD_INITIALIZE, ESMF_MethodRemove, ESMF_State
 use ESMF,  only: ESMF_LOGMSG_INFO, ESMF_RC_ARG_BAD, ESMF_VM, ESMF_Time
 use ESMF,  only: ESMF_TimeInterval, ESMF_MAXSTR, ESMF_VMGetCurrent
-use ESMF,  only: ESMF_VMGet, ESMF_TimeGet, ESMF_TimeIntervalGet
+use ESMF,  only: ESMF_VMGet, ESMF_TimeGet, ESMF_TimeIntervalGet, ESMF_MeshGet
 use ESMF,  only: ESMF_MethodExecute, ESMF_Mesh, ESMF_DeLayout, ESMF_Distgrid
 use ESMF,  only: ESMF_DistGridConnection, ESMF_StateItem_Flag, ESMF_KIND_I4
 use ESMF,  only: ESMF_KIND_I8, ESMF_FAILURE, ESMF_DistGridCreate, ESMF_MeshCreate
@@ -378,7 +378,8 @@ use ESMF,  only: ESMF_AlarmIsRinging, ESMF_AlarmRingerOff, ESMF_StateRemove
 use ESMF,  only: ESMF_FieldCreate, ESMF_LOGMSG_ERROR, ESMF_LOGMSG_WARNING
 use ESMF,  only: ESMF_COORDSYS_SPH_DEG, ESMF_GridCreate, ESMF_INDEX_DELOCAL
 use ESMF,  only: ESMF_MESHLOC_ELEMENT, ESMF_RC_VAL_OUTOFRANGE, ESMF_StateGet
-use ESMF,  only: ESMF_TimePrint, ESMF_AlarmSet, ESMF_FieldGet
+use ESMF,  only: ESMF_TimePrint, ESMF_AlarmSet, ESMF_FieldGet, ESMF_Array
+use ESMF,  only: ESMF_ArrayCreate
 use ESMF,  only: operator(==), operator(/=), operator(+), operator(-)
 
 ! TODO ESMF_GridCompGetInternalState does not have an explicit Fortran interface.
@@ -465,7 +466,7 @@ subroutine SetServices(gcomp, rc)
   integer, intent(out) :: rc    !< return code
 
   ! local variables
-  character(len=*),parameter  :: subname='(mom_cap:SetServices)'
+  character(len=*),parameter  :: subname='(MOM_cap:SetServices)'
 
   rc = ESMF_SUCCESS
 
@@ -559,7 +560,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
   logical                     :: isPresent, isSet
   integer                     :: iostat
   character(len=64)           :: value, logmsg
-  character(len=*),parameter  :: subname='(mom_cap:InitializeP0)'
+  character(len=*),parameter  :: subname='(MOM_cap:InitializeP0)'
 
   rc = ESMF_SUCCESS
 
@@ -581,7 +582,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
   if (isPresent .and. isSet) write_diagnostics=(trim(value)=="true")
 
   write(logmsg,*) write_diagnostics
-  call ESMF_LogWrite('mom_cap:DumpFields = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
+  call ESMF_LogWrite('MOM_cap:DumpFields = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
@@ -596,7 +597,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
        return
   if (isPresent .and. isSet) profile_memory=(trim(value)=="true")
   write(logmsg,*) profile_memory
-  call ESMF_LogWrite('mom_cap:ProfileMemory = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
+  call ESMF_LogWrite('MOM_cap:ProfileMemory = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
@@ -611,7 +612,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
        return
   if (isPresent .and. isSet) grid_attach_area=(trim(value)=="true")
   write(logmsg,*) grid_attach_area
-  call ESMF_LogWrite('mom_cap:GridAttachArea = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
+  call ESMF_LogWrite('MOM_cap:GridAttachArea = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
@@ -626,7 +627,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
        return
   if (isPresent .and. isSet) then
      scalar_field_name = trim(value)
-     call ESMF_LogWrite('mom_cap:ScalarFieldName = '//trim(scalar_field_name), ESMF_LOGMSG_INFO, rc=rc)
+     call ESMF_LogWrite('MOM_cap:ScalarFieldName = '//trim(scalar_field_name), ESMF_LOGMSG_INFO, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
         line=__LINE__, &
         file=__FILE__)) &
@@ -649,7 +650,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
        return
      endif
      write(logmsg,*) scalar_field_count
-     call ESMF_LogWrite('mom_cap:ScalarFieldCount = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
+     call ESMF_LogWrite('MOM_cap:ScalarFieldCount = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
          file=__FILE__)) &
@@ -672,7 +673,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
         return
      endif
      write(logmsg,*) scalar_field_idx_grid_nx
-     call ESMF_LogWrite('mom_cap:ScalarFieldIdxGridNX = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
+     call ESMF_LogWrite('MOM_cap:ScalarFieldIdxGridNX = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
          file=__FILE__)) &
@@ -695,7 +696,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
         return
      endif
      write(logmsg,*) scalar_field_idx_grid_ny
-     call ESMF_LogWrite('mom_cap:ScalarFieldIdxGridNY = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
+     call ESMF_LogWrite('MOM_cap:ScalarFieldIdxGridNY = '//trim(logmsg), ESMF_LOGMSG_INFO, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
           line=__LINE__, &
           file=__FILE__)) &
@@ -737,8 +738,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   type(ice_ocean_boundary_type), pointer :: Ice_ocean_boundary => NULL()
   type(ocean_internalstate_wrapper)      :: ocean_internalstate
   type(ocean_grid_type),         pointer :: ocean_grid => NULL()
-  type(time_type)                        :: Run_len      ! length of experiment
-  type(time_type)                        :: Time
+  type(time_type)                        :: Run_len      !< length of experiment
+  type(time_type)                        :: time0        !< Start time of coupled model's calendar.
+  type(time_type)                        :: time_start   !< The time at which to initialize the ocean model
   type(time_type)                        :: Time_restart
   type(time_type)                        :: DT
   integer                                :: DT_OCEAN
@@ -755,7 +757,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   logical                                :: existflag
   integer                                :: userRc
   character(len=512)                     :: restartfile          ! Path/Name of restart file
-  character(len=*), parameter            :: subname='(mom_cap:InitializeAdvertise)'
+  character(len=*), parameter            :: subname='(MOM_cap:InitializeAdvertise)'
   character(len=32)                      :: calendar
 !--------------------------------
 
@@ -841,7 +843,31 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
 
   ! this ocean connector will be driven at set interval
   DT = set_time (DT_OCEAN, 0)
-  Time = set_date (YEAR,MONTH,DAY,HOUR,MINUTE,SECOND)
+  ! get current time
+  time_start = set_date (YEAR,MONTH,DAY,HOUR,MINUTE,SECOND)
+
+  if (is_root_pe()) then
+    write(logunit,*) subname//'current time: y,m,d-',year,month,day,'h,m,s=',hour,minute,second
+  endif
+
+  ! get start/reference time
+  call ESMF_ClockGet(CLOCK, refTime=MyTime, RC=rc)
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+    line=__LINE__, &
+    file=__FILE__)) &
+    return  ! bail out
+
+  call ESMF_TimeGet (MyTime, YY=YEAR, MM=MONTH, DD=DAY, H=HOUR, M=MINUTE, S=SECOND, RC=rc )
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+    line=__LINE__, &
+    file=__FILE__)) &
+    return  ! bail out
+
+  time0 = set_date (YEAR,MONTH,DAY,HOUR,MINUTE,SECOND)
+
+  if (is_root_pe()) then
+    write(logunit,*) subname//'start time: y,m,d-',year,month,day,'h,m,s=',hour,minute,second
+  endif
 
   ! rsd need to figure out how to get this without share code
   !call shr_nuopc_get_component_instance(gcomp, inst_suffix, inst_index)
@@ -890,7 +916,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   if (isPresent .and. isSet) then
      read(cvalue,*) starttype
   else
-     call ESMF_LogWrite('mom_cap:start_type unset - using input.nml for restart option', &
+     call ESMF_LogWrite('MOM_cap:start_type unset - using input.nml for restart option', &
           ESMF_LOGMSG_INFO, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
@@ -913,7 +939,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   endif
 
   if (len_trim(runtype) > 0) then
-     call ESMF_LogWrite('mom_cap:startup = '//trim(runtype), ESMF_LOGMSG_INFO, rc=rc)
+     call ESMF_LogWrite('MOM_cap:startup = '//trim(runtype), ESMF_LOGMSG_INFO, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
          file=__FILE__)) &
@@ -938,7 +964,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
          file=__FILE__)) &
          return  ! bail out
      if (existflag) then
-        call ESMF_LogWrite('mom_cap: called user GetRestartFileToRead', ESMF_LOGMSG_INFO, rc=rc)
+        call ESMF_LogWrite('MOM_cap: called user GetRestartFileToRead', ESMF_LOGMSG_INFO, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
             line=__LINE__, &
             file=__FILE__)) &
@@ -953,13 +979,13 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
          return
      if (isPresent .and. isSet) then
         restartfile = trim(cvalue)
-        call ESMF_LogWrite('mom_cap: RestartFileToRead = '//trim(restartfile), ESMF_LOGMSG_INFO, rc=rc)
+        call ESMF_LogWrite('MOM_cap: RestartFileToRead = '//trim(restartfile), ESMF_LOGMSG_INFO, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
             line=__LINE__, &
             file=__FILE__)) &
             return
      else
-        call ESMF_LogWrite('mom_cap: restart requested, no RestartFileToRead attribute provided-will use input.nml',&
+        call ESMF_LogWrite('MOM_cap: restart requested, no RestartFileToRead attribute provided-will use input.nml',&
              ESMF_LOGMSG_WARNING, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
             line=__LINE__, &
@@ -970,11 +996,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   endif
 
   ocean_public%is_ocean_pe = .true.
-  if (len_trim(restartfile) > 0) then
-     call ocean_model_init(ocean_public, ocean_state, Time, Time, input_restart_file=trim(restartfile))
-  else
-     call ocean_model_init(ocean_public, ocean_state, Time, Time)
-  endif
+  call ocean_model_init(ocean_public, ocean_state, time0, time_start, input_restart_file=trim(restartfile))
 
   call ocean_model_init_sfc(ocean_state, ocean_public)
 
@@ -1159,7 +1181,18 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
   integer, allocatable                       :: gindex(:) ! global index space
   character(len=128)                         :: fldname
   character(len=256)                         :: cvalue
-  character(len=*), parameter                :: subname='(mom_cap:InitializeRealize)'
+  character(len=256)                         :: frmt    ! format specifier for several error msgs
+  character(len=512)                         :: err_msg ! error messages
+  character(len=*), parameter                :: subname='(MOM_cap:InitializeRealize)'
+  integer                         :: spatialDim
+  integer                         :: numOwnedElements
+  type(ESMF_Array)                :: elemMaskArray
+  real(ESMF_KIND_R8)    , pointer :: ownedElemCoords(:)
+  real(ESMF_KIND_R8)    , pointer :: lat(:), latMesh(:)
+  real(ESMF_KIND_R8)    , pointer :: lon(:), lonMesh(:)
+  integer(ESMF_KIND_I4) , pointer :: mask(:), maskMesh(:)
+  real(ESMF_KIND_R8)              :: diff_lon, diff_lat
+  real                            :: eps_omesh
   !--------------------------------
 
   rc = ESMF_SUCCESS
@@ -1305,6 +1338,82 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
          file=__FILE__)) &
          return
 
+     ! Check for consistency of lat, lon and mask between mesh and mom6 grid
+     call ESMF_MeshGet(Emesh, spatialDim=spatialDim, numOwnedElements=numOwnedElements, rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return
+
+     allocate(ownedElemCoords(spatialDim*numOwnedElements))
+     allocate(lonMesh(numOwnedElements), lon(numOwnedElements))
+     allocate(latMesh(numOwnedElements), lat(numOwnedElements))
+     allocate(maskMesh(numOwnedElements), mask(numOwnedElements))
+
+     call ESMF_MeshGet(Emesh, ownedElemCoords=ownedElemCoords, rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return
+     do n = 1,numOwnedElements
+        lonMesh(n) = ownedElemCoords(2*n-1)
+        latMesh(n) = ownedElemCoords(2*n)
+     end do
+
+     elemMaskArray = ESMF_ArrayCreate(Distgrid, maskMesh, rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return
+     call ESMF_MeshGet(Emesh, elemMaskArray=elemMaskArray, rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return
+
+     call mpp_get_compute_domain(ocean_public%domain, isc, iec, jsc, jec)
+     n = 0
+     do j = jsc, jec
+       jg = j + ocean_grid%jsc - jsc
+       do i = isc, iec
+         ig = i + ocean_grid%isc - isc
+         n = n+1
+         mask(n) = ocean_grid%mask2dT(ig,jg)
+         lon(n)  = ocean_grid%geolonT(ig,jg)
+         lat(n)  = ocean_grid%geolatT(ig,jg)
+       end do
+     end do
+
+     eps_omesh = get_eps_omesh(ocean_state)
+     do n = 1,numOwnedElements
+       diff_lon = abs(mod(lonMesh(n) - lon(n),360.0))
+       if (diff_lon > eps_omesh) then
+         frmt = "('ERROR: Difference between ESMF Mesh and MOM6 domain coords is "//&
+                "greater than parameter EPS_OMESH. n, lonMesh(n), lon(n), diff_lon, "//&
+                "EPS_OMESH= ',i8,2(f21.13,3x),2(d21.5))"
+         write(err_msg, frmt)n,lonMesh(n),lon(n), diff_lon, eps_omesh
+         call MOM_error(FATAL, err_msg)
+       end if
+       diff_lat = abs(latMesh(n) - lat(n))
+       if (diff_lat > eps_omesh) then
+         frmt = "('ERROR: Difference between ESMF Mesh and MOM6 domain coords is"//&
+                "greater than parameter EPS_OMESH. n, latMesh(n), lat(n), diff_lat, "//&
+                "EPS_OMESH= ',i8,2(f21.13,3x),2(d21.5))"
+         write(err_msg, frmt)n,latMesh(n),lat(n), diff_lat, eps_omesh
+         call MOM_error(FATAL, err_msg)
+        end if
+        if (abs(maskMesh(n) - mask(n)) > 0) then
+          frmt = "('ERROR: ESMF mesh and MOM6 domain masks are inconsistent! - "//&
+                 "MOM n, maskMesh(n), mask(n) = ',3(i8,2x))"
+          write(err_msg, frmt)n,maskMesh(n),mask(n)
+          call MOM_error(FATAL, err_msg)
+        end if
+     end do
+
+     deallocate(ownedElemCoords)
+     deallocate(lonMesh , lon )
+     deallocate(latMesh , lat )
+     deallocate(maskMesh, mask)
      ! realize the import and export fields using the mesh
      call MOM_RealizeFields(importState, fldsToOcn_num, fldsToOcn, "Ocn import", mesh=Emesh, rc=rc)
      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
@@ -1637,7 +1746,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
   endif
 
   !---------------------------------
-  ! Set module variable geomtype in mom_cap_methods
+  ! Set module variable geomtype in MOM_cap_methods
   !---------------------------------
   call mom_set_geomtype(geomtype)
 
@@ -1674,7 +1783,7 @@ subroutine DataInitialize(gcomp, rc)
   integer                                :: fieldCount, n
   type(ESMF_Field)                       :: field
   character(len=64),allocatable          :: fieldNameList(:)
-  character(len=*),parameter  :: subname='(mom_cap:DataInitialize)'
+  character(len=*),parameter  :: subname='(MOM_cap:DataInitialize)'
   !--------------------------------
 
   ! query the Component for its clock, importState and exportState
@@ -1788,7 +1897,7 @@ subroutine ModelAdvance(gcomp, rc)
   integer                                :: seconds, day, year, month, hour, minute
   character(ESMF_MAXSTR)                 :: restartname, cvalue
   character(240)                         :: msgString
-  character(len=*),parameter             :: subname='(mom_cap:ModelAdvance)'
+  character(len=*),parameter             :: subname='(MOM_cap:ModelAdvance)'
 
   rc = ESMF_SUCCESS
   if(profile_memory) call ESMF_VMLogMemInfo("Entering MOM Model_ADVANCE: ")
@@ -1802,16 +1911,6 @@ subroutine ModelAdvance(gcomp, rc)
     line=__LINE__, &
     file=__FILE__)) &
     return  ! bail out
-
-  call ESMF_GridCompGetInternalState(gcomp, ocean_internalstate, rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-    line=__LINE__, &
-    file=__FILE__)) &
-    return  ! bail out
-
-  Ice_ocean_boundary => ocean_internalstate%ptr%ice_ocean_boundary_type_ptr
-  ocean_public       => ocean_internalstate%ptr%ocean_public_type_ptr
-  ocean_state        => ocean_internalstate%ptr%ocean_state_type_ptr
 
   ! HERE THE MODEL ADVANCES: currTime -> currTime + timeStep
 
@@ -1835,8 +1934,7 @@ subroutine ModelAdvance(gcomp, rc)
     return  ! bail out
 
   call ESMF_TimePrint(currTime + timeStep, &
-    preString="--------------------------------> to: ", &
-    unit=msgString, rc=rc)
+    preString="--------------------------------> to: ", unit=msgString, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
     line=__LINE__, &
     file=__FILE__)) &
@@ -1869,83 +1967,89 @@ subroutine ModelAdvance(gcomp, rc)
         do_advance = .true.
       endif
 
-      ! If the second cpl tstep of a startup run, step back a cpl tstep and advance for two cpl tsteps
-      if (currTime == startTime + timeStep) then
-        call ESMF_LogWrite("MOM6 - Stepping back one coupling timestep", ESMF_LOGMSG_INFO, rc=rc)
-        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-          line=__LINE__, &
-          file=__FILE__)) &
-          return  ! bail out
-        Time = esmf2fms_time(currTime-timeStep) ! i.e., startTime
+      if (do_advance) then
+         ! If the second cpl tstep of a startup run, step back a cpl tstep and advance for two cpl tsteps
+         if (currTime == startTime + timeStep) then
+            call ESMF_LogWrite("MOM6 - Stepping back one coupling timestep", ESMF_LOGMSG_INFO, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+                 line=__LINE__, &
+                 file=__FILE__)) &
+                 return  ! bail out
+            Time = esmf2fms_time(currTime-timeStep) ! i.e., startTime
 
-        call ESMF_LogWrite("MOM6 - doubling the coupling timestep", ESMF_LOGMSG_INFO, rc=rc)
-        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-          line=__LINE__, &
-          file=__FILE__)) &
-          return  ! bail out
-        Time_step_coupled = 2 * esmf2fms_time(timeStep)
-      endif
+            call ESMF_LogWrite("MOM6 - doubling the coupling timestep", ESMF_LOGMSG_INFO, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+                 line=__LINE__, &
+                 file=__FILE__)) &
+                 return  ! bail out
+            Time_step_coupled = 2 * esmf2fms_time(timeStep)
+         endif
+      end if
+
     endif
   endif
 
-
-  !---------------
-  ! Write diagnostics for import
-  !---------------
-
-  if(write_diagnostics) then
-    call NUOPC_Write(importState, fileNamePrefix='field_ocn_import_', &
-      timeslice=import_slice, relaxedFlag=.true., rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-      line=__LINE__, &
-      file=__FILE__)) &
-      return  ! bail out
-    import_slice = import_slice + 1
-  endif
-
-  !---------------
-  ! Get ocean grid
-  !---------------
-
-  call get_ocean_grid(ocean_state, ocean_grid)
-
-  !---------------
-  ! Import data
-  !---------------
-
-  call shr_file_setLogUnit (logunit)
-
-  if (cesm_coupled) then
-     call mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary, runtype=runtype, rc=rc)
-  else
-     call mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary, rc=rc)
-  endif
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  !---------------
-  ! Update MOM6
-  !---------------
-
-  if(profile_memory) call ESMF_VMLogMemInfo("Entering MOM update_ocean_model: ")
   if (do_advance) then
-    call update_ocean_model(Ice_ocean_boundary, ocean_state, ocean_public, Time, Time_step_coupled)
+
+     call ESMF_GridCompGetInternalState(gcomp, ocean_internalstate, rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+
+     Ice_ocean_boundary => ocean_internalstate%ptr%ice_ocean_boundary_type_ptr
+     ocean_public       => ocean_internalstate%ptr%ocean_public_type_ptr
+     ocean_state        => ocean_internalstate%ptr%ocean_state_type_ptr
+
+     !---------------
+     ! Write diagnostics for import
+     !---------------
+
+     if (write_diagnostics) then
+        call NUOPC_Write(importState, fileNamePrefix='field_ocn_import_', &
+             timeslice=import_slice, relaxedFlag=.true., rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+             line=__LINE__, &
+             file=__FILE__)) &
+             return  ! bail out
+        import_slice = import_slice + 1
+     endif
+
+     !---------------
+     ! Get ocean grid
+     !---------------
+
+     call get_ocean_grid(ocean_state, ocean_grid)
+
+     !---------------
+     ! Import data
+     !---------------
+
+     call mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary, rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+
+     !---------------
+     ! Update MOM6
+     !---------------
+
+     if(profile_memory) call ESMF_VMLogMemInfo("Entering MOM update_ocean_model: ")
+     call update_ocean_model(Ice_ocean_boundary, ocean_state, ocean_public, Time, Time_step_coupled)
+     if(profile_memory) call ESMF_VMLogMemInfo("Leaving MOM update_ocean_model: ")
+
+     !---------------
+     ! Export Data
+     !---------------
+
+     call mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock, rc=rc)
+     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+
   endif
-  if(profile_memory) call ESMF_VMLogMemInfo("Leaving MOM update_ocean_model: ")
-
-  !---------------
-  ! Export Data
-  !---------------
-
-  call mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  call shr_file_setLogUnit (logunit)
 
   !---------------
   ! If restart alarm is ringing - write restart file
@@ -1983,7 +2087,7 @@ subroutine ModelAdvance(gcomp, rc)
           file=__FILE__)) &
           return  ! bail out
      if (existflag) then
-        call ESMF_LogWrite("mom_cap: called user GetRestartFileToWrite method", ESMF_LOGMSG_INFO, rc=rc)
+        call ESMF_LogWrite("MOM_cap: called user GetRestartFileToWrite method", ESMF_LOGMSG_INFO, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
             line=__LINE__, &
             file=__FILE__)) &
@@ -1996,7 +2100,7 @@ subroutine ModelAdvance(gcomp, rc)
             return  ! bail out
         if (isPresent .and. isSet) then
            restartname = trim(cvalue)
-           call ESMF_LogWrite("mom_cap: User RestartFileToWrite: "//trim(restartname), ESMF_LOGMSG_INFO, rc=rc)
+           call ESMF_LogWrite("MOM_cap: User RestartFileToWrite: "//trim(restartname), ESMF_LOGMSG_INFO, rc=rc)
            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
                line=__LINE__, &
                file=__FILE__)) &
@@ -2019,7 +2123,7 @@ subroutine ModelAdvance(gcomp, rc)
             return  ! bail out
         write(restartname,'(A,".mom6.r.",I4.4,"-",I2.2,"-",I2.2,"-",I2.2,"-",I2.2,"-",I2.2)') &
               "ocn", year, month, day, hour, minute, seconds
-        call ESMF_LogWrite("mom_cap: Using default restart filename:  "//trim(restartname), ESMF_LOGMSG_INFO, rc=rc)
+        call ESMF_LogWrite("MOM_cap: Using default restart filename:  "//trim(restartname), ESMF_LOGMSG_INFO, rc=rc)
         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
             line=__LINE__, &
             file=__FILE__)) &
@@ -2089,7 +2193,7 @@ subroutine ModelSetRunClock(gcomp, rc)
   type(ESMF_ALARM)         :: restart_alarm
   logical                  :: isPresent, isSet
   logical                  :: first_time = .true.
-  character(len=*),parameter :: subname='mom_cap:(ModelSetRunClock) '
+  character(len=*),parameter :: subname='MOM_cap:(ModelSetRunClock) '
   !--------------------------------
 
   rc = ESMF_SUCCESS
@@ -2252,7 +2356,7 @@ subroutine ocean_model_finalize(gcomp, rc)
   type(ESMF_Clock)                       :: clock
   type(ESMF_Time)                        :: currTime
   character(len=64)                      :: timestamp
-  character(len=*),parameter  :: subname='(mom_cap:ocean_model_finalize)'
+  character(len=*),parameter  :: subname='(MOM_cap:ocean_model_finalize)'
 
   write(*,*) 'MOM: --- finalize called ---'
   rc = ESMF_SUCCESS
@@ -2307,7 +2411,7 @@ subroutine State_SetScalar(value, scalar_id, State, mytask, scalar_name, scalar_
   ! local variables
   type(ESMF_Field)                :: field
   real(ESMF_KIND_R8), pointer     :: farrayptr(:,:)
-  character(len=*), parameter     :: subname='(mom_cap:State_SetScalar)'
+  character(len=*), parameter     :: subname='(MOM_cap:State_SetScalar)'
   !--------------------------------------------------------
 
   rc = ESMF_SUCCESS
@@ -2348,7 +2452,7 @@ subroutine MOM_RealizeFields(state, nfields, field_defs, tag, grid, mesh, rc)
   type(ESMF_Field)            :: field
   real(ESMF_KIND_R8), pointer :: fldptr1d(:)   ! for mesh
   real(ESMF_KIND_R8), pointer :: fldptr2d(:,:) ! for grid
-  character(len=*),parameter  :: subname='(mom_cap:MOM_RealizeFields)'
+  character(len=*),parameter  :: subname='(MOM_cap:MOM_RealizeFields)'
   !--------------------------------------------------------
 
   rc = ESMF_SUCCESS
@@ -2453,7 +2557,7 @@ contains  !- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     ! local variables
     type(ESMF_Distgrid) :: distgrid
     type(ESMF_Grid)     :: grid
-    character(len=*), parameter :: subname='(mom_cap:SetScalarField)'
+    character(len=*), parameter :: subname='(MOM_cap:SetScalarField)'
 
     rc = ESMF_SUCCESS
 
@@ -2494,7 +2598,7 @@ subroutine fld_list_add(num, fldlist, stdname, transferOffer, shortname)
 
   ! local variables
   integer :: rc
-  character(len=*), parameter :: subname='(mom_cap:fld_list_add)'
+  character(len=*), parameter :: subname='(MOM_cap:fld_list_add)'
 
   ! fill in the new entry
   num = num + 1
@@ -2530,4 +2634,4 @@ subroutine shr_file_getLogUnit(nunit)
 end subroutine shr_file_getLogUnit
 #endif
 
-end module mom_cap_mod
+end module MOM_cap_mod
