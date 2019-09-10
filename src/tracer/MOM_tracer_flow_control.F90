@@ -36,7 +36,7 @@ use RGC_tracer, only : RGC_tracer_end, RGC_tracer_CS
 use ideal_age_example, only : register_ideal_age_tracer, initialize_ideal_age_tracer
 use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_surface_state
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
-use MARBL_tracers, only : register_MARBL_tracers, MARBL_tracers_CS
+use MARBL_tracers, only : configure_MARBL_tracers, register_MARBL_tracers, MARBL_tracers_CS
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
 use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
@@ -234,6 +234,13 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
        "call_tracer_register: use_MOM_generic_tracer=.true. but MOM6 was "//&
        "not compiled with _USE_GENERIC_TRACER")
 #endif
+
+
+!    External tracer packages may need to be configured prior to registering the
+!  tracers.
+  if (CS%use_MARBL_tracers) &
+    call configure_MARBL_tracers(GV)
+
 
 !    Add other user-provided calls to register tracers for restarting here. Each
 !  tracer package registration call returns a logical false if it cannot be run

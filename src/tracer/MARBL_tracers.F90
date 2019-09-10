@@ -29,7 +29,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public register_MARBL_tracers, initialize_MARBL_tracers
+public configure_MARBL_tracers, register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
 public MARBL_tracer_stock, MARBL_tracers_end
 
@@ -60,6 +60,25 @@ end type MARBL_tracers_CS
 type(MARBL_interface_class), private :: MARBL_instances
 
 contains
+
+!> This subroutine is used to call MARBL's initialization routine
+subroutine configure_MARBL_tracers(GV)
+  type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
+
+  integer :: nz
+  nz = GV%ke
+
+  call MARBL_instances%init(&
+                            gcm_num_levels = nz, &
+                            gcm_num_PAR_subcols = 1, &
+                            gcm_num_elements_surface_flux = 1, &
+                            gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
+                            gcm_zw = GV%sInterface(2:nz+1), &
+                            gcm_zt = GV%sLayer, &
+                            lgcm_has_global_ops = .true. &
+                           )
+
+end subroutine configure_MARBL_tracers
 
 !> This subroutine is used to register tracer fields and subroutines
 !! to be used with MOM.
@@ -96,16 +115,6 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     return
   endif
   allocate(CS)
-
-  call MARBL_instances%init(&
-                            gcm_num_levels = nz, &
-                            gcm_num_PAR_subcols = 1, &
-                            gcm_num_elements_surface_flux = 1, &
-                            gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
-                            gcm_zw = GV%sInterface(2:nz+1), &
-                            gcm_zt = GV%sLayer, &
-                            lgcm_has_global_ops = .true. &
-                           )
 
   CS%ntr = size(marbl_instances%tracer_metadata)
   allocate(CS%ind_tr(CS%ntr))
