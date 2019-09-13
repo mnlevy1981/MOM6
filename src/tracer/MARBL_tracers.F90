@@ -3,8 +3,9 @@ module MARBL_tracers
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
+use MOM_coms,               only : root_PE, broadcast
 use MOM_diag_mediator,      only : diag_ctrl
-use MOM_error_handler,      only : MOM_error, FATAL, WARNING
+use MOM_error_handler,      only : is_root_PE, MOM_error, FATAL, WARNING
 use MOM_file_parser,        only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,       only : forcing
 use MOM_grid,               only : ocean_grid_type
@@ -61,13 +62,68 @@ type(MARBL_interface_class), private :: MARBL_instances
 
 contains
 
-!> This subroutine is used to call MARBL's initialization routine
-subroutine configure_MARBL_tracers(GV)
+!> This subroutine is used to read marbl_in, configure MARBL accordingly, and then
+!! call MARBL's initialization routine
+subroutine configure_MARBL_tracers(GV, param_file)
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
+  type(param_file_type),      intent(in) :: param_file !< A structure to parse for run-time parameters
 
-  integer :: nz
+#include "version_variable.h"
+  character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
+  character(len=256) :: log_message
+  character(len=35) :: marbl_settings_file
+  character(len=256) :: marbl_in_line(1)
+  integer :: nz, marbl_settings_in, read_error
   nz = GV%ke
 
+  ! (1) Read all relevant parameters and write them to the model log.
+  call log_version(param_file, mdl, version, "")
+  call get_param(param_file, mdl, "marbl_settings_file", marbl_settings_file, &
+                 "The name of a file from which to read the run-time "//&
+                 "settings for MARBL.", default="marbl_in")
+
+  ! (2) Read marbl settings file and call put_setting()
+
+  ! (2a) only master task opens file
+  if (is_root_PE()) &
+     ! read the marbl_in into buffer
+     open(unit=marbl_settings_in, file=marbl_settings_file, iostat=read_error)
+  call broadcast(read_error, root_PE())
+  if (read_error .ne. 0) then
+    write(log_message, '(A, I0, 2A)') "IO ERROR ", read_error, &
+         "opening namelist file : ", trim(marbl_settings_file)
+    call MOM_error(FATAL, log_message)
+  end if
+
+  ! (2b) master task reads file and broadcasts line-by-line
+  marbl_in_line = ''
+  do
+    ! i. Read next line on master, iostat value out
+    !    (Exit loop if read is not successful; either read error or end of file)
+    if (is_root_PE()) read(marbl_settings_in, "(A)", iostat=read_error) marbl_in_line(1)
+    call broadcast(read_error, root_PE())
+    if (read_error .ne. 0) exit
+
+    ! ii. Broadcast line just read in on root PE to all tasks
+    call broadcast(marbl_in_line, 256, root_PE())
+
+    ! iii. All tasks call put_setting (TODO: openMP blocks?)
+    call marbl_instances%put_setting(marbl_in_line(1))
+  end do
+
+  ! (2c) we should always reach the EOF to capture the entire file...
+  if (.not. is_iostat_end(read_error)) then
+     write(log_message, '(3A, I0)') "IO ERROR reading ", trim(marbl_settings_file), ": ", read_error
+     call MOM_error(FATAL, log_message)
+  else
+     if (is_root_PE()) then
+       ! TODO: Better way to get message into log?
+       write(*, '(3A)') "Read '", trim(marbl_settings_file), "' until EOF."
+     end if
+  end if
+  if (is_root_PE()) close(marbl_settings_in)
+
+  ! (3) call marbl%init()
   call MARBL_instances%init(&
                             gcm_num_levels = nz, &
                             gcm_num_PAR_subcols = 1, &
@@ -99,7 +155,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
   character(len=200) :: inputdir ! The directory where the input files are.
   character(len=48)  :: var_name ! The variable's name.
-  character(len=48)  :: desc_name ! The variable's descriptor.
+  character(len=128) :: desc_name ! The variable's descriptor.
   character(len=48)  :: units ! The variable's units.
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_MARBL_tracers

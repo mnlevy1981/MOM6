@@ -239,7 +239,7 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 !    External tracer packages may need to be configured prior to registering the
 !  tracers.
   if (CS%use_MARBL_tracers) &
-    call configure_MARBL_tracers(GV)
+    call configure_MARBL_tracers(GV, param_file)
 
 
 !    Add other user-provided calls to register tracers for restarting here. Each
