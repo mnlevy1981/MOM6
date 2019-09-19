@@ -417,6 +417,8 @@ subroutine MARBL_tracers_end(CS)
   integer :: m
 
   call print_marbl_log(MARBL_instances%StatusLog)
+  call marbl_instances%shutdown()
+  ! TODO: print MARBL timers to stdout as well
   if (associated(CS)) then
     if (associated(CS%tr)) deallocate(CS%tr)
     deallocate(CS)
