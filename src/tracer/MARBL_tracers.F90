@@ -133,7 +133,7 @@ subroutine configure_MARBL_tracers(GV, param_file)
                             gcm_zt = GV%sLayer, &
                             lgcm_has_global_ops = .true. &
                            )
-
+  call print_marbl_log(MARBL_instances%StatusLog)
 end subroutine configure_MARBL_tracers
 
 !> This subroutine is used to register tracer fields and subroutines
@@ -416,11 +416,53 @@ subroutine MARBL_tracers_end(CS)
                                         !! call to register_MARBL_tracers.
   integer :: m
 
+  call print_marbl_log(MARBL_instances%StatusLog)
   if (associated(CS)) then
     if (associated(CS%tr)) deallocate(CS%tr)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end
+
+!*****************************************************************************
+
+subroutine print_marbl_log(log_to_print)
+
+  use marbl_logging, only : marbl_status_log_entry_type
+  use marbl_logging, only : marbl_log_type
+  use MOM_coms,      only : PE_here
+  use mpp_mod,       only : stdout ! Could also use MOM_error_handler but
+                                   ! writing to stdout doesn't imply error
+                                   ! in this code
+
+  class(marbl_log_type), intent(in) :: log_to_print
+
+  character(len=*), parameter :: subname = 'ecosys_driver:print_marbl_log'
+  character(len=256)          :: message_prefix, message_location
+  type(marbl_status_log_entry_type), pointer :: tmp
+
+  write(message_prefix, "(A,I0,A)") '(Task ', PE_here(), ')'
+
+  tmp => log_to_print%FullLog
+  do while (associated(tmp))
+    ! 1) Do I need to write this message? Yes, if all tasks should write this
+    !    or if I am master_task
+    if ((.not. tmp%lonly_master_writes) .or. is_root_PE()) then
+      ! master task does not need prefix
+      if (.not. is_root_PE()) then
+        write(stdout(), "(A,1X,A)") trim(message_prefix), trim(tmp%LogMessage)
+      else
+        write(stdout(), "(A)") trim(tmp%LogMessage)
+      end if     ! print message prefix?
+    end if       ! write the message?
+    tmp => tmp%next
+  end do
+
+  if (log_to_print%labort_marbl) then
+    write(stdout(), "(A)") 'ERROR reported from MARBL library'
+    call MOM_error(FATAL, 'Stopping in ' // subname)
+  end if
+
+end subroutine print_marbl_log
 
 !> \namespace MARBL_tracers
 !!
