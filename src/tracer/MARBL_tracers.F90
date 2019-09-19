@@ -134,6 +134,8 @@ subroutine configure_MARBL_tracers(GV, param_file)
                             lgcm_has_global_ops = .true. &
                            )
   call print_marbl_log(MARBL_instances%StatusLog)
+  call MARBL_instances%StatusLog%erase()
+
 end subroutine configure_MARBL_tracers
 
 !> This subroutine is used to register tracer fields and subroutines
@@ -417,8 +419,10 @@ subroutine MARBL_tracers_end(CS)
   integer :: m
 
   call print_marbl_log(MARBL_instances%StatusLog)
+  call MARBL_instances%StatusLog%erase()
   call marbl_instances%shutdown()
   ! TODO: print MARBL timers to stdout as well
+
   if (associated(CS)) then
     if (associated(CS%tr)) deallocate(CS%tr)
     deallocate(CS)
