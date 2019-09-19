@@ -423,8 +423,9 @@ subroutine MARBL_tracers_end(CS)
   endif
 end subroutine MARBL_tracers_end
 
-!*****************************************************************************
-
+!> This subroutine writes the contents of the MARBL log to stdout.
+!! TODO: some log messages come from a specific grid point, and this routine
+!!       needs to include the location in the preamble
 subroutine print_marbl_log(log_to_print)
 
   use marbl_logging, only : marbl_status_log_entry_type
