@@ -43,6 +43,7 @@ public MARBL_tracer_stock, MARBL_tracers_end
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
+  character(len=200) :: IC_file !< The file in which the age-tracer initial values cam be found.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
   real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine, in g m-3?
 
@@ -164,15 +165,24 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   integer :: isd, ied, jsd, jed, nz, m
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
-  ! Read all relevant parameters and write them to the model log.
-  call log_version(param_file, mdl, version, "")
-
   if (associated(CS)) then
     call MOM_error(WARNING, "register_MARBL_tracers called with an "// &
                              "associated control structure.")
     return
   endif
   allocate(CS)
+
+  ! Read all relevant parameters and write them to the model log.
+  call log_version(param_file, mdl, version, "")
+  call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
+                 "The file in which the MARBL tracers initial values can be found.", &
+                 default="ecosys_jan_IC_omip_MOM_tx0.66v1_c190925.nc")
+  if (scan(CS%IC_file,'/') == 0) then
+    ! Add the directory if CS%IC_file is not already a complete path.
+    call get_param(param_file, mdl, "MARBL_TRACERS_INPUTDIR", inputdir, default="/glade/work/mlevy/cesm_inputdata")
+    CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
+    call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_IC_FILE", CS%IC_file)
+  endif
 
   CS%ntr = size(marbl_instances%tracer_metadata)
   allocate(CS%ind_tr(CS%ntr))
@@ -210,12 +220,13 @@ end function register_MARBL_tracers
 
 !> This subroutine initializes the CS%ntr tracer fields in tr(:,:,:,:)
 !! and it sets up the tracer output.
-subroutine initialize_MARBL_tracers(restart, day, G, GV, h, diag, OBC, CS, sponge_CSp)
+subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, sponge_CSp)
   logical,                            intent(in) :: restart !< .true. if the fields have already been
                                                             !! read from a restart file.
   type(time_type), target,            intent(in) :: day  !< Time of the start of the run.
   type(ocean_grid_type),              intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type),            intent(in) :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),              intent(in) :: US   !< A dimensional unit scaling type
   real, dimension(NIMEM_,NJMEM_,NKMEM_), intent(in) :: h !< Layer thicknesses [H ~> m or kg m-2]
   type(diag_ctrl), target,            intent(in) :: diag !< Structure used to regulate diagnostic output.
   type(ocean_OBC_type),               pointer    :: OBC  !< This open boundary condition type specifies
@@ -227,7 +238,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, h, diag, OBC, CS, spong
                                                                   !! for the sponges, if they are in use.
 
 ! Local variables
-  character(len=24) :: name     ! A variable's name in a NetCDF file.
+  character(len=48) :: name     ! A variable's name in a NetCDF file.
   character(len=72) :: longname ! The long name of that variable.
   character(len=48) :: units    ! The dimensions of the variable.
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
@@ -243,16 +254,11 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, h, diag, OBC, CS, spong
 
   ! Establish location of source
   do m= 1, CS%ntr
-    do j=G%jsd,G%jed ; do i=G%isd,G%ied
-      ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (G%mask2dT(i,j) > 0.0 ) then
-        z_bot = -G%bathyT(i,j)
-        do k = GV%ke, 1, -1
-          z_center = z_bot + 0.5*h(i,j,k)*GV%H_to_Z
-          z_bot = z_bot + h(i,j,k)*GV%H_to_Z
-        enddo
-      endif
-    enddo ; enddo
+    write(name(:),'(A)') trim(marbl_instances%tracer_metadata(m)%short_name)
+    OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, US, -1e34)
+    if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
+                               "Unable to read "//trim(name)//" from "//&
+                               trim(CS%IC_file)//".")
   enddo
 
 end subroutine initialize_MARBL_tracers

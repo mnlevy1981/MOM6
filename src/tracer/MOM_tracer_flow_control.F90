@@ -36,7 +36,8 @@ use RGC_tracer, only : RGC_tracer_end, RGC_tracer_CS
 use ideal_age_example, only : register_ideal_age_tracer, initialize_ideal_age_tracer
 use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_surface_state
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
-use MARBL_tracers, only : configure_MARBL_tracers, register_MARBL_tracers, MARBL_tracers_end, MARBL_tracers_CS
+use MARBL_tracers, only : configure_MARBL_tracers, register_MARBL_tracers, initialize_MARBL_tracers
+use MARBL_tracers, only :  MARBL_tracers_end, MARBL_tracers_CS
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
 use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
@@ -344,6 +345,9 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
   if (CS%use_ideal_age) &
     call initialize_ideal_age_tracer(restart, day, G, GV, US, h, diag, OBC, CS%ideal_age_tracer_CSp, &
                                      sponge_CSp)
+  if (CS%use_MARBL_tracers) &
+    call initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS%MARBL_tracers_CSp, &
+                                  sponge_CSp)
   if (CS%use_regional_dyes) &
     call initialize_dye_tracer(restart, day, G, GV, h, diag, OBC, CS%dye_tracer_CSp, &
                                      sponge_CSp)
