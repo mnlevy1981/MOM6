@@ -10,6 +10,3 @@
 [submodule "pkg/geoKdTree"]
 	path = pkg/geoKdTree
 	url = https://github.com/travissluka/geoKdTree.git
-[submodule "pkg/MARBL"]
-	path = pkg/MARBL
-	url = https://github.com/marbl-ecosys/MARBL.git
