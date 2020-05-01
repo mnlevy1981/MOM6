@@ -30,7 +30,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public configure_MARBL_tracers, register_MARBL_tracers, initialize_MARBL_tracers
+public register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
 public MARBL_tracer_stock, MARBL_tracers_end
 
@@ -164,6 +164,8 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   logical :: register_MARBL_tracers
   integer :: isd, ied, jsd, jed, nz, m
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
+
+  call configure_MARBL_tracers(GV, param_file)
 
   if (associated(CS)) then
     call MOM_error(WARNING, "register_MARBL_tracers called with an "// &
