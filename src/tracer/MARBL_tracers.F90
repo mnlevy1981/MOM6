@@ -3,6 +3,10 @@ module MARBL_tracers
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
+! Currently configured for use with marbl0.36.0
+! https://github.com/marbl-ecosys/MARBL/releases/tag/marbl0.36.0
+! (clone entire repo into pkg/MARBL)
+#ifdef _USE_MARBL_TRACERS
 use MOM_coms,               only : root_PE, broadcast
 use MOM_diag_mediator,      only : diag_ctrl
 use MOM_error_handler,      only : is_root_PE, MOM_error, FATAL, WARNING
@@ -479,6 +483,7 @@ subroutine print_marbl_log(log_to_print)
 
 end subroutine print_marbl_log
 
+#endif /* _USE_MARBL_TRACERS */
 !> \namespace MARBL_tracers
 !!
 !!    This file contains an example of the code that is needed to set
