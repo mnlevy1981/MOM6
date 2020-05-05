@@ -7,25 +7,28 @@ module MARBL_tracers
 ! https://github.com/marbl-ecosys/MARBL/releases/tag/marbl0.36.0
 ! (clone entire repo into pkg/MARBL)
 #ifdef _USE_MARBL_TRACERS
-use MOM_coms,               only : root_PE, broadcast
-use MOM_diag_mediator,      only : diag_ctrl
-use MOM_error_handler,      only : is_root_PE, MOM_error, FATAL, WARNING
-use MOM_file_parser,        only : get_param, log_param, log_version, param_file_type
-use MOM_forcing_type,       only : forcing
-use MOM_grid,               only : ocean_grid_type
-use MOM_hor_index,          only : hor_index_type
-use MOM_io,                 only : file_exists, read_data, slasher, vardesc, var_desc, query_vardesc
-use MOM_open_boundary,      only : ocean_OBC_type
-use MOM_restart,            only : query_initialized, MOM_restart_CS
-use MOM_sponge,             only : set_up_sponge_field, sponge_CS
-use MOM_time_manager,       only : time_type
-use MOM_tracer_registry,    only : register_tracer, tracer_registry_type
-use MOM_tracer_diabatic,    only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
-use MOM_tracer_Z_init,      only : tracer_Z_init
-use MOM_unit_scaling,       only : unit_scale_type
-use MOM_variables,          only : surface
-use MOM_verticalGrid,       only : verticalGrid_type
-use MARBL_interface,        only : MARBL_interface_class
+use MOM_coms,            only : root_PE, broadcast
+use MOM_diag_mediator,   only : diag_ctrl
+use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING
+use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
+use MOM_forcing_type,    only : forcing
+use MOM_grid,            only : ocean_grid_type
+use MOM_hor_index,       only : hor_index_type
+use MOM_io,              only : file_exists, read_data, slasher, vardesc, var_desc, query_vardesc
+use MOM_open_boundary,   only : ocean_OBC_type
+use MOM_restart,         only : query_initialized, MOM_restart_CS
+use MOM_sponge,          only : set_up_sponge_field, sponge_CS
+use MOM_time_manager,    only : time_type
+use MOM_tracer_registry, only : register_tracer, tracer_registry_type
+use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
+use MOM_tracer_Z_init,   only : tracer_Z_init
+use MOM_unit_scaling,    only : unit_scale_type
+use MOM_variables,       only : surface
+use MOM_verticalGrid,    only : verticalGrid_type
+use MOM_diag_mediator,   only : register_diag_field!, post_data, safe_alloc_ptr
+
+use MARBL_interface,              only : MARBL_interface_class
+use MARBL_interface_public_types, only : marbl_diagnostics_type
 
 use coupler_types_mod,      only : coupler_type_set_data, ind_csurf
 use atmos_ocean_fluxes_mod, only : aof_set_coupler_flux
@@ -64,6 +67,9 @@ end type MARBL_tracers_CS
 
 !> All calls to MARBL are done via the interface class
 type(MARBL_interface_class), private :: MARBL_instances
+
+!> Indices to the registered diagnostics match the indices used in MARBL
+integer, allocatable, private :: id_surface_flux_diags(:), id_interior_tendency_diags(:)
 
 contains
 
@@ -250,13 +256,17 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
                                 ! years m3 s-1 or years kg s-1.
   logical :: OK
-  integer :: i, j, k, m
+  integer :: i, j, k, m, diag_size
   real    :: z_bot, z_center
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
 
   CS%diag => diag
+
+  ! Register diagnostics (surface flux first, then interior tendency)
+  call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, id_surface_flux_diags)
+  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, id_interior_tendency_diags)
 
   ! Establish location of source
   do m= 1, CS%ntr
@@ -268,6 +278,37 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   enddo
 
 end subroutine initialize_MARBL_tracers
+
+subroutine register_MARBL_diags(MARBL_diags, diag, day, id_diags)
+
+  type(marbl_diagnostics_type), intent(in)    :: MARBL_diags !< MARBL diagnostics from marbl_instances
+  type(time_type), target,      intent(in)    :: day  !< Time of the start of the run.
+  type(diag_ctrl), target,      intent(in)    :: diag !< Structure used to regulate diagnostic output.
+  integer, allocatable,         intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index number
+
+  integer :: m, diag_size
+
+  diag_size = size(MARBL_diags%diags)
+  allocate(id_diags(diag_size))
+  do m = 1, diag_size
+    if (trim(MARBL_diags%diags(m)%vertical_grid) .eq. "none") then ! 2D field
+      id_diags(m) = register_diag_field("ocean_model", &
+        trim(MARBL_diags%diags(m)%short_name), &
+        diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
+        day, &
+        trim(MARBL_diags%diags(m)%long_name), &
+        trim(MARBL_diags%diags(m)%units))
+    else ! 3D field
+      id_diags(m) = register_diag_field("ocean_model", &
+        trim(MARBL_diags%diags(m)%short_name), &
+        diag%axesTL, & ! T=> tracer grid? L => layer center
+        day, &
+        trim(MARBL_diags%diags(m)%long_name), &
+        trim(MARBL_diags%diags(m)%units))
+    end if
+  end do
+
+end subroutine register_MARBL_diags
 
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
