@@ -38,7 +38,8 @@ use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
 #ifdef _USE_MARBL_TRACERS
 use MARBL_tracers, only : register_MARBL_tracers, initialize_MARBL_tracers
-use MARBL_tracers, only :  MARBL_tracers_end, MARBL_tracers_CS
+use MARBL_tracers, only : MARBL_tracers_surface_state
+use MARBL_tracers, only : MARBL_tracers_end, MARBL_tracers_CS
 #endif
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
@@ -797,6 +798,10 @@ subroutine call_tracer_surface_state(state, h, G, CS)
     call ISOMIP_tracer_surface_state(state, h, G, CS%ISOMIP_tracer_CSp)
   if (CS%use_ideal_age) &
     call ideal_age_tracer_surface_state(state, h, G, CS%ideal_age_tracer_CSp)
+#ifdef _USE_MARBL_TRACERS
+  if (CS%use_MARBL_tracers) &
+    call MARBL_tracers_surface_state(state, h, G, CS%MARBL_tracers_CSp)
+#endif
   if (CS%use_regional_dyes) &
     call dye_tracer_surface_state(state, h, G, CS%dye_tracer_CSp)
   if (CS%use_oil) &

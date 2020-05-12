@@ -138,7 +138,7 @@ subroutine configure_MARBL_tracers(GV, param_file)
   call MARBL_instances%init(&
                             gcm_num_levels = nz, &
                             gcm_num_PAR_subcols = 1, &
-                            gcm_num_elements_surface_flux = 1, &
+                            gcm_num_elements_surface_flux = 1, & ! FIXME: change to number of grid cells on MPI task
                             gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
                             gcm_zw = GV%sInterface(2:nz+1), &
                             gcm_zt = GV%sLayer, &
@@ -434,7 +434,7 @@ end function MARBL_tracer_stock
 
 !> This subroutine extracts the surface fields from this tracer package that
 !! are to be shared with the atmosphere in coupled configurations.
-!! This particular tracer package does not report anything back to the coupler.
+!! It calls MARBL's surface_flux_compute() subroutine first.
 subroutine MARBL_tracers_surface_state(state, h, G, CS)
   type(ocean_grid_type),  intent(in)    :: G  !< The ocean's grid structure.
   type(surface),          intent(inout) :: state !< A structure containing fields that
@@ -447,11 +447,34 @@ subroutine MARBL_tracers_surface_state(state, h, G, CS)
   ! This particular tracer package does not report anything back to the coupler.
   ! The code that is here is just a rough guide for packages that would.
 
-  integer :: m, is, ie, js, je, isd, ied, jsd, jed
+  integer :: i, j, m, is, ie, js, je, isd, ied, jsd, jed
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   if (.not.associated(CS)) return
+
+  ! FIXME: MARBL can handle computing surface fluxes for all columns simultaneously
+  !        I was just thinking going column-by-column at first might be easier
+  do i=is,ie
+    do j=js,je
+      ! (1) Load proper column data
+      !     i. surface flux forcings
+      do m=1,size(marbl_instances%surface_flux_forcings)
+        marbl_instances%surface_flux_forcings(m)%field_0d(1) = 0
+      end do
+
+      !     ii. tracers at surface
+      marbl_instances%tracers_at_surface(1,:) = 0
+
+      !     iii. surface flux saved state
+      do m=1,size(marbl_instances%surface_flux_saved_state%state)
+        marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = 0
+      end do
+
+      ! Compute surface fluxes in MARBL
+      call marbl_instances%surface_flux_compute()
+    end do
+  end do
 
   if (CS%coupled_tracers) then
     do m=1,CS%ntr
