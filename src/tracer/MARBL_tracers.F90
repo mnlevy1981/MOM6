@@ -312,10 +312,7 @@ end subroutine register_MARBL_diags
 
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
-!! This is a simple example of a set of advected passive tracers.
-!! The arguments to this subroutine are redundant in that
-!!     h_new(k) = h_old(k) + ea(k) - eb(k-1) + eb(k) - ea(k+1)
-subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, CS, &
+subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, &
               evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
@@ -334,7 +331,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   type(forcing),           intent(in) :: fluxes !< A structure containing pointers to thermodynamic
                                               !! and tracer forcing fields.  Unused fields have NULL ptrs.
   real,                    intent(in) :: dt   !< The amount of time covered by this call [s]
-  type(MARBL_tracers_CS),     pointer    :: CS   !< The control structure returned by a previous
+  type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
+  type(MARBL_tracers_CS),     pointer :: CS   !< The control structure returned by a previous
                                               !! call to register_MARBL_tracers.
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                               !! be fluxed out of the top layer in a timestep [nondim]
@@ -354,6 +352,30 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
+
+  ! (1) Compute surface fluxes
+  ! FIXME: MARBL can handle computing surface fluxes for all columns simultaneously
+  !        I was just thinking going column-by-column at first might be easier
+  do i=is,ie
+    do j=js,je
+      ! (1) Load proper column data
+      !     i. surface flux forcings
+      do m=1,size(marbl_instances%surface_flux_forcings)
+        marbl_instances%surface_flux_forcings(m)%field_0d(1) = 0
+      end do
+
+      !     ii. tracers at surface
+      marbl_instances%tracers_at_surface(1,:) = 0
+
+      !     iii. surface flux saved state
+      do m=1,size(marbl_instances%surface_flux_saved_state%state)
+        marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = 0
+      end do
+
+      ! Compute surface fluxes in MARBL
+      call marbl_instances%surface_flux_compute()
+    end do
+  end do
 
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,CS%ntr
@@ -434,7 +456,7 @@ end function MARBL_tracer_stock
 
 !> This subroutine extracts the surface fields from this tracer package that
 !! are to be shared with the atmosphere in coupled configurations.
-!! It calls MARBL's surface_flux_compute() subroutine first.
+!! This particular tracer package does not report anything back to the coupler.
 subroutine MARBL_tracers_surface_state(state, h, G, CS)
   type(ocean_grid_type),  intent(in)    :: G  !< The ocean's grid structure.
   type(surface),          intent(inout) :: state !< A structure containing fields that
@@ -447,34 +469,11 @@ subroutine MARBL_tracers_surface_state(state, h, G, CS)
   ! This particular tracer package does not report anything back to the coupler.
   ! The code that is here is just a rough guide for packages that would.
 
-  integer :: i, j, m, is, ie, js, je, isd, ied, jsd, jed
+  integer :: m, is, ie, js, je, isd, ied, jsd, jed
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   if (.not.associated(CS)) return
-
-  ! FIXME: MARBL can handle computing surface fluxes for all columns simultaneously
-  !        I was just thinking going column-by-column at first might be easier
-  do i=is,ie
-    do j=js,je
-      ! (1) Load proper column data
-      !     i. surface flux forcings
-      do m=1,size(marbl_instances%surface_flux_forcings)
-        marbl_instances%surface_flux_forcings(m)%field_0d(1) = 0
-      end do
-
-      !     ii. tracers at surface
-      marbl_instances%tracers_at_surface(1,:) = 0
-
-      !     iii. surface flux saved state
-      do m=1,size(marbl_instances%surface_flux_saved_state%state)
-        marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = 0
-      end do
-
-      ! Compute surface fluxes in MARBL
-      call marbl_instances%surface_flux_compute()
-    end do
-  end do
 
   if (CS%coupled_tracers) then
     do m=1,CS%ntr

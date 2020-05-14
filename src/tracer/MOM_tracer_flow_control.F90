@@ -38,7 +38,7 @@ use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
 #ifdef _USE_MARBL_TRACERS
 use MARBL_tracers, only : register_MARBL_tracers, initialize_MARBL_tracers
-use MARBL_tracers, only : MARBL_tracers_surface_state
+use MARBL_tracers, only : MARBL_tracers_column_physics
 use MARBL_tracers, only : MARBL_tracers_end, MARBL_tracers_CS
 #endif
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
@@ -497,6 +497,13 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                            G, GV, US, CS%ideal_age_tracer_CSp, &
                                            evap_CFL_limit=evap_CFL_limit, &
                                            minimum_forcing_depth=minimum_forcing_depth)
+#ifdef _USE_MARBL_TRACERS
+    if (CS%use_MARBL_tracers) &
+      call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                        G, GV, US, CS%MARBL_tracers_CSp, &
+                                           evap_CFL_limit=evap_CFL_limit, &
+                                           minimum_forcing_depth=minimum_forcing_depth)
+#endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%dye_tracer_CSp, &
@@ -558,6 +565,11 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_ideal_age) &
       call ideal_age_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, US, CS%ideal_age_tracer_CSp)
+#ifdef _USE_MARBL_TRACERS
+    if (CS%use_MARBL_tracers) &
+      call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
+                                        G, GV, US, CS%MARBL_tracers_CSp)
+#endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, US, CS%dye_tracer_CSp)
@@ -798,10 +810,6 @@ subroutine call_tracer_surface_state(state, h, G, CS)
     call ISOMIP_tracer_surface_state(state, h, G, CS%ISOMIP_tracer_CSp)
   if (CS%use_ideal_age) &
     call ideal_age_tracer_surface_state(state, h, G, CS%ideal_age_tracer_CSp)
-#ifdef _USE_MARBL_TRACERS
-  if (CS%use_MARBL_tracers) &
-    call MARBL_tracers_surface_state(state, h, G, CS%MARBL_tracers_CSp)
-#endif
   if (CS%use_regional_dyes) &
     call dye_tracer_surface_state(state, h, G, CS%dye_tracer_CSp)
   if (CS%use_oil) &
