@@ -25,7 +25,7 @@ use MOM_tracer_Z_init,   only : tracer_Z_init
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface
 use MOM_verticalGrid,    only : verticalGrid_type
-use MOM_diag_mediator,   only : register_diag_field!, post_data, safe_alloc_ptr
+use MOM_diag_mediator,   only : register_diag_field, post_data!, safe_alloc_ptr
 
 use MARBL_interface,              only : MARBL_interface_class
 use MARBL_interface_public_types, only : marbl_diagnostics_type
@@ -65,11 +65,23 @@ type, public :: MARBL_tracers_CS ; private
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 end type MARBL_tracers_CS
 
+!> Temporary type for diagnostic variables coming from MARBL
+!! Allocate exactly one of field_[23]d
+type, private :: temp_MARBL_diag
+  integer :: id !< index into MOM diagnostic structure
+  real, allocatable :: field_2d(:,:) !< memory for 2D field
+  real, allocatable :: field_3d(:,:,:) !< memory for 3D field
+end type temp_MARBL_diag
+
 !> All calls to MARBL are done via the interface class
 type(MARBL_interface_class), private :: MARBL_instances
 
 !> Indices to the registered diagnostics match the indices used in MARBL
-integer, allocatable, private :: id_surface_flux_diags(:), id_interior_tendency_diags(:)
+type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
+
+!> If we can post data column by column, all we need are integer
+!! arrays for ids
+! integer, allocatable, private :: id_surface_flux_diags(:), id_interior_tendency_diags(:)
 
 contains
 
@@ -265,8 +277,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   CS%diag => diag
 
   ! Register diagnostics (surface flux first, then interior tendency)
-  call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, id_surface_flux_diags)
-  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, id_interior_tendency_diags)
+  call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, surface_flux_diags)
+  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, interior_tendency_diags)
 
   ! Establish location of source
   do m= 1, CS%ntr
@@ -279,32 +291,39 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
 end subroutine initialize_MARBL_tracers
 
-subroutine register_MARBL_diags(MARBL_diags, diag, day, id_diags)
+subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
 
   type(marbl_diagnostics_type), intent(in)    :: MARBL_diags !< MARBL diagnostics from marbl_instances
   type(time_type), target,      intent(in)    :: day  !< Time of the start of the run.
   type(diag_ctrl), target,      intent(in)    :: diag !< Structure used to regulate diagnostic output.
-  integer, allocatable,         intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index number
+  !integer, allocatable,         intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index number
+  type(ocean_grid_type),              intent(in) :: G    !< The ocean's grid structure
+  type(temp_marbl_diag), allocatable, intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index number and buffer space for collecting diags from all columns
 
   integer :: m, diag_size
 
   diag_size = size(MARBL_diags%diags)
   allocate(id_diags(diag_size))
   do m = 1, diag_size
+    id_diags(m)%id = -1
     if (trim(MARBL_diags%diags(m)%vertical_grid) .eq. "none") then ! 2D field
-      id_diags(m) = register_diag_field("ocean_model", &
+      id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
         diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
         day, &
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
+      allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)))
+      id_diags(m)%field_2d = 0.0
     else ! 3D field
-      id_diags(m) = register_diag_field("ocean_model", &
+      id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
         diag%axesTL, & ! T=> tracer grid? L => layer center
         day, &
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
+      allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
+      id_diags(m)%field_3d = 0.0
     end if
   end do
 
@@ -372,9 +391,22 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = 0
       end do
 
-      ! Compute surface fluxes in MARBL
+      ! (2) Compute surface fluxes in MARBL
       call marbl_instances%surface_flux_compute()
+
+      ! (3) Copy output that MOM6 needs to hold on to
+      !     i. saved state
+      !     ii. diagnostics
+      do m=1,size(marbl_instances%surface_flux_diags%diags)
+        ! All diags are 2D coming from surface
+        surface_flux_diags(m)%field_2d(i,j) = marbl_instances%surface_flux_diags%diags(m)%field_2d(1)
+      end do
     end do
+  end do
+  ! All diags are 2D coming from surface
+  do m=1,size(surface_flux_diags)
+    if (surface_flux_diags(m)%id > 0) &
+      call post_data(surface_flux_diags(m)%id, surface_flux_diags(m)%field_2d, CS%diag)
   end do
 
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
