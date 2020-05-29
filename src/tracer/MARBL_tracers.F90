@@ -78,6 +78,8 @@ type(MARBL_interface_class), private :: MARBL_instances
 
 !> Indices to the registered diagnostics match the indices used in MARBL
 type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
+integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
+integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
 
 !> If we can post data column by column, all we need are integer
 !! arrays for ids
@@ -96,8 +98,9 @@ subroutine configure_MARBL_tracers(GV, param_file)
   character(len=256) :: log_message
   character(len=35) :: marbl_settings_file
   character(len=256) :: marbl_in_line(1)
-  integer :: nz, marbl_settings_in, read_error
+  integer :: m, nz, marbl_settings_in, read_error
   nz = GV%ke
+  marbl_settings_in = 615
 
   ! (1) Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
@@ -156,8 +159,54 @@ subroutine configure_MARBL_tracers(GV, param_file)
                             gcm_zt = GV%sLayer, &
                             lgcm_has_global_ops = .true. &
                            )
+  if (marbl_instances%StatusLog%labort_marbl) &
+    call marbl_instances%StatusLog%log_error_trace("marbl_instances%init", "configure_MARBL_tracers")
   call print_marbl_log(MARBL_instances%StatusLog)
   call MARBL_instances%StatusLog%erase()
+
+  ! (4) Initialize forcing fields
+  !     i. store all surface forcing indices
+  u10_sqr_ind = -1
+  sss_ind = -1
+  sst_ind = -1
+  ifrac_ind = -1
+  dust_dep_ind = -1
+  fe_dep_ind = -1
+  nox_flux_ind = -1
+  nhy_flux_ind = -1
+  atmpress_ind = -1
+  xco2_ind = -1
+  xco2_alt_ind = -1
+  do m=1,size(marbl_instances%surface_flux_forcings)
+    select case (trim(marbl_instances%surface_flux_forcings(m)%metadata%varname))
+      case('u10_sqr')
+        u10_sqr_ind = m
+      case('sss')
+        sss_ind = m
+      case('sst')
+        sst_ind = m
+      case('Ice Fraction')
+        ifrac_ind = m
+      case('Dust Flux')
+        dust_dep_ind = m
+      case('Iron Flux')
+        fe_dep_ind = m
+      case('NOx Flux')
+        nox_flux_ind = m
+      case('NHy Flux')
+        nhy_flux_ind = m
+      case('Atmospheric Pressure')
+        atmpress_ind = m
+      case('xco2')
+        xco2_ind = m
+      case('xco2_alt_co2')
+        xco2_alt_ind = m
+      case DEFAULT
+        write(log_message, "(A,1X,A)") trim(marbl_instances%surface_flux_forcings(m)%metadata%varname), &
+                                   'is not a valid surface flux forcing field name.'
+        call MOM_error(FATAL, log_message)
+    end select
+  end do
 
 end subroutine configure_MARBL_tracers
 
@@ -359,6 +408,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
                                               !! fluxes can be applied [m]
 
 ! Local variables
+  character(len=256) :: log_message
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
   real :: sfc_val  ! The surface value for the tracers.
   real :: Isecs_per_year  ! The number of seconds in a year.
@@ -379,12 +429,27 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     do j=js,je
       ! (1) Load proper column data
       !     i. surface flux forcings
-      do m=1,size(marbl_instances%surface_flux_forcings)
-        marbl_instances%surface_flux_forcings(m)%field_0d(1) = 0
-      end do
+      if (u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(u10_sqr_ind)%field_0d(1) = 2.5e5
+      if (sss_ind > 0) marbl_instances%surface_flux_forcings(sss_ind)%field_0d(1) = 0!35
+      if (sst_ind > 0) marbl_instances%surface_flux_forcings(sst_ind)%field_0d(1) = 0
+      if (ifrac_ind > 0) marbl_instances%surface_flux_forcings(ifrac_ind)%field_0d(1) = 0
+      if (dust_dep_ind > 0) marbl_instances%surface_flux_forcings(dust_dep_ind)%field_0d(1) = 0
+      if (fe_dep_ind > 0) marbl_instances%surface_flux_forcings(fe_dep_ind)%field_0d(1) = 0
+      if (nox_flux_ind > 0) marbl_instances%surface_flux_forcings(nox_flux_ind)%field_0d(1) = 0
+      if (nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(nhy_flux_ind)%field_0d(1) = 0
+      if (atmpress_ind > 0) marbl_instances%surface_flux_forcings(atmpress_ind)%field_0d(1) = 1
+      if (xco2_ind > 0) marbl_instances%surface_flux_forcings(xco2_ind)%field_0d(1) = 284.7
+      if (xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(xco2_alt_ind)%field_0d(1) = 284.7
+!      do m=1,size(marbl_instances%surface_flux_forcings)
+        ! having u10_sqr, atm pressure, etc = 0 was causing issues...
+        ! trying value of 1 instead
+!        marbl_instances%surface_flux_forcings(m)%field_0d(1) = 1
+!      end do
 
       !     ii. tracers at surface
-      marbl_instances%tracers_at_surface(1,:) = 0
+      do m=1,CS%ntr
+        marbl_instances%tracers_at_surface(1,m) = 0!CS%tr(i,j,1,m)
+      end do
 
       !     iii. surface flux saved state
       do m=1,size(marbl_instances%surface_flux_saved_state%state)
@@ -393,18 +458,28 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! (2) Compute surface fluxes in MARBL
       call marbl_instances%surface_flux_compute()
+      if (marbl_instances%StatusLog%labort_marbl) then
+        call marbl_instances%StatusLog%log_error_trace("marbl_instances%surface_flux_compute()", &
+                                                       "MARBL_tracers_column_physics")
+        call print_marbl_log(MARBL_instances%StatusLog)
+      end if
 
       ! (3) Copy output that MOM6 needs to hold on to
       !     i. saved state
       !     ii. diagnostics
       do m=1,size(marbl_instances%surface_flux_diags%diags)
         ! All diags are 2D coming from surface
-        surface_flux_diags(m)%field_2d(i,j) = marbl_instances%surface_flux_diags%diags(m)%field_2d(1)
+        surface_flux_diags(m)%field_2d(i,j) = real(marbl_instances%surface_flux_diags%diags(m)%field_2d(1))
       end do
     end do
   end do
   ! All diags are 2D coming from surface
   do m=1,size(surface_flux_diags)
+!    if (surface_flux_diags(m)%id > 0) then
+!      write(log_message, *) "MNL MNL: max diag value ", maxval(abs(surface_flux_diags(m)%field_2d)), &
+!                            " (m = ", m, ")"
+!      call MOM_error(WARNING, log_message)
+!    end if
     if (surface_flux_diags(m)%id > 0) &
       call post_data(surface_flux_diags(m)%id, surface_flux_diags(m)%field_2d, CS%diag)
   end do
