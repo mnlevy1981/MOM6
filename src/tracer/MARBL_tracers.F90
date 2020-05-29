@@ -46,6 +46,17 @@ public MARBL_tracer_stock, MARBL_tracers_end
 ! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
 ! vary with the Boussinesq approximation, the Boussinesq variant is given first.
 
+!> Temporary type for diagnostic variables coming from MARBL
+!! Allocate exactly one of field_[23]d
+type, private :: temp_MARBL_diag
+  integer :: id !< index into MOM diagnostic structure
+  real, allocatable :: field_2d(:,:) !< memory for 2D field
+  real, allocatable :: field_3d(:,:,:) !< memory for 3D field
+end type temp_MARBL_diag
+
+!> All calls to MARBL are done via the interface class
+type(MARBL_interface_class), private :: MARBL_instances
+
 !> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
@@ -63,23 +74,12 @@ type, public :: MARBL_tracers_CS ; private
 
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
+
+  !> Indices to the registered diagnostics match the indices used in MARBL
+  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
+  integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
+  integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
 end type MARBL_tracers_CS
-
-!> Temporary type for diagnostic variables coming from MARBL
-!! Allocate exactly one of field_[23]d
-type, private :: temp_MARBL_diag
-  integer :: id !< index into MOM diagnostic structure
-  real, allocatable :: field_2d(:,:) !< memory for 2D field
-  real, allocatable :: field_3d(:,:,:) !< memory for 3D field
-end type temp_MARBL_diag
-
-!> All calls to MARBL are done via the interface class
-type(MARBL_interface_class), private :: MARBL_instances
-
-!> Indices to the registered diagnostics match the indices used in MARBL
-type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
-integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
-integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
 
 !> If we can post data column by column, all we need are integer
 !! arrays for ids
@@ -89,9 +89,11 @@ contains
 
 !> This subroutine is used to read marbl_in, configure MARBL accordingly, and then
 !! call MARBL's initialization routine
-subroutine configure_MARBL_tracers(GV, param_file)
+subroutine configure_MARBL_tracers(GV, param_file, CS)
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
   type(param_file_type),      intent(in) :: param_file !< A structure to parse for run-time parameters
+  type(MARBL_tracers_CS),     pointer    :: CS   !< A pointer that is set to point to the control
+                                                 !! structure for this module
 
 #include "version_variable.h"
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
@@ -166,41 +168,41 @@ subroutine configure_MARBL_tracers(GV, param_file)
 
   ! (4) Initialize forcing fields
   !     i. store all surface forcing indices
-  u10_sqr_ind = -1
-  sss_ind = -1
-  sst_ind = -1
-  ifrac_ind = -1
-  dust_dep_ind = -1
-  fe_dep_ind = -1
-  nox_flux_ind = -1
-  nhy_flux_ind = -1
-  atmpress_ind = -1
-  xco2_ind = -1
-  xco2_alt_ind = -1
+  CS%u10_sqr_ind = -1
+  CS%sss_ind = -1
+  CS%sst_ind = -1
+  CS%ifrac_ind = -1
+  CS%dust_dep_ind = -1
+  CS%fe_dep_ind = -1
+  CS%nox_flux_ind = -1
+  CS%nhy_flux_ind = -1
+  CS%atmpress_ind = -1
+  CS%xco2_ind = -1
+  CS%xco2_alt_ind = -1
   do m=1,size(marbl_instances%surface_flux_forcings)
     select case (trim(marbl_instances%surface_flux_forcings(m)%metadata%varname))
       case('u10_sqr')
-        u10_sqr_ind = m
+        CS%u10_sqr_ind = m
       case('sss')
-        sss_ind = m
+        CS%sss_ind = m
       case('sst')
-        sst_ind = m
+        CS%sst_ind = m
       case('Ice Fraction')
-        ifrac_ind = m
+        CS%ifrac_ind = m
       case('Dust Flux')
-        dust_dep_ind = m
+        CS%dust_dep_ind = m
       case('Iron Flux')
-        fe_dep_ind = m
+        CS%fe_dep_ind = m
       case('NOx Flux')
-        nox_flux_ind = m
+        CS%nox_flux_ind = m
       case('NHy Flux')
-        nhy_flux_ind = m
+        CS%nhy_flux_ind = m
       case('Atmospheric Pressure')
-        atmpress_ind = m
+        CS%atmpress_ind = m
       case('xco2')
-        xco2_ind = m
+        CS%xco2_ind = m
       case('xco2_alt_co2')
-        xco2_alt_ind = m
+        CS%xco2_alt_ind = m
       case DEFAULT
         write(log_message, "(A,1X,A)") trim(marbl_instances%surface_flux_forcings(m)%metadata%varname), &
                                    'is not a valid surface flux forcing field name.'
@@ -217,7 +219,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),      intent(in) :: US   !< A dimensional unit scaling type
   type(param_file_type),      intent(in) :: param_file !< A structure to parse for run-time parameters
-  type(MARBL_tracers_CS),        pointer    :: CS   !< A pointer that is set to point to the control
+  type(MARBL_tracers_CS),     pointer    :: CS   !< A pointer that is set to point to the control
                                                  !! structure for this module
   type(tracer_registry_type), pointer    :: tr_Reg !< A pointer that is set to point to the control
                                                  !! structure for the tracer advection and diffusion module.
@@ -236,14 +238,14 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   integer :: isd, ied, jsd, jed, nz, m
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
-  call configure_MARBL_tracers(GV, param_file)
-
   if (associated(CS)) then
     call MOM_error(WARNING, "register_MARBL_tracers called with an "// &
                              "associated control structure.")
     return
   endif
   allocate(CS)
+
+  call configure_MARBL_tracers(GV, param_file, CS)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
@@ -326,8 +328,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   CS%diag => diag
 
   ! Register diagnostics (surface flux first, then interior tendency)
-  call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, surface_flux_diags)
-  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, interior_tendency_diags)
+  call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
+  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
 
   ! Establish location of source
   do m= 1, CS%ntr
@@ -429,17 +431,17 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     do j=js,je
       ! (1) Load proper column data
       !     i. surface flux forcings
-      if (u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(u10_sqr_ind)%field_0d(1) = 2.5e5
-      if (sss_ind > 0) marbl_instances%surface_flux_forcings(sss_ind)%field_0d(1) = 0!35
-      if (sst_ind > 0) marbl_instances%surface_flux_forcings(sst_ind)%field_0d(1) = 0
-      if (ifrac_ind > 0) marbl_instances%surface_flux_forcings(ifrac_ind)%field_0d(1) = 0
-      if (dust_dep_ind > 0) marbl_instances%surface_flux_forcings(dust_dep_ind)%field_0d(1) = 0
-      if (fe_dep_ind > 0) marbl_instances%surface_flux_forcings(fe_dep_ind)%field_0d(1) = 0
-      if (nox_flux_ind > 0) marbl_instances%surface_flux_forcings(nox_flux_ind)%field_0d(1) = 0
-      if (nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(nhy_flux_ind)%field_0d(1) = 0
-      if (atmpress_ind > 0) marbl_instances%surface_flux_forcings(atmpress_ind)%field_0d(1) = 1
-      if (xco2_ind > 0) marbl_instances%surface_flux_forcings(xco2_ind)%field_0d(1) = 284.7
-      if (xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(xco2_alt_ind)%field_0d(1) = 284.7
+      if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = 2.5e5
+      if (CS%sss_ind > 0) marbl_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = 0!35
+      if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = 0
+      if (CS%ifrac_ind > 0) marbl_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = 0
+      if (CS%dust_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = 0
+      if (CS%fe_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = 0
+      if (CS%nox_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = 0
+      if (CS%nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = 0
+      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = 1
+      if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = 284.7
+      if (CS%xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = 284.7
 !      do m=1,size(marbl_instances%surface_flux_forcings)
         ! having u10_sqr, atm pressure, etc = 0 was causing issues...
         ! trying value of 1 instead
@@ -448,6 +450,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !     ii. tracers at surface
       do m=1,CS%ntr
+        ! note: in test 010, runs die in day 7 if trying to populate surface tracer values from CS%tr
         marbl_instances%tracers_at_surface(1,m) = 0!CS%tr(i,j,1,m)
       end do
 
@@ -469,19 +472,19 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     ii. diagnostics
       do m=1,size(marbl_instances%surface_flux_diags%diags)
         ! All diags are 2D coming from surface
-        surface_flux_diags(m)%field_2d(i,j) = real(marbl_instances%surface_flux_diags%diags(m)%field_2d(1))
+        CS%surface_flux_diags(m)%field_2d(i,j) = real(marbl_instances%surface_flux_diags%diags(m)%field_2d(1))
       end do
     end do
   end do
   ! All diags are 2D coming from surface
-  do m=1,size(surface_flux_diags)
-!    if (surface_flux_diags(m)%id > 0) then
-!      write(log_message, *) "MNL MNL: max diag value ", maxval(abs(surface_flux_diags(m)%field_2d)), &
+  do m=1,size(CS%surface_flux_diags)
+!    if (CS%surface_flux_diags(m)%id > 0) then
+!      write(log_message, *) "MNL MNL: max diag value ", maxval(abs(CS%surface_flux_diags(m)%field_2d)), &
 !                            " (m = ", m, ")"
 !      call MOM_error(WARNING, log_message)
 !    end if
-    if (surface_flux_diags(m)%id > 0) &
-      call post_data(surface_flux_diags(m)%id, surface_flux_diags(m)%field_2d, CS%diag)
+    if (CS%surface_flux_diags(m)%id > 0) &
+      call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d, CS%diag)
   end do
 
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
