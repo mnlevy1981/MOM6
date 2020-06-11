@@ -500,9 +500,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
 #ifdef _USE_MARBL_TRACERS
     if (CS%use_MARBL_tracers) &
       call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                        G, GV, US, CS%MARBL_tracers_CSp, &
-                                           evap_CFL_limit=evap_CFL_limit, &
-                                           minimum_forcing_depth=minimum_forcing_depth)
+                                        G, GV, US, CS%MARBL_tracers_CSp, tv, &
+                                        evap_CFL_limit=evap_CFL_limit, &
+                                        minimum_forcing_depth=minimum_forcing_depth)
 #endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
@@ -568,7 +568,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
 #ifdef _USE_MARBL_TRACERS
     if (CS%use_MARBL_tracers) &
       call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                        G, GV, US, CS%MARBL_tracers_CSp)
+                                        G, GV, US, CS%MARBL_tracers_CSp, tv)
 #endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &

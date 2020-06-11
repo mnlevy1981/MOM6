@@ -23,7 +23,7 @@ use MOM_tracer_registry, only : register_tracer, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_Z_init,   only : tracer_Z_init
 use MOM_unit_scaling,    only : unit_scale_type
-use MOM_variables,       only : surface
+use MOM_variables,       only : surface, thermo_var_ptrs
 use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_diag_mediator,   only : register_diag_field, post_data!, safe_alloc_ptr
 
@@ -320,7 +320,6 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                                 ! years m3 s-1 or years kg s-1.
   logical :: OK
   integer :: i, j, k, m, diag_size
-  real    :: z_bot, z_center
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -382,7 +381,7 @@ end subroutine register_MARBL_diags
 
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
-subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, &
+subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, &
               evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
@@ -404,6 +403,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
   type(MARBL_tracers_CS),     pointer :: CS   !< The control structure returned by a previous
                                               !! call to register_MARBL_tracers.
+  type(thermo_var_ptrs),   intent(in) :: tv   !< A structure pointing to various thermodynamic variables
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                               !! be fluxed out of the top layer in a timestep [nondim]
   real,          optional, intent(in) :: minimum_forcing_depth !< The smallest depth over which
@@ -417,7 +417,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real :: year            ! The time in years.
   integer :: secs, days   ! Integer components of the time type.
   integer :: i, j, k, is, ie, js, je, nz, m
-  real    :: z_bot, z_center
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -432,8 +431,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! (1) Load proper column data
       !     i. surface flux forcings
       if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = 2.5e5
-      if (CS%sss_ind > 0) marbl_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = 0!35
-      if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = 0
+      if (CS%sss_ind > 0) marbl_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
+      if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) marbl_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = 0
       if (CS%dust_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = 0
       if (CS%fe_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = 0
@@ -451,7 +450,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     ii. tracers at surface
       do m=1,CS%ntr
         ! note: in test 010, runs die in day 7 if trying to populate surface tracer values from CS%tr
-        marbl_instances%tracers_at_surface(1,m) = 0!CS%tr(i,j,1,m)
+        marbl_instances%tracers_at_surface(1,m) = CS%tr(i,j,1,m)
       end do
 
       !     iii. surface flux saved state
@@ -501,19 +500,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
     enddo
   endif
-
-  do m=1,CS%ntr
-    do j=G%jsd,G%jed ; do i=G%isd,G%ied
-      ! A dye is set dependent on the center of the cell being inside the rectangular box.
-      if (G%mask2dT(i,j) > 0.0 ) then
-        z_bot = -G%bathyT(i,j)
-        do k=nz,1,-1
-          z_center = z_bot + 0.5*h_new(i,j,k)*GV%H_to_Z
-          z_bot = z_bot + h_new(i,j,k)*GV%H_to_Z
-        enddo
-      endif
-    enddo ; enddo
-  enddo
 
 end subroutine MARBL_tracers_column_physics
 
