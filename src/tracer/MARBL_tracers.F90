@@ -28,7 +28,7 @@ use MOM_verticalGrid,    only : verticalGrid_type
 use MOM_diag_mediator,   only : register_diag_field, post_data!, safe_alloc_ptr
 
 use MARBL_interface,              only : MARBL_interface_class
-use MARBL_interface_public_types, only : marbl_diagnostics_type
+use MARBL_interface_public_types, only : marbl_diagnostics_type, marbl_saved_state_type
 
 use coupler_types_mod,      only : coupler_type_set_data, ind_csurf
 use atmos_ocean_fluxes_mod, only : aof_set_coupler_flux
@@ -54,6 +54,14 @@ type, private :: temp_MARBL_diag
   real, allocatable :: field_3d(:,:,:) !< memory for 3D field
 end type temp_MARBL_diag
 
+type, private :: saved_state_for_MARBL_type
+  character(len=200) :: short_name !< name of variable being saved
+  character(len=200) :: file_varname !< name of variable in restart file
+  character(len=200) :: units !< variable units
+  real, allocatable :: field_2d(:,:) !< memory for 2D field
+  real, allocatable :: field_3d(:,:,:) !< memory for 3D field
+end type saved_state_for_MARBL_type
+
 !> All calls to MARBL are done via the interface class
 type(MARBL_interface_class), private :: MARBL_instances
 
@@ -76,14 +84,15 @@ type, public :: MARBL_tracers_CS ; private
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 
   !> Indices to the registered diagnostics match the indices used in MARBL
-  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
+  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:) !, interior_tendency_diags(:)
+  type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:) !, interior_tendency_saved_state(:)
   integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
   integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
 end type MARBL_tracers_CS
 
 !> If we can post data column by column, all we need are integer
 !! arrays for ids
-! integer, allocatable, private :: id_surface_flux_diags(:), id_interior_tendency_diags(:)
+! integer, allocatable, private :: id_surface_flux_diags(:) !, id_interior_tendency_diags(:)
 
 contains
 
@@ -328,7 +337,19 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   ! Register diagnostics (surface flux first, then interior tendency)
   call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
-  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
+  ! call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
+
+  ! Set up memory for saved state
+  call setup_saved_state(marbl_instances%surface_flux_saved_state, G, CS%surface_flux_saved_state)
+!  call setup_saved_state(marbl_instances%interior_tendency_saved_state, G, CS%interior_tendency_saved_state)
+  ! TODO: if restarting, get value from restart instead of setting to 0!
+  do m=1, size(CS%surface_flux_saved_state)
+    if (allocated(CS%surface_flux_saved_state(m)%field_2d)) then
+      CS%surface_flux_saved_state(m)%field_2d = 0
+    else
+      CS%surface_flux_saved_state(m)%field_3d = 0
+    end if
+  end do
 
   ! Establish location of source
   do m= 1, CS%ntr
@@ -337,7 +358,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
     if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                "Unable to read "//trim(name)//" from "//&
                                trim(CS%IC_file)//".")
-  enddo
+  end do
 
 end subroutine initialize_MARBL_tracers
 
@@ -378,6 +399,44 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
   end do
 
 end subroutine register_MARBL_diags
+
+subroutine setup_saved_state(MARBL_saved_state, G, local_saved_state)
+
+  type(marbl_saved_state_type),                  intent(in)    :: MARBL_saved_state !< MARBL saved state from marbl_instances
+  type(ocean_grid_type),                         intent(in)    :: G    !< The ocean's grid structure
+  type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array storing saved state locally
+
+  integer :: num_fields, m
+  character(len=200) :: log_message
+
+  num_fields = MARBL_saved_state%saved_state_cnt
+  allocate(local_saved_state(num_fields))
+
+  do m=1,num_fields
+    select case (MARBL_saved_state%state(m)%rank)
+      case (2)
+        allocate(local_saved_state(m)%field_2d(SZI_(G),SZJ_(G)))
+        local_saved_state(m)%field_2d = 0
+      case (3)
+        if (trim(MARBL_saved_state%state(m)%vertical_grid).eq."layer_avg") then
+          allocate(local_saved_state(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
+          local_saved_state(m)%field_3d = 0
+        else
+          write(log_message, "(3A, I0, A)") "'", trim(MARBL_saved_state%state(m)%vertical_grid), &
+                "' is an invalid vertical grid for saved state (ind = ", m, ")"
+          call MOM_error(FATAL, log_message)
+        end if
+      case DEFAULT
+        write(log_message, "(I0, A, I0, A)") MARBL_saved_state%state(m)%rank, &
+              " is an invalid rank for saved state (ind = ", m, ")"
+        call MOM_error(FATAL, log_message)
+    end select
+    local_saved_state(m)%short_name = trim(MARBL_saved_state%state(m)%short_name)
+    write(local_saved_state(m)%file_varname, "(2A)") "MARBL_", trim(local_saved_state(m)%short_name)
+    local_saved_state(m)%units = trim(MARBL_saved_state%state(m)%units)
+  end do
+
+end subroutine setup_saved_state
 
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
@@ -455,7 +514,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !     iii. surface flux saved state
       do m=1,size(marbl_instances%surface_flux_saved_state%state)
-        marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = 0
+        marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = CS%surface_flux_saved_state(m)%field_2d(i,j)
       end do
 
       ! (2) Compute surface fluxes in MARBL
@@ -472,6 +531,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       do m=1,size(marbl_instances%surface_flux_diags%diags)
         ! All diags are 2D coming from surface
         CS%surface_flux_diags(m)%field_2d(i,j) = real(marbl_instances%surface_flux_diags%diags(m)%field_2d(1))
+      end do
+      do m=1,size(marbl_instances%surface_flux_saved_state%state)
+        CS%surface_flux_saved_state(m)%field_2d(i,j) = marbl_instances%surface_flux_saved_state%state(m)%field_2d(1)
       end do
     end do
   end do
