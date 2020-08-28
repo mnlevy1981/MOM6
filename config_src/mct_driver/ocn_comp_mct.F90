@@ -847,6 +847,7 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
              IOB% calving (isc:iec,jsc:jec),         &
              IOB% runoff_hflx (isc:iec,jsc:jec),     &
              IOB% calving_hflx (isc:iec,jsc:jec),    &
+             IOB% ice_fraction (isc:iec,jsc:jec),    &
              IOB% mi (isc:iec,jsc:jec),              &
              IOB% p (isc:iec,jsc:jec))
 
@@ -872,6 +873,7 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
   IOB%calving          = 0.0
   IOB%runoff_hflx      = 0.0
   IOB%calving_hflx     = 0.0
+  IOB%ice_fraction     = 0.0
   IOB%mi               = 0.0
   IOB%p                = 0.0
 

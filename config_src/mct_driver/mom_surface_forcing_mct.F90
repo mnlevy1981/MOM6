@@ -177,6 +177,7 @@ type, public :: ice_ocean_boundary_type
                                                               !! ice-shelves, expressed as a coefficient
                                                               !! for divergence damping, as determined
                                                               !! outside of the ocean model in [m3/s]
+  real, pointer, dimension(:,:) :: ice_fraction      =>NULL() !< Fraction of ocn covered with ice
   integer :: xtype                                            !< The type of the exchange - REGRID, REDIST or DIRECT
   type(coupler_2d_bc_type)      :: fluxes                     !< A structure that may contain an array of
                                                               !! named fields used for passive tracer fluxes.
@@ -312,6 +313,8 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     enddo; enddo
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
+
+    call safe_alloc_ptr(fluxes%ice_fraction,isd,ied,jsd,jed)
 
   endif   ! endif for allocation and initialization
 
@@ -520,6 +523,10 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     fluxes%sw(i,j) = fluxes%sw_vis_dir(i,j) + fluxes%sw_vis_dif(i,j) + &
                      fluxes%sw_nir_dir(i,j) + fluxes%sw_nir_dif(i,j)
+
+    if (associated(IOB%ice_fraction)) then
+      fluxes%ice_fraction(i,j) = IOB%ice_fraction(i-i0,j-j0)
+    end if
 
   enddo; enddo
 

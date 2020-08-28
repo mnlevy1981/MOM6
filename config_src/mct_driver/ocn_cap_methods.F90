@@ -21,7 +21,7 @@ module ocn_cap_methods
 contains
 !=======================================================================
 
-!> Maps incomping ocean data to MOM6 data structures
+!> Maps incoming ocean data to MOM6 data structures
 subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit, Eclock, c1, c2, c3, c4)
   real(kind=8)                  , intent(in)    :: x2o(:,:)           !< incoming data
   type(cpl_indices_type)        , intent(in)    :: ind                !< Structure with MCT attribute vects and indices
@@ -82,6 +82,9 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit,
 
       ! ice runoff
       ice_ocean_boundary%rofi_flux(i,j) = x2o(ind%x2o_Foxx_rofi,k) * GRID%mask2dT(i,j)
+
+      ! ice fraction
+      ice_ocean_boundary%ice_fraction(i,j) = x2o(ind%x2o_Si_ifrac,k) * GRID%mask2dT(i,j)
 
       ! surface pressure
       ice_ocean_boundary%p(i,j) = x2o(ind%x2o_Sa_pslv,k) * GRID%mask2dT(i,j)
