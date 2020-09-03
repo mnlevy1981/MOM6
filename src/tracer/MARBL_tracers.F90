@@ -502,13 +502,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) marbl_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
       ! MARBL wants u10_sqr in (cm/s)^2
-      if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (100. / US%m_s_to_L_T)**2
+      if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (100. * US%L_t_to_m_s)**2
       ! ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! mom_surface_forcing_mct:699 -- fluxes%p_surf_full() is ice_ocean_boundary (with MOM unit conversions?)
       ! Is there a better way to convert from MOM unitless to atm (rather than Pa, which MOM prefers)?
       !    * Does MOM6 already have a conversion factor saved somewhere?
       !    * Should I save (1.0/101325.0) as a parameter in this module? (Or somewhere else?)
-      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) / (US%kg_m3_to_R * US%m_s_to_L_T**2 * 101325.0)
+      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * (US%R_to_kg_m3 * US%L_T_to_m_s**2 / 101325.0)
 
       ! These are okay, but need option to come in from coupler
       if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
