@@ -525,7 +525,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !     ii. tracers at surface
       do m=1,CS%ntr
-        ! note: in test 010, runs die in day 7 if trying to populate surface tracer values from CS%tr
         marbl_instances%tracers_at_surface(1,m) = CS%tr(i,j,1,m)
       end do
 
