@@ -169,6 +169,7 @@ type, public :: forcing
 
   ! forcing fields brought in for MARBL
   real, pointer, dimension(:,:) :: ice_fraction => NULL() !< Fraction of ocean cell under seaice [m2 m-2]
+  real, pointer, dimension(:,:) :: u10_sqr => NULL() !< 10m wind speed squared [L2 T-2 ~> m2 s-2]
 
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj = 0.     !< adjustment to restoring vprec to zero out global net [kg m-2 s-1]

@@ -86,6 +86,9 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit,
       ! ice fraction
       ice_ocean_boundary%ice_fraction(i,j) = x2o(ind%x2o_Si_ifrac,k) * GRID%mask2dT(i,j)
 
+      ! 10m wind
+      ice_ocean_boundary%u10_sqr(i,j) = x2o(ind%x2o_So_duu10n,k) * GRID%mask2dT(i,j)
+
       ! surface pressure
       ice_ocean_boundary%p(i,j) = x2o(ind%x2o_Sa_pslv,k) * GRID%mask2dT(i,j)
 

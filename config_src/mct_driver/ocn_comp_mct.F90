@@ -780,8 +780,6 @@ end subroutine ocean_model_init_sfc
 !! mi, mass of ice (kg/m2)
 !!
 !! Variables in the coupler that are **NOT** used in MOM6 (i.e., no corresponding field in fluxes):
-!! x2o_Si_ifrac, fractional ice wrt ocean
-!! x2o_So_duu10n, 10m wind speed squared (m^2/s^2)
 !! x2o_Sa_co2prog, bottom atm level prognostic CO2
 !! x2o_Sa_co2diag, bottom atm level diagnostic CO2
 !!
@@ -848,6 +846,7 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
              IOB% runoff_hflx (isc:iec,jsc:jec),     &
              IOB% calving_hflx (isc:iec,jsc:jec),    &
              IOB% ice_fraction (isc:iec,jsc:jec),    &
+             IOB% u10_sqr (isc:iec,jsc:jec),         &
              IOB% mi (isc:iec,jsc:jec),              &
              IOB% p (isc:iec,jsc:jec))
 
@@ -874,6 +873,7 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
   IOB%runoff_hflx      = 0.0
   IOB%calving_hflx     = 0.0
   IOB%ice_fraction     = 0.0
+  IOB%u10_sqr          = 0.0
   IOB%mi               = 0.0
   IOB%p                = 0.0
 

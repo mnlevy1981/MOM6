@@ -83,6 +83,10 @@ type, public :: MARBL_tracers_CS ; private
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 
+  !> Driver-specific parameters
+  character(len=35) :: marbl_settings_file
+  real :: atm_co2_const, atm_alt_co2_const
+
   !> Indices to the registered diagnostics match the indices used in MARBL
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:) !, interior_tendency_diags(:)
   type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:) !, interior_tendency_saved_state(:)
@@ -107,7 +111,6 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 #include "version_variable.h"
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
   character(len=256) :: log_message
-  character(len=35) :: marbl_settings_file
   character(len=256) :: marbl_in_line(1)
   integer :: m, nz, marbl_settings_in, read_error
   nz = GV%ke
@@ -115,20 +118,24 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 
   ! (1) Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "marbl_settings_file", marbl_settings_file, &
+  call get_param(param_file, mdl, "marbl_settings_file", CS%marbl_settings_file, &
                  "The name of a file from which to read the run-time "//&
                  "settings for MARBL.", default="marbl_in")
+  call get_param(param_file, mdl, "atm_co2_const", CS%atm_co2_const, &
+                 "Value to send to MARBL as xco2", default=284.317)
+  call get_param(param_file, mdl, "atm_alt_co2_const", CS%atm_alt_co2_const, &
+                 "Value to send to MARBL as xco2_alt_co2", default=284.317)
 
   ! (2) Read marbl settings file and call put_setting()
 
   ! (2a) only master task opens file
   if (is_root_PE()) &
      ! read the marbl_in into buffer
-     open(unit=marbl_settings_in, file=marbl_settings_file, iostat=read_error)
+     open(unit=marbl_settings_in, file=CS%marbl_settings_file, iostat=read_error)
   call broadcast(read_error, root_PE())
   if (read_error .ne. 0) then
     write(log_message, '(A, I0, 2A)') "IO ERROR ", read_error, &
-         "opening namelist file : ", trim(marbl_settings_file)
+         "opening namelist file : ", trim(CS%marbl_settings_file)
     call MOM_error(FATAL, log_message)
   end if
 
@@ -150,12 +157,12 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 
   ! (2c) we should always reach the EOF to capture the entire file...
   if (.not. is_iostat_end(read_error)) then
-     write(log_message, '(3A, I0)') "IO ERROR reading ", trim(marbl_settings_file), ": ", read_error
+     write(log_message, '(3A, I0)') "IO ERROR reading ", trim(CS%marbl_settings_file), ": ", read_error
      call MOM_error(FATAL, log_message)
   else
      if (is_root_PE()) then
        ! TODO: Better way to get message into log?
-       write(*, '(3A)') "Read '", trim(marbl_settings_file), "' until EOF."
+       write(*, '(3A)') "Read '", trim(CS%marbl_settings_file), "' until EOF."
      end if
   end if
   if (is_root_PE()) close(marbl_settings_in)
@@ -494,17 +501,22 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%sss_ind > 0) marbl_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
       if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) marbl_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
-      ! Is there a better way to convert?
+      ! MARBL wants u10_sqr in (cm/s)^2
+      if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (100. / US%m_s_to_L_T)**2
+      ! ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
+      ! mom_surface_forcing_mct:699 -- fluxes%p_surf_full() is ice_ocean_boundary (with MOM unit conversions?)
+      ! Is there a better way to convert from MOM unitless to atm (rather than Pa, which MOM prefers)?
       !    * Does MOM6 already have a conversion factor saved somewhere?
       !    * Should I save (1.0/101325.0) as a parameter in this module? (Or somewhere else?)
-      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf(i,j) / 101325.0 ! Pa -> atm
+      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) / (US%kg_m3_to_R * US%m_s_to_L_T**2 * 101325.0)
+
+      ! These are okay, but need option to come in from coupler
+      if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
+      if (CS%xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = CS%atm_alt_co2_const
 
       !        These fields are receiving physically-reasonable values
-      if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = 2.5e5 ! pop gets from coupler
       if (CS%dust_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = 0 ! pop gets from coupler
       if (CS%fe_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = 0 ! pop gets from coupler (but can read from file)
-      if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = 284.7 ! pop gets from coupler
-      if (CS%xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = 284.7 ! pop gets from coupler
 
       !        Read these from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c200827.nc
       ! MOM_read_data()
