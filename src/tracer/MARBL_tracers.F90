@@ -9,7 +9,7 @@ module MARBL_tracers
 #ifdef _USE_MARBL_TRACERS
 use MOM_coms,            only : root_PE, broadcast
 use MOM_diag_mediator,   only : diag_ctrl
-use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING
+use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
 use MOM_grid,            only : ocean_grid_type
@@ -48,13 +48,13 @@ public MARBL_tracer_stock, MARBL_tracers_end
 
 !> Temporary type for diagnostic variables coming from MARBL
 !! Allocate exactly one of field_[23]d
-type, private :: temp_MARBL_diag
+type :: temp_MARBL_diag
   integer :: id !< index into MOM diagnostic structure
   real, allocatable :: field_2d(:,:) !< memory for 2D field
   real, allocatable :: field_3d(:,:,:) !< memory for 3D field
 end type temp_MARBL_diag
 
-type, private :: saved_state_for_MARBL_type
+type :: saved_state_for_MARBL_type
   character(len=200) :: short_name !< name of variable being saved
   character(len=200) :: file_varname !< name of variable in restart file
   character(len=200) :: units !< variable units
@@ -63,7 +63,7 @@ type, private :: saved_state_for_MARBL_type
 end type saved_state_for_MARBL_type
 
 !> All calls to MARBL are done via the interface class
-type(MARBL_interface_class), private :: MARBL_instances
+type(MARBL_interface_class) :: MARBL_instances
 
 !> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
@@ -96,11 +96,11 @@ end type MARBL_tracers_CS
 
 !> If we can post data column by column, all we need are integer
 !! arrays for ids
-! integer, allocatable, private :: id_surface_flux_diags(:) !, id_interior_tendency_diags(:)
+! integer, allocatable :: id_surface_flux_diags(:) !, id_interior_tendency_diags(:)
 
 !> Module parameters
-  real, parameter :: cm_per_m = 100.
-  real, parameter :: atm_per_Pa = 1./101325.
+  real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
+  real, parameter :: atm_per_Pa = 1./101325.  !< convert from Pa -> atm
 
 contains
 
@@ -133,14 +133,14 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   ! (2) Read marbl settings file and call put_setting()
 
   ! (2a) only master task opens file
-  if (is_root_PE()) &
+  if (is_root_PE()) then
      ! read the marbl_in into buffer
      open(unit=marbl_settings_in, file=CS%marbl_settings_file, iostat=read_error)
-  call broadcast(read_error, root_PE())
-  if (read_error .ne. 0) then
-    write(log_message, '(A, I0, 2A)') "IO ERROR ", read_error, &
-         "opening namelist file : ", trim(CS%marbl_settings_file)
-    call MOM_error(FATAL, log_message)
+     if (read_error .ne. 0) then
+        write(log_message, '(A, I0, 2A)') "IO ERROR ", read_error, &
+              "opening namelist file : ", trim(CS%marbl_settings_file)
+        call MOM_error(FATAL, log_message)
+     end if
   end if
 
   ! (2b) master task reads file and broadcasts line-by-line
@@ -165,8 +165,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
      call MOM_error(FATAL, log_message)
   else
      if (is_root_PE()) then
-       ! TODO: Better way to get message into log?
-       write(*, '(3A)') "Read '", trim(CS%marbl_settings_file), "' until EOF."
+       write(log_message, '(3A)') "Read '", trim(CS%marbl_settings_file), "' until EOF."
+       call MOM_error(NOTE, log_message)
      end if
   end if
   if (is_root_PE()) close(marbl_settings_in)
@@ -373,6 +373,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
 end subroutine initialize_MARBL_tracers
 
+!> This subroutine is used to register tracer fields and subroutines
+!! to be used with MOM.
 subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
 
   type(marbl_diagnostics_type), intent(in)    :: MARBL_diags !< MARBL diagnostics from marbl_instances
@@ -380,7 +382,9 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
   type(diag_ctrl), target,      intent(in)    :: diag !< Structure used to regulate diagnostic output.
   !integer, allocatable,         intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index number
   type(ocean_grid_type),              intent(in) :: G    !< The ocean's grid structure
-  type(temp_marbl_diag), allocatable, intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index number and buffer space for collecting diags from all columns
+  type(temp_marbl_diag), allocatable, intent(inout) :: id_diags(:) !< allocatable array storing diagnostic index
+                                                                   !! number and buffer space for collecting diags
+                                                                   !! from all columns
 
   integer :: m, diag_size
 
@@ -396,7 +400,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
       allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)))
-      id_diags(m)%field_2d = 0.0
+      id_diags(m)%field_2d(:,:) = 0.
     else ! 3D field
       id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
@@ -405,12 +409,13 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
       allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
-      id_diags(m)%field_3d = 0.0
+      id_diags(m)%field_3d(:,:,:) = 0.
     end if
   end do
 
 end subroutine register_MARBL_diags
 
+!> This subroutine allocates memory for saved state fields and registers them in the restart files
 subroutine setup_saved_state(MARBL_saved_state, G, local_saved_state)
 
   type(marbl_saved_state_type),                  intent(in)    :: MARBL_saved_state !< MARBL saved state from marbl_instances
@@ -427,11 +432,11 @@ subroutine setup_saved_state(MARBL_saved_state, G, local_saved_state)
     select case (MARBL_saved_state%state(m)%rank)
       case (2)
         allocate(local_saved_state(m)%field_2d(SZI_(G),SZJ_(G)))
-        local_saved_state(m)%field_2d = 0
+        local_saved_state(m)%field_2d(:,:) = 0.
       case (3)
         if (trim(MARBL_saved_state%state(m)%vertical_grid).eq."layer_avg") then
           allocate(local_saved_state(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
-          local_saved_state(m)%field_3d = 0
+          local_saved_state(m)%field_3d(:,:,:) = 0.
         else
           write(log_message, "(3A, I0, A)") "'", trim(MARBL_saved_state%state(m)%vertical_grid), &
                 "' is an invalid vertical grid for saved state (ind = ", m, ")"
@@ -509,7 +514,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%u10_sqr_ind > 0) marbl_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (US%L_t_to_m_s * cm_per_m)**2
       ! mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
-      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * US%R_to_kg_m3 * US%L_T_to_m_s**2 * atm_per_Pa
+      if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
+                                                                                                    ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * atm_per_Pa)
 
       ! These are okay, but need option to come in from coupler
       if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
@@ -679,7 +685,7 @@ subroutine MARBL_tracers_end(CS)
   endif
 end subroutine MARBL_tracers_end
 
-!> This subroutine writes the contents of the MARBL log to stdout.
+!> This subroutine writes the contents of the MARBL log using MOM_error(NOTE, ...).
 !! TODO: some log messages come from a specific grid point, and this routine
 !!       needs to include the location in the preamble
 subroutine print_marbl_log(log_to_print)
@@ -687,9 +693,6 @@ subroutine print_marbl_log(log_to_print)
   use marbl_logging, only : marbl_status_log_entry_type
   use marbl_logging, only : marbl_log_type
   use MOM_coms,      only : PE_here
-  use mpp_mod,       only : stdout ! Could also use MOM_error_handler but
-                                   ! writing to stdout doesn't imply error
-                                   ! in this code
 
   class(marbl_log_type), intent(in) :: log_to_print
 
@@ -706,16 +709,17 @@ subroutine print_marbl_log(log_to_print)
     if ((.not. tmp%lonly_master_writes) .or. is_root_PE()) then
       ! master task does not need prefix
       if (.not. is_root_PE()) then
-        write(stdout(), "(A,1X,A)") trim(message_prefix), trim(tmp%LogMessage)
+        write(log_message, "(A,1X,A)") trim(message_prefix), trim(tmp%LogMessage)
       else
-        write(stdout(), "(A)") trim(tmp%LogMessage)
+        write(log_message, "(A)") trim(tmp%LogMessage)
       end if     ! print message prefix?
+      call MOM_error(NOTE, log_message)
     end if       ! write the message?
     tmp => tmp%next
   end do
 
   if (log_to_print%labort_marbl) then
-    write(stdout(), "(A)") 'ERROR reported from MARBL library'
+    call MOM_error(NOTE, 'ERROR reported from MARBL library')
     call MOM_error(FATAL, 'Stopping in ' // subname)
   end if
 
