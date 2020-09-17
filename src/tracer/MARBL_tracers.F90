@@ -16,7 +16,7 @@ use MOM_grid,            only : ocean_grid_type
 use MOM_hor_index,       only : hor_index_type
 use MOM_io,              only : file_exists, read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
-use MOM_restart,         only : query_initialized, MOM_restart_CS
+use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type
@@ -58,8 +58,8 @@ type :: saved_state_for_MARBL_type
   character(len=200) :: short_name !< name of variable being saved
   character(len=200) :: file_varname !< name of variable in restart file
   character(len=200) :: units !< variable units
-  real, allocatable :: field_2d(:,:) !< memory for 2D field
-  real, allocatable :: field_3d(:,:,:) !< memory for 3D field
+  real, pointer :: field_2d(:,:) !< memory for 2D field
+  real, pointer :: field_3d(:,:,:) !< memory for 3D field
 end type saved_state_for_MARBL_type
 
 !> All calls to MARBL are done via the interface class
@@ -351,11 +351,11 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   ! call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
 
   ! Set up memory for saved state
-  call setup_saved_state(marbl_instances%surface_flux_saved_state, G, CS%surface_flux_saved_state)
+  call setup_saved_state(marbl_instances%surface_flux_saved_state, G, CS%restart_CSp, CS%surface_flux_saved_state)
 !  call setup_saved_state(marbl_instances%interior_tendency_saved_state, G, CS%interior_tendency_saved_state)
   ! TODO: if restarting, get value from restart instead of setting to 0!
   do m=1, size(CS%surface_flux_saved_state)
-    if (allocated(CS%surface_flux_saved_state(m)%field_2d)) then
+    if (associated(CS%surface_flux_saved_state(m)%field_2d)) then
       CS%surface_flux_saved_state(m)%field_2d = 0
     else
       CS%surface_flux_saved_state(m)%field_3d = 0
@@ -416,27 +416,31 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
 end subroutine register_MARBL_diags
 
 !> This subroutine allocates memory for saved state fields and registers them in the restart files
-subroutine setup_saved_state(MARBL_saved_state, G, local_saved_state)
+subroutine setup_saved_state(MARBL_saved_state, G, restart_CS, local_saved_state)
 
   type(marbl_saved_state_type),                  intent(in)    :: MARBL_saved_state !< MARBL saved state from marbl_instances
   type(ocean_grid_type),                         intent(in)    :: G    !< The ocean's grid structure
+  type(MOM_restart_CS), pointer,                 intent(in)    :: restart_CS !< control structure to add saved state to restarts
   type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array storing saved state locally
 
   integer :: num_fields, m
-  character(len=200) :: log_message
+  character(len=200) :: log_message, varname
 
   num_fields = MARBL_saved_state%saved_state_cnt
   allocate(local_saved_state(num_fields))
 
   do m=1,num_fields
+    write(varname, "(2A)") "MARBL_", trim(MARBL_saved_state%state(m)%short_name)
     select case (MARBL_saved_state%state(m)%rank)
       case (2)
         allocate(local_saved_state(m)%field_2d(SZI_(G),SZJ_(G)))
         local_saved_state(m)%field_2d(:,:) = 0.
+        call register_restart_field(local_saved_state(m)%field_2d, varname, .false., restart_CS)
       case (3)
         if (trim(MARBL_saved_state%state(m)%vertical_grid).eq."layer_avg") then
           allocate(local_saved_state(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
           local_saved_state(m)%field_3d(:,:,:) = 0.
+          call register_restart_field(local_saved_state(m)%field_3d, varname, .false., restart_CS)
         else
           write(log_message, "(3A, I0, A)") "'", trim(MARBL_saved_state%state(m)%vertical_grid), &
                 "' is an invalid vertical grid for saved state (ind = ", m, ")"
