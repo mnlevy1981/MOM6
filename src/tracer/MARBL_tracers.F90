@@ -697,7 +697,7 @@ subroutine print_marbl_log(log_to_print)
   class(marbl_log_type), intent(in) :: log_to_print
 
   character(len=*), parameter :: subname = 'ecosys_driver:print_marbl_log'
-  character(len=256)          :: message_prefix, message_location
+  character(len=256)          :: message_prefix, message_location, log_message
   type(marbl_status_log_entry_type), pointer :: tmp
 
   write(message_prefix, "(A,I0,A)") '(Task ', PE_here(), ')'
