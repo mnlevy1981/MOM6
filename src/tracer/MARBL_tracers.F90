@@ -87,9 +87,15 @@ type, public :: MARBL_tracers_CS ; private
   character(len=35) :: marbl_settings_file
   real :: atm_co2_const, atm_alt_co2_const
 
-  !> Indices to the registered diagnostics match the indices used in MARBL
+  !> Indices to the registered diagnostics and saved state match the indices used in MARBL
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:) !, interior_tendency_diags(:)
   type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:) !, interior_tendency_saved_state(:)
+
+  !> Surface fluxes returned from MARBL and passed to tracer_vertdiff
+  !! tracer_vertdiff expects units concentrations times meters per second,
+  !! but MARBL will return in cgs so we need to remember to convert
+  real, allocatable :: STF(:,:,:) ! i, j, tracer
+
   integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
   integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
 end type MARBL_tracers_CS
@@ -100,6 +106,7 @@ end type MARBL_tracers_CS
 
 !> Module parameters
   real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
+  real, parameter :: m_per_cm = 0.01  !< convert from cm -> m
   real, parameter :: atm_per_Pa = 1./101325.  !< convert from Pa -> atm
 
 contains
@@ -346,6 +353,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   CS%diag => diag
 
+  ! Allocate memory for surface tracer fluxes
+  allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr))
+  CS%STF(:,:,:) = 0.
+
   ! Register diagnostics (surface flux first, then interior tendency)
   call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
   ! call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
@@ -353,23 +364,17 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   ! Set up memory for saved state
   call setup_saved_state(marbl_instances%surface_flux_saved_state, G, CS%restart_CSp, CS%surface_flux_saved_state)
 !  call setup_saved_state(marbl_instances%interior_tendency_saved_state, G, CS%interior_tendency_saved_state)
-  ! TODO: if restarting, get value from restart instead of setting to 0!
-  do m=1, size(CS%surface_flux_saved_state)
-    if (associated(CS%surface_flux_saved_state(m)%field_2d)) then
-      CS%surface_flux_saved_state(m)%field_2d = 0
-    else
-      CS%surface_flux_saved_state(m)%field_3d = 0
-    end if
-  end do
 
-  ! Establish location of source
-  do m= 1, CS%ntr
-    write(name(:),'(A)') trim(marbl_instances%tracer_metadata(m)%short_name)
-    OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, US, -1e34)
-    if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
-                               "Unable to read "//trim(name)//" from "//&
-                               trim(CS%IC_file)//".")
-  end do
+  ! Initialize tracers from file (unless they were initialized by restart file)
+  if (.not.restart) then
+    do m= 1, CS%ntr
+      write(name(:),'(A)') trim(marbl_instances%tracer_metadata(m)%short_name)
+      OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, US, -1e34)
+      if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
+                                  "Unable to read "//trim(name)//" from "//&
+                                  trim(CS%IC_file)//".")
+    end do
+  end if
 
 end subroutine initialize_MARBL_tracers
 
@@ -554,14 +559,18 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! (3) Copy output that MOM6 needs to hold on to
       !     i. saved state
+      do m=1,size(marbl_instances%surface_flux_saved_state%state)
+        CS%surface_flux_saved_state(m)%field_2d(i,j) = marbl_instances%surface_flux_saved_state%state(m)%field_2d(1)
+      end do
+
       !     ii. diagnostics
       do m=1,size(marbl_instances%surface_flux_diags%diags)
         ! All diags are 2D coming from surface
         CS%surface_flux_diags(m)%field_2d(i,j) = real(marbl_instances%surface_flux_diags%diags(m)%field_2d(1))
       end do
-      do m=1,size(marbl_instances%surface_flux_saved_state%state)
-        CS%surface_flux_saved_state(m)%field_2d(i,j) = marbl_instances%surface_flux_saved_state%state(m)%field_2d(1)
-      end do
+
+      !     iii. Surface tracer flux
+      CS%STF(i,j,:) = marbl_instances%surface_fluxes(1,:) * m_per_cm
     end do
   end do
   ! All diags are 2D coming from surface
@@ -582,11 +591,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       enddo ; enddo ; enddo
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
           evap_CFL_limit, minimum_forcing_depth)
-      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
+      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
     enddo
   else
     do m=1,CS%ntr
-      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV)
+      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
     enddo
   endif
 
@@ -700,7 +709,7 @@ subroutine print_marbl_log(log_to_print)
 
   class(marbl_log_type), intent(in) :: log_to_print
 
-  character(len=*), parameter :: subname = 'ecosys_driver:print_marbl_log'
+  character(len=*), parameter :: subname = 'MARBL_tracers:print_marbl_log'
   character(len=256)          :: message_prefix, message_location, log_message
   type(marbl_status_log_entry_type), pointer :: tmp
 
