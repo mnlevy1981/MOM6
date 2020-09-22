@@ -315,6 +315,10 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
           flux_type=' ', implementation=' ', caller="register_MARBL_tracers")
   enddo
 
+  ! Set up memory for saved state
+  call setup_saved_state(marbl_instances%surface_flux_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%surface_flux_saved_state)
+!  call setup_saved_state(marbl_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%interior_tendency_saved_state)
+
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
   register_MARBL_tracers = .true.
@@ -360,10 +364,6 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   ! Register diagnostics (surface flux first, then interior tendency)
   call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
   ! call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
-
-  ! Set up memory for saved state
-  call setup_saved_state(marbl_instances%surface_flux_saved_state, G, CS%restart_CSp, CS%tracers_may_reinit, CS%surface_flux_saved_state)
-!  call setup_saved_state(marbl_instances%interior_tendency_saved_state, G, CS%restart_CSp, CS%tracers_may_reinit, CS%interior_tendency_saved_state)
 
   ! Initialize tracers from file (unless they were initialized by restart file)
   if (.not.restart) then
@@ -421,18 +421,17 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
 end subroutine register_MARBL_diags
 
 !> This subroutine allocates memory for saved state fields and registers them in the restart files
-subroutine setup_saved_state(MARBL_saved_state, G, restart_CS, tracers_may_reinit, local_saved_state)
+subroutine setup_saved_state(MARBL_saved_state, HI, GV, restart_CS, tracers_may_reinit, local_saved_state)
 
   type(marbl_saved_state_type),                  intent(in)    :: MARBL_saved_state !< MARBL saved state from marbl_instances
-  type(ocean_grid_type),                         intent(in)    :: G    !< The ocean's grid structure
+  type(hor_index_type),                          intent(in)    :: HI   !< A horizontal index type structure.
+  type(verticalGrid_type),                       intent(in)    :: GV   !< The ocean's vertical grid structure
   type(MOM_restart_CS), pointer,                 intent(in)    :: restart_CS !< control structure to add saved state to restarts
   logical,                                       intent(in)    :: tracers_may_reinit  !< used to determine mandatory flag in restart
   type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array storing saved state locally
 
   integer :: num_fields, m
   character(len=200) :: log_message, varname
-  real, pointer :: ss2d(:,:) => NULL()
-  real, pointer :: ss3d(:,:,:) => NULL()
 
   num_fields = MARBL_saved_state%saved_state_cnt
   allocate(local_saved_state(num_fields))
@@ -441,23 +440,14 @@ subroutine setup_saved_state(MARBL_saved_state, G, restart_CS, tracers_may_reini
     write(varname, "(2A)") "MARBL_", trim(MARBL_saved_state%state(m)%short_name)
     select case (MARBL_saved_state%state(m)%rank)
       case (2)
-        allocate(local_saved_state(m)%field_2d(SZI_(G),SZJ_(G)))
+        allocate(local_saved_state(m)%field_2d(SZI_(HI),SZJ_(HI)))
         local_saved_state(m)%field_2d(:,:) = 0.
-        ss2d => local_saved_state(m)%field_2d
-        call register_restart_field(ss2d, varname, .not.tracers_may_reinit, restart_CS)
-        if (all(local_saved_state(m)%field_2d(:,:) == 0.)) then
-          write(log_message, "(2A)") "Following saved state initialized to 0: ", trim(varname)
-          call MOM_error(NOTE, log_message)
-        else
-          write(log_message, "(2A)") "Following saved state NOT initialized to 0: ", trim(varname)
-          call MOM_error(NOTE, log_message)
-        end if
+        call register_restart_field(local_saved_state(m)%field_2d, varname, .not.tracers_may_reinit, restart_CS)
       case (3)
         if (trim(MARBL_saved_state%state(m)%vertical_grid).eq."layer_avg") then
-          allocate(local_saved_state(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
+          allocate(local_saved_state(m)%field_3d(SZI_(HI),SZJ_(HI), SZK_(GV)))
           local_saved_state(m)%field_3d(:,:,:) = 0.
-          ss3d => local_saved_state(m)%field_3d
-          call register_restart_field(ss3d, varname, .not.tracers_may_reinit, restart_CS)
+          call register_restart_field(local_saved_state(m)%field_3d, varname, .not.tracers_may_reinit, restart_CS)
         else
           write(log_message, "(3A, I0, A)") "'", trim(MARBL_saved_state%state(m)%vertical_grid), &
                 "' is an invalid vertical grid for saved state (ind = ", m, ")"
