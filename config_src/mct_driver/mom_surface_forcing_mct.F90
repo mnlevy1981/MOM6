@@ -114,6 +114,17 @@ type, public :: surface_forcing_CS ; private
   logical :: mask_srestore_under_ice        !< If true, use an ice mask defined by frazil
 
   real    :: ice_salt_concentration         !< salt concentration for sea ice [kg/kg]
+
+  real    :: dust_ratio_to_fe_bioavail_frac !< TODO: Add description
+  real    :: fe_bioavail_frac_offset        !< TODO: Add description
+  real    :: atm_fe_to_bc_ratio             !< TODO: Add description
+  real    :: atm_bc_fe_bioavail_frac        !< TODO: Add description
+  real    :: seaice_fe_to_bc_ratio          !< TODO: Add description
+  real    :: seaice_bc_fe_bioavail_frac     !< TODO: Add description
+  real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
+  real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
+  real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
+
   logical :: mask_srestore_marginal_seas    !< if true, then mask SSS restoring in marginal seas
   real    :: max_delta_srestore             !< maximum delta salinity used for restoring
   real    :: max_delta_trestore             !< maximum delta sst used for restoring
@@ -154,6 +165,11 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: t_flux            =>NULL() !< sensible heat flux [W/m2]
   real, pointer, dimension(:,:) :: q_flux            =>NULL() !< specific humidity flux [kg/m2/s]
   real, pointer, dimension(:,:) :: salt_flux         =>NULL() !< salt flux [kg/m2/s]
+  real, pointer, dimension(:,:) :: atm_fine_dust_flux=>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_coarse_dust_flux=>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_dust_flux  =>NULL() !< Dust flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_bc_flux       =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_bc_flux    =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_melt_heat  =>NULL() !< sea ice and snow melt heat flux [W/m2]
   real, pointer, dimension(:,:) :: seaice_melt       =>NULL() !< water flux due to sea ice and snow melting [kg/m2/s]
   real, pointer, dimension(:,:) :: lw_flux           =>NULL() !< long wave radiation [W/m2]
@@ -315,6 +331,8 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
 
+    call safe_alloc_ptr(fluxes%dust_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%iron_flux,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%ice_fraction,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%u10_sqr,isd,ied,jsd,jed)
 
@@ -525,6 +543,29 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     fluxes%sw(i,j) = fluxes%sw_vis_dir(i,j) + fluxes%sw_vis_dif(i,j) + &
                      fluxes%sw_nir_dir(i,j) + fluxes%sw_nir_dif(i,j)
+
+    if (associated(IOB%atm_fine_dust_flux)) then
+      fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+                                  IOB%atm_coarse_dust_flux(i-i0,j-j0) + IOB%seaice_dust_flux(i-i0,j-j0))
+    end if
+
+    if (associated(IOB%atm_bc_flux)) then
+      ! Contribution of atmospheric dust to iron flux
+      fluxes%iron_flux(i,j) = (CS%fe_bioavail_frac_offset * &
+                               (CS%iron_frac_in_atm_fine_dust * IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+                                CS%iron_frac_in_atm_coarse_dust * IOB%atm_coarse_dust_flux(i-i0,j-j0)))
+      ! Contribution of atmospheric black carbon to iron flux
+      fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
+                               (CS%atm_fe_to_bc_ratio * IOB%atm_bc_flux(i-i0,j-j0)))
+      ! Contribution of seaice dust to iron flux
+      fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%fe_bioavail_frac_offset * &
+                               (CS%iron_frac_in_seaice_dust * IOB%seaice_dust_flux(i-i0,j-j0)))
+      ! Contribution of seaice black carbon to iron flux
+      fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
+                               (CS%seaice_fe_to_bc_ratio * IOB%seaice_bc_flux(i-i0,j-j0)))
+      ! Unit conversion
+      fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * fluxes%iron_flux(i,j)
+    end if
 
     if (associated(IOB%ice_fraction)) then
       fluxes%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
@@ -1124,6 +1165,25 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                  "correction for the atmospheric (and sea-ice) pressure "//&
                  "limited by max_p_surf instead of the full atmospheric "//&
                  "pressure.", default=.true.)
+
+  call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
+                 "TODO: Add description", default=1./170.)
+  call get_param(param_file, mdl, "FE_BIOAVAIL_FRAC_OFFSET", CS%fe_bioavail_frac_offset, &
+                 "TODO: Add description", default=0.01)
+  call get_param(param_file, mdl, "ATM_FE_TO_BC_RATIO", CS%atm_fe_to_bc_ratio, &
+                 "TODO: Add description", default=1.)
+  call get_param(param_file, mdl, "ATM_BC_FE_BIOAVAIL_FRAC", CS%atm_bc_fe_bioavail_frac, &
+                 "TODO: Add description", default=0.06)
+  call get_param(param_file, mdl, "SEAICE_FE_TO_BC_RATIO", CS%seaice_fe_to_bc_ratio, &
+                 "TODO: Add description", default=1.)
+  call get_param(param_file, mdl, "SEAICE_BC_FE_BIOAVAIL_FRAC", CS%seaice_bc_fe_bioavail_frac, &
+                 "TODO: Add description", default=0.06)
+  call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_FINE_DUST", CS%iron_frac_in_atm_fine_dust, &
+                 "Fraction of fine dust from the atmosphere that is iron", default=0.035)
+  call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_COARSE_DUST", CS%iron_frac_in_atm_coarse_dust, &
+                 "Fraction of coarse dust from the atmosphere that is iron", default=0.035)
+  call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
+                 "Fraction of dust from sea ice that is iron", default=0.035)
 
   call get_param(param_file, mdl, "WIND_STAGGER", stagger, &
                  "A case-insensitive character string to indicate the "//&

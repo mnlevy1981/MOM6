@@ -106,6 +106,7 @@ end type MARBL_tracers_CS
 
 !> Module parameters
   real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
+  real, parameter :: g_per_kg = 1000. !< convert from kg -> g (MARBL is cgs)
   real, parameter :: m_per_cm = 0.01  !< convert from cm -> m
   real, parameter :: atm_per_Pa = 1./101325.  !< convert from Pa -> atm
 
@@ -503,8 +504,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real :: year            ! The time in years.
   integer :: secs, days   ! Integer components of the time type.
   integer :: i, j, k, is, ie, js, je, nz, m
+  real :: kg_m2_s_conversion
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+  kg_m2_s_conversion = US%RZ_T_to_kg_m2s
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -532,9 +535,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
       if (CS%xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = CS%atm_alt_co2_const
 
-      !        These fields are receiving physically-reasonable values
-      if (CS%dust_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = 0 ! pop gets from coupler
-      if (CS%fe_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = 0 ! pop gets from coupler (but can read from file)
+      ! These are okay, but need option to read in from file
+      if (CS%dust_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%fe_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
       !        Read these from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c200827.nc
       ! MOM_read_data()

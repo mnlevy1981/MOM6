@@ -860,6 +860,11 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
              IOB% u_flux (isc:iec,jsc:jec),          &
              IOB% v_flux (isc:iec,jsc:jec),          &
              IOB% t_flux (isc:iec,jsc:jec),          &
+             IOB% atm_fine_dust_flux (isc:iec,jsc:jec),&
+             IOB% atm_coarse_dust_flux (isc:iec,jsc:jec),&
+             IOB% seaice_dust_flux (isc:iec,jsc:jec),&
+             IOB% atm_bc_flux (isc:iec,jsc:jec),     &
+             IOB% seaice_bc_flux (isc:iec,jsc:jec),  &
              IOB% seaice_melt_heat (isc:iec,jsc:jec),&
              IOB% seaice_melt (isc:iec,jsc:jec),     &
              IOB% q_flux (isc:iec,jsc:jec),          &
@@ -887,6 +892,11 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
   IOB%u_flux           = 0.0
   IOB%v_flux           = 0.0
   IOB%t_flux           = 0.0
+  IOB%atm_fine_dust_flux   = 0.0
+  IOB%atm_coarse_dust_flux = 0.0
+  IOB%seaice_dust_flux = 0.0
+  IOB%atm_bc_flux      = 0.0
+  IOB%seaice_bc_flux   = 0.0
   IOB%seaice_melt_heat = 0.0
   IOB%seaice_melt      = 0.0
   IOB%q_flux           = 0.0

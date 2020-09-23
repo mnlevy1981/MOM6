@@ -168,6 +168,8 @@ type, public :: forcing
                                  !! or freezing (negative) [R Z T-1 ~> kg m-2 s-1]
 
   ! forcing fields brought in for MARBL
+  real, pointer, dimension(:,:) :: dust_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
+  real, pointer, dimension(:,:) :: iron_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
   real, pointer, dimension(:,:) :: ice_fraction => NULL() !< Fraction of ocean cell under seaice [m2 m-2]
   real, pointer, dimension(:,:) :: u10_sqr => NULL() !< 10m wind speed squared [L2 T-2 ~> m2 s-2]
 

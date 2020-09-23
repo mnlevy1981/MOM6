@@ -56,6 +56,18 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit,
       ice_ocean_boundary%v_flux(i,j) = GRID%cos_rot(i,j) * x2o(ind%x2o_Foxx_tauy,k) &
                                       + GRID%sin_rot(i,j) * x2o(ind%x2o_Foxx_taux,k)
 
+      ! Dust and iron fluxes (Do I need the GRID%mask2dT terms? I have them in convert_IOB_to_fluxes())
+      ice_ocean_boundary%atm_fine_dust_flux(i,j) = (x2o(ind%x2o_Faxa_dstwet1,k) + x2o(ind%x2o_Faxa_dstdry1,k)) * &
+                                                   GRID%mask2dT(i,j)
+      ice_ocean_boundary%atm_coarse_dust_flux(i,j) = (x2o(ind%x2o_Faxa_dstwet2,k) + x2o(ind%x2o_Faxa_dstwet3,k) + &
+                                                      x2o(ind%x2o_Faxa_dstwet4,k) + x2o(ind%x2o_Faxa_dstdry2,k) + &
+                                                      x2o(ind%x2o_Faxa_dstdry3,k) + x2o(ind%x2o_Faxa_dstdry4,k)) * &
+                                                      GRID%mask2dT(i,j)
+      ice_ocean_boundary%seaice_dust_flux(i,j) = x2o(ind%x2o_Fioi_flxdst,k) * GRID%mask2dT(i,j)
+      ice_ocean_boundary%atm_bc_flux(i,j) = (x2o(ind%x2o_Faxa_bcphidry,k) + x2o(ind%x2o_Faxa_bcphodry,k) + x2o(ind%x2o_Faxa_bcphiwet,k)) * &
+                                            GRID%mask2dT(i,j)
+      ice_ocean_boundary%seaice_bc_flux(i,j) = (x2o(ind%x2o_Fioi_bcpho,k) + x2o(ind%x2o_Fioi_bcphi,k)) * GRID%mask2dT(i,j)
+
       ! liquid precipitation (rain)
       ice_ocean_boundary%lprec(i,j) = x2o(ind%x2o_Faxa_rain,k)
 
