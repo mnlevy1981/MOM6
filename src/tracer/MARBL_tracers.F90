@@ -86,6 +86,7 @@ type, public :: MARBL_tracers_CS ; private
   !> Driver-specific parameters
   character(len=35) :: marbl_settings_file
   real :: atm_co2_const, atm_alt_co2_const
+  real :: ndep_scale_factor
 
   !> Indices to the registered diagnostics and saved state match the indices used in MARBL
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:) !, interior_tendency_diags(:)
@@ -130,13 +131,15 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 
   ! (1) Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "marbl_settings_file", CS%marbl_settings_file, &
+  call get_param(param_file, mdl, "MARBL_SETTINGS_FILE", CS%marbl_settings_file, &
                  "The name of a file from which to read the run-time "//&
                  "settings for MARBL.", default="marbl_in")
-  call get_param(param_file, mdl, "atm_co2_const", CS%atm_co2_const, &
+  call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
                  "Value to send to MARBL as xco2", default=284.317)
-  call get_param(param_file, mdl, "atm_alt_co2_const", CS%atm_alt_co2_const, &
+  call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
                  "Value to send to MARBL as xco2_alt_co2", default=284.317)
+  call get_param(param_file, mdl, "NDEP_SCALE_FACTOR", CS%ndep_scale_factor, &
+                 "Scale factor applied to nitrogen deposition terms", default=7.1429e6)
 
   ! (2) Read marbl settings file and call put_setting()
 
@@ -517,6 +520,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   !        I was just thinking going column-by-column at first might be easier
   do i=is,ie
     do j=js,je
+      ! (0) only want ocean points in this loop
+      if (G%mask2dT(i,j) == 0) cycle
+
       ! (1) Load proper column data
       !     i. surface flux forcings
 
@@ -541,8 +547,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !        Read these from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c200827.nc
       ! MOM_read_data()
-      if (CS%nox_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = 0 ! pop gets from file
-      if (CS%nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = 0 ! pop gets from file
+      if (CS%nox_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * (kg_m2_s_conversion * CS%ndep_scale_factor)
+      if (CS%nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * (kg_m2_s_conversion * CS%ndep_scale_factor)
 
       !     ii. tracers at surface
       do m=1,CS%ntr
@@ -717,6 +723,7 @@ subroutine print_marbl_log(log_to_print)
   character(len=*), parameter :: subname = 'MARBL_tracers:print_marbl_log'
   character(len=256)          :: message_prefix, message_location, log_message
   type(marbl_status_log_entry_type), pointer :: tmp
+  integer :: msg_lev
 
   write(message_prefix, "(A,I0,A)") '(Task ', PE_here(), ')'
 
@@ -728,16 +735,18 @@ subroutine print_marbl_log(log_to_print)
       ! master task does not need prefix
       if (.not. is_root_PE()) then
         write(log_message, "(A,1X,A)") trim(message_prefix), trim(tmp%LogMessage)
+        msg_lev = WARNING
       else
         write(log_message, "(A)") trim(tmp%LogMessage)
+        msg_lev = NOTE
       end if     ! print message prefix?
-      call MOM_error(NOTE, log_message)
+      call MOM_error(msg_lev, log_message, all_print=.true.)
     end if       ! write the message?
     tmp => tmp%next
   end do
 
   if (log_to_print%labort_marbl) then
-    call MOM_error(NOTE, 'ERROR reported from MARBL library')
+    call MOM_error(WARNING, 'ERROR reported from MARBL library', all_print=.true.)
     call MOM_error(FATAL, 'Stopping in ' // subname)
   end if
 

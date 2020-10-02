@@ -115,6 +115,9 @@ type, public :: surface_forcing_CS ; private
 
   real    :: ice_salt_concentration         !< salt concentration for sea ice [kg/kg]
 
+  logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
+                                            !! This is temporary, we will always read NDEP
+  character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
   real    :: dust_ratio_to_fe_bioavail_frac !< TODO: Add description
   real    :: fe_bioavail_frac_offset        !< TODO: Add description
   real    :: atm_fe_to_bc_ratio             !< TODO: Add description
@@ -331,6 +334,8 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
 
+    call safe_alloc_ptr(fluxes%noy_dep,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%nhx_dep,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%dust_flux,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%iron_flux,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%ice_fraction,isd,ied,jsd,jed)
@@ -577,7 +582,23 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   enddo; enddo
 
-  ! applied surface pressure from atmosphere and cryosphere
+  ! TODO: we only want to call read_data if MARBL is active
+  if (CS%read_ndep) then
+    call MOM_read_data(CS%ndep_file, 'NOy_deposition', fluxes%noy_dep, G%domain, timelevel=1, &
+                       scale=US%kg_m2s_to_RZ_T) ! units in file should be kg m-2 s-1
+    call MOM_read_data(CS%ndep_file, 'NHx_deposition', fluxes%nhx_dep, G%domain, timelevel=1, &
+                       scale=US%kg_m2s_to_RZ_T) ! units in file should be kg m-2 s-1
+    do j=js,je ; do i=is,ie
+      fluxes%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%noy_dep(i,j)
+      fluxes%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%nhx_dep(i,j)
+    enddo; enddo
+  else
+    ! This is temporary while I test the file we created
+    fluxes%noy_dep(:,:) = 0.
+    fluxes%nhx_dep(:,:) = 0.
+  endif
+
+! applied surface pressure from atmosphere and cryosphere
   if (associated(IOB%p)) then
      if (CS%max_p_surf >= 0.0) then
         do j=js,je ; do i=is,ie
@@ -1369,6 +1390,19 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   if (CS%allow_flux_adjustments) then
     call data_override_init(Ocean_domain_in=G%Domain%mpp_domain)
   endif
+
+  ! Set up MARBL forcing
+  call get_param(param_file, mdl, "READ_NDEP", CS%read_ndep, &
+                 "If true, use nitrogen deposition supplied from "//&
+                 "an input file", default=.false.)
+  if (CS%read_ndep) then
+    ! TODO: we only want to read this variable in when running with MARBL
+    call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
+                   "The file in which the nitrogen deposition is found in "//&
+                   "variables NOy_deposition and NHx_deposition.")
+    ! CS%ndep_file = trim(CS%inputdir) // trim(CS%ndep_file)
+  end if
+
 
   if (present(restore_salt)) then ; if (restore_salt) then
     salt_file = trim(CS%inputdir) // trim(CS%salt_restore_file)
