@@ -90,7 +90,7 @@ type, public :: MARBL_tracers_CS ; private
 
   !> Indices to the registered diagnostics and saved state match the indices used in MARBL
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:) !, interior_tendency_diags(:)
-  type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:) !, interior_tendency_saved_state(:)
+  type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:), interior_tendency_saved_state(:)
 
   !> Surface fluxes returned from MARBL and passed to tracer_vertdiff
   !! tracer_vertdiff expects units concentrations times meters per second,
@@ -139,7 +139,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
                  "Value to send to MARBL as xco2_alt_co2", default=284.317)
   call get_param(param_file, mdl, "NDEP_SCALE_FACTOR", CS%ndep_scale_factor, &
-                 "Scale factor applied to nitrogen deposition terms", default=7.1429e6)
+                 "Scale factor applied to nitrogen deposition terms", default=1e5)
 
   ! (2) Read marbl settings file and call put_setting()
 
@@ -321,7 +321,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 
   ! Set up memory for saved state
   call setup_saved_state(marbl_instances%surface_flux_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%surface_flux_saved_state)
-!  call setup_saved_state(marbl_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%interior_tendency_saved_state)
+  call setup_saved_state(marbl_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%interior_tendency_saved_state)
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
@@ -507,10 +507,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real :: year            ! The time in years.
   integer :: secs, days   ! Integer components of the time type.
   integer :: i, j, k, is, ie, js, je, nz, m
-  real :: kg_m2_s_conversion
+  real :: kg_m2_s_conversion, ndep_conversion
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   kg_m2_s_conversion = US%RZ_T_to_kg_m2s
+  ndep_conversion = (US%m_to_L)**2 * US%s_to_T
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -520,13 +521,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   !        I was just thinking going column-by-column at first might be easier
   do i=is,ie
     do j=js,je
-      ! (0) only want ocean points in this loop
+      ! i. only want ocean points in this loop
       if (G%mask2dT(i,j) == 0) cycle
 
-      ! (1) Load proper column data
-      !     i. surface flux forcings
-
-      !        These fields are getting the correct data
+      ! ii. Load proper column data
+      !     * surface flux forcings
+      !       These fields are getting the correct data
       if (CS%sss_ind > 0) marbl_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
       if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) marbl_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
@@ -537,30 +537,30 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%atmpress_ind > 0) marbl_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
                                                                                                     ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * atm_per_Pa)
 
-      ! These are okay, but need option to come in from coupler
+      !       These are okay, but need option to come in from coupler
       if (CS%xco2_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
       if (CS%xco2_alt_ind > 0) marbl_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = CS%atm_alt_co2_const
 
-      ! These are okay, but need option to read in from file
+      !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
       if (CS%fe_dep_ind > 0) marbl_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
-      !        Read these from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c200827.nc
-      ! MOM_read_data()
-      if (CS%nox_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * (kg_m2_s_conversion * CS%ndep_scale_factor)
-      if (CS%nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * (kg_m2_s_conversion * CS%ndep_scale_factor)
+      !       These are read from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c200827.nc
+      if (CS%nox_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
+      if (CS%nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
 
-      !     ii. tracers at surface
+      !     * tracers at surface
       do m=1,CS%ntr
         marbl_instances%tracers_at_surface(1,m) = CS%tr(i,j,1,m)
       end do
 
-      !     iii. surface flux saved state
+      !     * surface flux saved state
       do m=1,size(marbl_instances%surface_flux_saved_state%state)
+      !       (currently only 2D fields are saved from surface_flux_compute())
         marbl_instances%surface_flux_saved_state%state(m)%field_2d(1) = CS%surface_flux_saved_state(m)%field_2d(i,j)
       end do
 
-      ! (2) Compute surface fluxes in MARBL
+      ! iii. Compute surface fluxes in MARBL
       call marbl_instances%surface_flux_compute()
       if (marbl_instances%StatusLog%labort_marbl) then
         call marbl_instances%StatusLog%log_error_trace("marbl_instances%surface_flux_compute()", &
@@ -568,33 +568,67 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         call print_marbl_log(MARBL_instances%StatusLog)
       end if
 
-      ! (3) Copy output that MOM6 needs to hold on to
-      !     i. saved state
+      ! iv. Copy output that MOM6 needs to hold on to
+      !     * saved state
       do m=1,size(marbl_instances%surface_flux_saved_state%state)
         CS%surface_flux_saved_state(m)%field_2d(i,j) = marbl_instances%surface_flux_saved_state%state(m)%field_2d(1)
       end do
 
-      !     ii. diagnostics
+      !     * diagnostics
       do m=1,size(marbl_instances%surface_flux_diags%diags)
         ! All diags are 2D coming from surface
         CS%surface_flux_diags(m)%field_2d(i,j) = real(marbl_instances%surface_flux_diags%diags(m)%field_2d(1))
       end do
 
-      !     iii. Surface tracer flux
+      !     * Surface tracer flux
       CS%STF(i,j,:) = marbl_instances%surface_fluxes(1,:) * m_per_cm
     end do
   end do
   ! All diags are 2D coming from surface
   do m=1,size(CS%surface_flux_diags)
-!    if (CS%surface_flux_diags(m)%id > 0) then
-!      write(log_message, *) "MNL MNL: max diag value ", maxval(abs(CS%surface_flux_diags(m)%field_2d)), &
-!                            " (m = ", m, ")"
-!      call MOM_error(WARNING, log_message)
-!    end if
     if (CS%surface_flux_diags(m)%id > 0) &
       call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d, CS%diag)
   end do
 
+  ! (2) Compute interior tendencies
+  do i=is,ie
+    do j=js,je
+      ! i. only want ocean points in this loop
+      if (G%mask2dT(i,j) == 0) cycle
+
+      ! ii. Set up vertical domain
+      !     TODO: how do we determine what Z-grid we are running?
+      !           z-levels => need to know kmt while zt, zw, and delta_z are identical between columns
+      !           z*, etc => kmt is fixed, but zt, zw, and delta_z change from column to column
+      ! Following comes from call to init()
+      ! nz = GV%ke
+      ! gcm_num_levels = nz
+      ! gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz)
+      ! gcm_zw = GV%sInterface(2:nz+1)
+      ! gcm_zt = GV%sLayer
+
+      ! marbl_instances%domain%kmt = ?
+      ! marbl_instances%domain%zt(:) = ?
+      ! marbl_instances%domain%zw(:) = ?
+      ! marbl_instances%domain%delta_z(:) = ?
+
+      ! iii. Load proper column data
+      !      * Forcing Fields
+      !      * Column Tracers
+      !        NOTE: POP averages previous two timesteps, should we do that too?
+      do m=1,CS%ntr
+        marbl_instances%tracers(m, :) = CS%tr(i,j,:,m)
+      end do
+
+      !     * interior tendency saved state
+      !       (currently only 3D fields are saved from interior_tendency_compute())
+      do m=1,size(marbl_instances%interior_tendency_saved_state%state)
+        marbl_instances%interior_tendency_saved_state%state(m)%field_3d(:,1) = CS%interior_tendency_saved_state(m)%field_3d(i,j,:)
+      end do
+    end do
+  end do
+
+  ! (3) Standard MOM call to apply vertical mixing
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,CS%ntr
       do k=1,nz ;do j=js,je ; do i=is,ie

@@ -267,6 +267,8 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   real :: kg_m2_s_conversion  !< A combination of unit conversion factors for rescaling
                               !! mass fluxes [R Z s m2 kg-1 T-1 ~> 1].
+  real :: ndep_conversion     !< Combination of unit conversion factors for rescaling
+                              !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
   real :: C_p                 !< heat capacity of seawater [J kg-1 degC-1]
   real :: sign_for_net_FW_bug !< Should be +1. but an old bug can be recovered by using -1.
 
@@ -281,6 +283,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   isr = is-isd+1 ; ier  = ie-isd+1 ; jsr = js-jsd+1 ; jer = je-jsd+1
 
   kg_m2_s_conversion = US%kg_m2s_to_RZ_T
+  ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
   C_p                    = US%Q_to_J_kg*fluxes%C_p
   open_ocn_mask(:,:)     = 1.0
   pme_adj(:,:)           = 0.0
@@ -584,10 +587,10 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! TODO: we only want to call read_data if MARBL is active
   if (CS%read_ndep) then
-    call MOM_read_data(CS%ndep_file, 'NOy_deposition', fluxes%noy_dep, G%domain, timelevel=1, &
-                       scale=US%kg_m2s_to_RZ_T) ! units in file should be kg m-2 s-1
-    call MOM_read_data(CS%ndep_file, 'NHx_deposition', fluxes%nhx_dep, G%domain, timelevel=1, &
-                       scale=US%kg_m2s_to_RZ_T) ! units in file should be kg m-2 s-1
+    call MOM_read_data(CS%ndep_file, 'NDEP_NOy_month', fluxes%noy_dep, G%domain, timelevel=1, &
+                       scale=ndep_conversion) ! units in file are g m-2 s-1 ; scale to mol L-2 T-1
+    call MOM_read_data(CS%ndep_file, 'NDEP_NHx_month', fluxes%nhx_dep, G%domain, timelevel=1, &
+                       scale=ndep_conversion) ! units in file are g m-2 s-1 ; scale to mol L-2 T-1
     do j=js,je ; do i=is,ie
       fluxes%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%noy_dep(i,j)
       fluxes%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%nhx_dep(i,j)
@@ -1394,13 +1397,15 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   ! Set up MARBL forcing
   call get_param(param_file, mdl, "READ_NDEP", CS%read_ndep, &
                  "If true, use nitrogen deposition supplied from "//&
-                 "an input file", default=.false.)
+                 "an input file", default=.true.)
   if (CS%read_ndep) then
     ! TODO: we only want to read this variable in when running with MARBL
     call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
                    "The file in which the nitrogen deposition is found in "//&
-                   "variables NOy_deposition and NHx_deposition.")
+                   "variables NOy_deposition and NHx_deposition.", &
+                   default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c201002.nc')
     ! CS%ndep_file = trim(CS%inputdir) // trim(CS%ndep_file)
+    CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
   end if
 
 
