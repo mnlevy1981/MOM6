@@ -89,7 +89,7 @@ type, public :: MARBL_tracers_CS ; private
   real :: ndep_scale_factor
 
   !> Indices to the registered diagnostics and saved state match the indices used in MARBL
-  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:) !, interior_tendency_diags(:)
+  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
   type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:), interior_tendency_saved_state(:)
 
   !> Surface fluxes returned from MARBL and passed to tracer_vertdiff
@@ -367,7 +367,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   ! Register diagnostics (surface flux first, then interior tendency)
   call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
-  ! call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
+  call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
 
   ! Initialize tracers from file (unless they were initialized by restart file)
   if (.not.restart) then
@@ -584,11 +584,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       CS%STF(i,j,:) = marbl_instances%surface_fluxes(1,:) * m_per_cm
     end do
   end do
-  ! All diags are 2D coming from surface
-  do m=1,size(CS%surface_flux_diags)
-    if (CS%surface_flux_diags(m)%id > 0) &
-      call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d, CS%diag)
-  end do
 
   ! (2) Compute interior tendencies
   do i=is,ie
@@ -625,10 +620,59 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       do m=1,size(marbl_instances%interior_tendency_saved_state%state)
         marbl_instances%interior_tendency_saved_state%state(m)%field_3d(:,1) = CS%interior_tendency_saved_state(m)%field_3d(i,j,:)
       end do
+
+      ! iv. Compute interior tendencies in MARBL
+      ! call marbl_instances%interior_tendency_compute()
+      ! if (marbl_instances%StatusLog%labort_marbl) then
+      !   call marbl_instances%StatusLog%log_error_trace("marbl_instances%interior_tendency_compute()", &
+      !                                                  "MARBL_tracers_column_physics")
+      !   call print_marbl_log(MARBL_instances%StatusLog)
+      ! end if
+
+      ! v. Copy output that MOM6 needs to hold on to
+      !     * saved state
+      do m=1,size(marbl_instances%interior_tendency_saved_state%state)
+        CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = marbl_instances%interior_tendency_saved_state%state(m)%field_3d(:,1)
+      end do
+
+      !     * diagnostics
+      do m=1,size(marbl_instances%interior_tendency_diags%diags)
+        if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
+          CS%interior_tendency_diags(m)%field_2d(i,j) = real(marbl_instances%interior_tendency_diags%diags(m)%field_2d(1))
+        else
+          CS%interior_tendency_diags(m)%field_3d(i,j,:) = real(marbl_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
+        end if
+      end do
+
+      !     * tendencies flux
+      ! do m=1,CS%ntr
+      !   ! Where do the tendencies go?
+      !   ! Units? POP writes out mmol / m^3 / s (or meq / m^3 / s)
+      !   !        I think MARBL is working in terms of nmol and cm, but
+      !   !        1 nmol / cm^3 = 1 mmol / m^3
+      !   ! ??? = marbl_instances%interior_tendencies(m, :)
+      ! end do
     end do
   end do
 
-  ! (3) Standard MOM call to apply vertical mixing
+  ! (3) Post diagnostics from our buffer
+  !     i. Surface flux diagnostics (currently all 2D)
+  do m=1,size(CS%surface_flux_diags)
+    if (CS%surface_flux_diags(m)%id > 0) &
+      call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d(:,:), CS%diag)
+  end do
+  !     ii. Interior tendency diagnostics (mix of 2D and 3D)
+  do m=1,size(CS%interior_tendency_diags)
+    if (CS%interior_tendency_diags(m)%id > 0) then
+      if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
+        call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_2d(:,:), CS%diag)
+      else
+        call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_3d(:,:,:), CS%diag)
+      end if
+    end if
+  end do
+
+  ! (4) Standard MOM call to apply vertical mixing
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,CS%ntr
       do k=1,nz ;do j=js,je ; do i=is,ie
