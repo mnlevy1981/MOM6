@@ -506,6 +506,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real :: Isecs_per_year  ! The number of seconds in a year.
   real :: year            ! The time in years.
   integer :: secs, days   ! Integer components of the time type.
+  real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
+  real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
   integer :: i, j, k, is, ie, js, je, nz, m
   real :: kg_m2_s_conversion, ndep_conversion
 
@@ -585,27 +587,50 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     end do
   end do
 
-  ! (2) Compute interior tendencies
+  ! (2) Post surface flux diagnostics (currently all 2D)
+  do m=1,size(CS%surface_flux_diags)
+    if (CS%surface_flux_diags(m)%id > 0) &
+      call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d(:,:), CS%diag)
+  end do
+
+  ! (3) Apply surface fluxes via vertical diffusion
+  if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
+    do m=1,CS%ntr
+      do k=1,nz ;do j=js,je ; do i=is,ie
+        h_work(i,j,k) = h_old(i,j,k)
+      enddo ; enddo ; enddo
+      call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
+          evap_CFL_limit, minimum_forcing_depth)
+      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
+    enddo
+  else
+    do m=1,CS%ntr
+      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
+    enddo
+  endif
+
+  ! (4) Compute interior tendencies
   do i=is,ie
     do j=js,je
       ! i. only want ocean points in this loop
       if (G%mask2dT(i,j) == 0) cycle
 
       ! ii. Set up vertical domain
-      !     TODO: how do we determine what Z-grid we are running?
-      !           z-levels => need to know kmt while zt, zw, and delta_z are identical between columns
-      !           z*, etc => kmt is fixed, but zt, zw, and delta_z change from column to column
-      ! Following comes from call to init()
-      ! nz = GV%ke
-      ! gcm_num_levels = nz
-      ! gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz)
-      ! gcm_zw = GV%sInterface(2:nz+1)
-      ! gcm_zt = GV%sLayer
-
-      ! marbl_instances%domain%kmt = ?
-      ! marbl_instances%domain%zt(:) = ?
-      ! marbl_instances%domain%zw(:) = ?
-      ! marbl_instances%domain%delta_z(:) = ?
+      marbl_instances%domain%kmt = GV%ke
+      ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
+      ! MARBL wants this to be positive-down
+      zi(GV%ke) = G%bathyT(i,j)
+      do k = GV%ke, 1, -1
+        ! TODO: h_new or h_old?
+        dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
+        zc(k) = zi(k) - 0.5 * dz(k)
+        zi(k-1) = zi(k) - dz(k)
+      enddo
+      ! mks -> cgs
+      ! zw(1:nz) is bottom cell depth so no element of zw = 0, it is assumed to be top layer depth
+      marbl_instances%domain%zw(:) = zi(1:GV%ke) * m_per_cm
+      marbl_instances%domain%zt(:) = zc(:) * m_per_cm
+      marbl_instances%domain%delta_z(:) = dz(:) * m_per_cm
 
       ! iii. Load proper column data
       !      * Forcing Fields
@@ -629,7 +654,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !   call print_marbl_log(MARBL_instances%StatusLog)
       ! end if
 
-      ! v. Copy output that MOM6 needs to hold on to
+      ! v. Apply tendencies immediately
+      do k=1,GV%ke
+        CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*marbl_instances%interior_tendencies(:, k)
+      end do
+
+      ! vi. Copy output that MOM6 needs to hold on to
       !     * saved state
       do m=1,size(marbl_instances%interior_tendency_saved_state%state)
         CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = marbl_instances%interior_tendency_saved_state%state(m)%field_3d(:,1)
@@ -644,23 +674,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         end if
       end do
 
-      !     * tendencies flux
-      ! do m=1,CS%ntr
-      !   ! Where do the tendencies go?
-      !   ! Units? POP writes out mmol / m^3 / s (or meq / m^3 / s)
-      !   !        I think MARBL is working in terms of nmol and cm, but
-      !   !        1 nmol / cm^3 = 1 mmol / m^3
-      !   ! ??? = marbl_instances%interior_tendencies(m, :)
-      ! end do
     end do
   end do
 
-  ! (3) Post diagnostics from our buffer
+  ! (5) Post diagnostics from our buffer
   !     i. Surface flux diagnostics (currently all 2D)
-  do m=1,size(CS%surface_flux_diags)
-    if (CS%surface_flux_diags(m)%id > 0) &
-      call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d(:,:), CS%diag)
-  end do
   !     ii. Interior tendency diagnostics (mix of 2D and 3D)
   do m=1,size(CS%interior_tendency_diags)
     if (CS%interior_tendency_diags(m)%id > 0) then
@@ -671,22 +689,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       end if
     end if
   end do
-
-  ! (4) Standard MOM call to apply vertical mixing
-  if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
-    do m=1,CS%ntr
-      do k=1,nz ;do j=js,je ; do i=is,ie
-        h_work(i,j,k) = h_old(i,j,k)
-      enddo ; enddo ; enddo
-      call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
-          evap_CFL_limit, minimum_forcing_depth)
-      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
-    enddo
-  else
-    do m=1,CS%ntr
-      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
-    enddo
-  endif
 
 end subroutine MARBL_tracers_column_physics
 
