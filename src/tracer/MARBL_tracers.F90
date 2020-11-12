@@ -97,8 +97,14 @@ type, public :: MARBL_tracers_CS ; private
   !! but MARBL will return in cgs so we need to remember to convert
   real, allocatable :: STF(:,:,:) ! i, j, tracer
 
+  !> Indices for forcing fields required to compute surface fluxes
   integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
   integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
+
+  !> Indices for forcing fields required to compute interior tendencies
+  integer :: dustflux_ind, PAR_col_frac_ind, surf_shortwave_ind, potemp_ind
+  integer :: salinity_ind, pressure_ind, fesedflux_ind
+  integer :: o2_scalef_ind, remin_scalef_ind
 end type MARBL_tracers_CS
 
 !> If we can post data column by column, all we need are integer
@@ -169,6 +175,12 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
     ! iii. All tasks call put_setting (TODO: openMP blocks?)
     call marbl_instances%put_setting(marbl_in_line(1))
   end do
+  ! iv. (TEMPORARY) don't set tracer restoring
+  call marbl_instances%put_setting("tracer_restore_vars(1) = ''")
+  call marbl_instances%put_setting("tracer_restore_vars(2) = ''")
+  call marbl_instances%put_setting("tracer_restore_vars(3) = ''")
+  call marbl_instances%put_setting("tracer_restore_vars(4) = ''")
+  call marbl_instances%put_setting("tracer_restore_vars(5) = ''")
 
   ! (2c) we should always reach the EOF to capture the entire file...
   if (.not. is_iostat_end(read_error)) then
@@ -241,6 +253,44 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
     end select
   end do
 
+  !     ii. store all surface forcing indices
+  CS%dustflux_ind = -1
+  CS%PAR_col_frac_ind = -1
+  CS%surf_shortwave_ind = -1
+  CS%potemp_ind = -1
+  CS%salinity_ind = -1
+  CS%pressure_ind = -1
+  CS%fesedflux_ind = -1
+  CS%o2_scalef_ind = -1
+  CS%remin_scalef_ind = -1
+  do m=1,size(marbl_instances%interior_tendency_forcings)
+    ! i. Check to see if this is a tracer restoring field or timescale
+    ! ii. If not, should be one of the following:
+    select case (trim(marbl_instances%interior_tendency_forcings(m)%metadata%varname))
+      case('Dust Flux')
+        CS%dustflux_ind = m
+      case('PAR Column Fraction')
+        CS%PAR_col_frac_ind = m
+      case('Surface Shortwave')
+        CS%surf_shortwave_ind = m
+      case('Potential Temperature')
+        CS%potemp_ind = m
+      case('Salinity')
+        CS%salinity_ind = m
+      case('Pressure')
+        CS%pressure_ind = m
+      case('Iron Sediment Flux')
+        CS%fesedflux_ind = m
+      case('O2 Consumption Scale Factor')
+        CS%o2_scalef_ind = m
+      case('Particulate Remin Scale Factor')
+        CS%remin_scalef_ind = m
+      case DEFAULT
+        write(log_message, "(A,1X,A)") trim(marbl_instances%interior_tendency_forcings(m)%metadata%varname), &
+                                   'is not a valid interior tendency forcing field name.'
+        call MOM_error(FATAL, log_message)
+    end select
+  end do
 end subroutine configure_MARBL_tracers
 
 !> This subroutine is used to register tracer fields and subroutines
