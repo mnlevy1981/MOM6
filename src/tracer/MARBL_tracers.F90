@@ -579,6 +579,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! ii. Load proper column data
       !     * surface flux forcings
       !       These fields are getting the correct data
+      !       TODO: if top layer is vanishly thin, do we actually want (e.g.) top 5m average temp / salinity?
+      !             How does MOM pass SST and SSS to GFDL coupler? (look in core.F90?)
       if (CS%sss_ind > 0) marbl_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
       if (CS%sst_ind > 0) marbl_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) marbl_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
@@ -602,6 +604,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%nhy_flux_ind > 0) marbl_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
 
       !     * tracers at surface
+      !       TODO: average over some shallow depth (e.g. 5m)
       do m=1,CS%ntr
         marbl_instances%tracers_at_surface(1,m) = CS%tr(i,j,1,m)
       end do
@@ -666,12 +669,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (G%mask2dT(i,j) == 0) cycle
 
       ! ii. Set up vertical domain
+      !     TODO: for z*, we may want to set kmt to last layer thicker than (say) 1cm or 1mm
+      !           need to update MARBL to handle vanishing layers better
       marbl_instances%domain%kmt = GV%ke
       ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
       do k = GV%ke, 1, -1
-        ! TODO: h_new or h_old?
         dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
         zc(k) = zi(k) - 0.5 * dz(k)
         zi(k-1) = zi(k) - dz(k)
@@ -684,6 +688,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! iii. Load proper column data
       !      * Forcing Fields
+      !       These fields are getting the correct data
+      if (CS%potemp_ind > 0) marbl_instances%interior_tendency_forcings(CS%potemp_ind)%field_1d(1,:) = tv%T(i,j,:)
+      if (CS%salinity_ind > 0) marbl_instances%interior_tendency_forcings(CS%salinity_ind)%field_1d(1,:) = tv%S(i,j,:)
+
       !      * Column Tracers
       !        NOTE: POP averages previous two timesteps, should we do that too?
       do m=1,CS%ntr
@@ -705,6 +713,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! end if
 
       ! v. Apply tendencies immediately
+      !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
       do k=1,GV%ke
         CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*marbl_instances%interior_tendencies(:, k)
       end do
