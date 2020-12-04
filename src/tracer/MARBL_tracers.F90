@@ -560,6 +560,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
   integer :: i, j, k, is, ie, js, je, nz, m
   real :: kg_m2_s_conversion, ndep_conversion
+  logical :: set_kmt ! Temporary variable; true if kmt has been set based on dz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   kg_m2_s_conversion = US%RZ_T_to_kg_m2s
@@ -672,6 +673,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     TODO: for z*, we may want to set kmt to last layer thicker than (say) 1cm or 1mm
       !           need to update MARBL to handle vanishing layers better
       marbl_instances%domain%kmt = GV%ke
+      set_kmt=.false.
       ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
@@ -679,7 +681,16 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
         zc(k) = zi(k) - 0.5 * dz(k)
         zi(k-1) = zi(k) - dz(k)
+        ! TODO: better way of handling vanishing layers
+        !       (this is a z* workaround for layers that have vanished at bottom of ocean)
+        if ((.not. set_kmt) .and. (dz(k) > 0.01)) then
+          set_kmt = .true.
+          marbl_instances%domain%kmt = k
+          ! write(log_message, "(A, I0, A, I0, A, I0, A)") "Adjusted kmt to ", marbl_instances%domain%kmt, " for (i,j) (", i, ",", j, ")"
+          ! call MOM_error(WARNING, log_message, all_print=.true.)
+        end if
       enddo
+
       ! mks -> cgs
       ! zw(1:nz) is bottom cell depth so no element of zw = 0, it is assumed to be top layer depth
       marbl_instances%domain%zw(:) = zi(1:GV%ke) * m_per_cm
@@ -691,6 +702,39 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       These fields are getting the correct data
       if (CS%potemp_ind > 0) marbl_instances%interior_tendency_forcings(CS%potemp_ind)%field_1d(1,:) = tv%T(i,j,:)
       if (CS%salinity_ind > 0) marbl_instances%interior_tendency_forcings(CS%salinity_ind)%field_1d(1,:) = tv%S(i,j,:)
+
+      !       This are okay, but need option to read in from file
+      !       (Same as dust_dep_ind for surface_flux_forcings)
+      if (CS%dustflux_ind > 0) marbl_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = fluxes%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+
+      !        TODO: Support PAR (currently just using single subcolumn)
+      !              (Look for Pen_sw_bnd?)
+      if (CS%PAR_col_frac_ind > 0) then
+        ! second index is num_subcols, not depth
+        marbl_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = 0
+        marbl_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,1) = 1
+      end if
+      if (CS%surf_shortwave_ind > 0) then
+        ! second index is num_subcols, not depth
+        marbl_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,:) = 0
+        marbl_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,1) = fluxes%sw(i,j)
+      end if
+
+      !        TODO: In POP, pressure comes from a function in state_mod.F90; I don't see a similar function here
+      !              This formulation is from Levitus 1994, and I think it belongs in MOM_EOS.F90?
+      !              Converts depth [m] -> pressure [bars]
+      !        NOTE: Andrew recommends using GV%H_to_Pa
+      if (CS%pressure_ind > 0) marbl_instances%interior_tendency_forcings(CS%pressure_ind)%field_1d(1,:) = &
+          0.0598088*(exp(-0.025*zc(:)) - 1) + 0.100766*zc(:) + 2.28405e-7*(zc(:)**2)
+
+      !        TODO: does MOM have overflows parameterization? POP uses add_subsurf_to_bottom() function to account for it...
+      !              first need to read this field in from file, though
+      if (CS%fesedflux_ind > 0) marbl_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0
+
+      !        TODO: and ability to read these fields from file
+      !              also, add constant values to CS
+      if (CS%o2_scalef_ind > 0) marbl_instances%interior_tendency_forcings(CS%o2_scalef_ind)%field_1d(1,:) = 1
+      if (CS%remin_scalef_ind > 0) marbl_instances%interior_tendency_forcings(CS%remin_scalef_ind)%field_1d(1,:) = 1
 
       !      * Column Tracers
       !        NOTE: POP averages previous two timesteps, should we do that too?
@@ -705,12 +749,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       end do
 
       ! iv. Compute interior tendencies in MARBL
-      ! call marbl_instances%interior_tendency_compute()
-      ! if (marbl_instances%StatusLog%labort_marbl) then
-      !   call marbl_instances%StatusLog%log_error_trace("marbl_instances%interior_tendency_compute()", &
-      !                                                  "MARBL_tracers_column_physics")
-      !   call print_marbl_log(MARBL_instances%StatusLog)
-      ! end if
+      call marbl_instances%interior_tendency_compute()
+      if (marbl_instances%StatusLog%labort_marbl) then
+        call marbl_instances%StatusLog%log_error_trace("marbl_instances%interior_tendency_compute()", &
+                                                       "MARBL_tracers_column_physics")
+        call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
+      end if
 
       ! v. Apply tendencies immediately
       !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
@@ -851,19 +895,23 @@ end subroutine MARBL_tracers_end
 !> This subroutine writes the contents of the MARBL log using MOM_error(NOTE, ...).
 !! TODO: some log messages come from a specific grid point, and this routine
 !!       needs to include the location in the preamble
-subroutine print_marbl_log(log_to_print)
+subroutine print_marbl_log(log_to_print, G, i, j)
 
   use marbl_logging, only : marbl_status_log_entry_type
   use marbl_logging, only : marbl_log_type
   use MOM_coms,      only : PE_here
 
-  class(marbl_log_type), intent(in) :: log_to_print
+  class(marbl_log_type),           intent(in) :: log_to_print
+  type(ocean_grid_type), optional, intent(in) :: G    !< The ocean's grid structure
+  integer,               optional, intent(in) :: i, j
 
   character(len=*), parameter :: subname = 'MARBL_tracers:print_marbl_log'
   character(len=256)          :: message_prefix, message_location, log_message
   type(marbl_status_log_entry_type), pointer :: tmp
-  integer :: msg_lev
+  integer :: msg_lev, elem_old
 
+  ! elem_old is used to keep track of whether all messages are coming from the same point
+  elem_old = -1
   write(message_prefix, "(A,I0,A)") '(Task ', PE_here(), ')'
 
   tmp => log_to_print%FullLog
@@ -871,13 +919,43 @@ subroutine print_marbl_log(log_to_print)
     ! 1) Do I need to write this message? Yes, if all tasks should write this
     !    or if I am master_task
     if ((.not. tmp%lonly_master_writes) .or. is_root_PE()) then
+      ! 2) Print message location? (only if ElementInd changed and is positive; requires G)
+      if ((present(G)) .and. (tmp%ElementInd .ne. elem_old)) then
+        if (tmp%ElementInd .gt. 0) then
+          if (present(i) .and. present(j)) then
+            write(message_location, "(A,F8.3,A,F7.3,A,I0)") &
+                 'Message from (lon, lat) (', G%geoLonT(i,j), ', ', &
+                 G%geoLatT(i,j), '). Level: ', tmp%ElementInd
+          else
+            write(message_location, "(A)") "Grid cell responsible for message is unknown"
+          !   i_loc = marbl_col_to_pop_i(tmp%ElementInd, iblock)
+          !   j_loc = marbl_col_to_pop_j(tmp%ElementInd, iblock)
+          !   write(message_location, "(A,F8.3,A,F7.3,A,I0,A,I0,A)") &
+          !        'Message from (lon, lat) (', TLOND(i_loc, j_loc, iblock), &
+          !        ", ", TLATD(i_loc, j_loc, iblock), '), which is global (i,j) (', &
+          !        this_block%i_glob(i_loc), ', ', this_block%j_glob(j_loc), ')'
+          end if ! i,j present
+          ! master task does not need prefix
+          if (is_root_PE()) then
+            write(log_message, "(A)") trim(message_location)
+            msg_lev = NOTE
+          else
+            write(log_message, "(A,1X,A)") trim(message_prefix), trim(message_location)
+            msg_lev = WARNING
+          end if ! print message prefix?
+          call MOM_error(msg_lev, log_message, all_print=.true.)
+        end if   ! ElementInd > 0
+        elem_old = tmp%ElementInd
+      end if     ! ElementInd /= elem_old
+
+      ! 3) Write message from the log
       ! master task does not need prefix
-      if (.not. is_root_PE()) then
-        write(log_message, "(A,1X,A)") trim(message_prefix), trim(tmp%LogMessage)
-        msg_lev = WARNING
-      else
+      if (is_root_PE()) then
         write(log_message, "(A)") trim(tmp%LogMessage)
         msg_lev = NOTE
+      else
+        write(log_message, "(A,1X,A)") trim(message_prefix), trim(tmp%LogMessage)
+        msg_lev = WARNING
       end if     ! print message prefix?
       call MOM_error(msg_lev, log_message, all_print=.true.)
     end if       ! write the message?
