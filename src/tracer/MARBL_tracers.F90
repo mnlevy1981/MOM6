@@ -14,14 +14,14 @@ use MOM_file_parser,     only : get_param, log_param, log_version, param_file_ty
 use MOM_forcing_type,    only : forcing
 use MOM_grid,            only : ocean_grid_type
 use MOM_hor_index,       only : hor_index_type
-use MOM_io,              only : file_exists, read_data, slasher, vardesc, var_desc, query_vardesc
+use MOM_io,              only : file_exists, MOM_read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
-use MOM_tracer_Z_init,   only : tracer_Z_init
+use MOM_tracer_Z_init,   only : tracer_Z_init, read_Z_edges
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface, thermo_var_ptrs
 use MOM_verticalGrid,    only : verticalGrid_type
@@ -84,6 +84,7 @@ type, public :: MARBL_tracers_CS ; private
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 
   !> Driver-specific parameters
+  character(len=200) :: fesedflux_file, feventflux_file
   character(len=35) :: marbl_settings_file
   real :: atm_co2_const, atm_alt_co2_const
   real :: ndep_scale_factor
@@ -105,6 +106,12 @@ type, public :: MARBL_tracers_CS ; private
   integer :: dustflux_ind, PAR_col_frac_ind, surf_shortwave_ind, potemp_ind
   integer :: salinity_ind, pressure_ind, fesedflux_ind
   integer :: o2_scalef_ind, remin_scalef_ind
+
+  !> Memory used for storing iron sediment flux
+  real    :: fesedflux_scale_factor
+  real, allocatable, dimension(:, :, :) :: fesedflux_z, feventflux_z  ! Fields read from forcing
+  real, allocatable, dimension(:) :: &
+    fesedflux_z_edges  ! The depths of the cell centers in the input data [Z ~> m].
 end type MARBL_tracers_CS
 
 !> If we can post data column by column, all we need are integer
@@ -330,15 +337,40 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
+  ! ** Input directory
+  ! TODO: just use DIN_LOC_ROOT
+  call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir, default="/glade/work/mlevy/cesm_inputdata")
+  ! ** Tracer initial conditions
   call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
                  "The file in which the MARBL tracers initial values can be found.", &
                  default="ecosys_jan_IC_omip_MOM_tx0.66v1_c190925.nc")
   if (scan(CS%IC_file,'/') == 0) then
     ! Add the directory if CS%IC_file is not already a complete path.
-    call get_param(param_file, mdl, "MARBL_TRACERS_INPUTDIR", inputdir, default="/glade/work/mlevy/cesm_inputdata")
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
     call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_IC_FILE", CS%IC_file)
   endif
+  ! ** FESEDFLUX
+  call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
+                 "The file in which the iron sediment flux forcing field can be found.", &
+                 default="fesedflux_total_reduce_oxic_tx0.66v1.c201204.nc")
+  if (scan(CS%fesedflux_file,'/') == 0) then
+    ! Add the directory if CS%fesedflux_file is not already a complete path.
+    CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
+    call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FESEDFLUX_FILE", CS%fesedflux_file)
+  endif
+  ! ** FEVENTFLUX
+  call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
+                 "The file in which the iron vent flux forcing field can be found.", &
+                 default="feventflux_5gmol_tx0.66v1.c201204.nc")
+  if (scan(CS%feventflux_file,'/') == 0) then
+    ! Add the directory if CS%feventflux_file is not already a complete path.
+    CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
+    call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FEVENTFLUX_FILE", CS%feventflux_file)
+  endif
+  ! ** Scale factor for FESEDFLUX
+  call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
+                 "Conversion factor between FESEDFLUX file and MARBL units (umol / m^2 / d -> nmol / cm^2 / s)", &
+                 default=1000. / 10000. / 86400.)
 
   CS%ntr = size(marbl_instances%tracer_metadata)
   allocate(CS%ind_tr(CS%ntr))
@@ -404,7 +436,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
                                 ! years m3 s-1 or years kg s-1.
   logical :: OK
+  logical :: fesedflux_has_edges, fesedflux_use_missing
+  real    :: fesedflux_missing
   integer :: i, j, k, m, diag_size
+  integer :: fesedflux_nz
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -429,6 +464,24 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                                   trim(CS%IC_file)//".")
     end do
   end if
+
+  ! Read initial fesedflux and feventflux fields
+  ! (1) get vertical dimension
+  !     -- comes from fesedflux_file, assume same dimension in feventflux
+  !        (maybe these fields should be combined?)
+  fesedflux_use_missing = .false.
+  call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z_edges, fesedflux_nz, &
+                    fesedflux_has_edges, fesedflux_use_missing, fesedflux_missing, &
+                    scale=US%m_to_Z)
+
+  ! (2) Allocate memory for fesedflux and feventflux
+  allocate(CS%fesedflux_z(SZI_(G), SZJ_(G), fesedflux_nz))
+  allocate(CS%feventflux_z(SZI_(G), SZJ_(G), fesedflux_nz))
+
+  ! (3) Read data
+  !     TODO: Add US term to scale
+  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z, G%Domain, scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_z, G%Domain, scale=CS%fesedflux_scale_factor)
 
 end subroutine initialize_MARBL_tracers
 
