@@ -9,6 +9,7 @@ module MARBL_tracers
 #ifdef _USE_MARBL_TRACERS
 use MOM_coms,            only : root_PE, broadcast
 use MOM_diag_mediator,   only : diag_ctrl
+use MOM_diag_vkernels,   only : reintegrate_column
 use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
@@ -108,10 +109,15 @@ type, public :: MARBL_tracers_CS ; private
   integer :: o2_scalef_ind, remin_scalef_ind
 
   !> Memory used for storing iron sediment flux
+  ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor
-  real, allocatable, dimension(:, :, :) :: fesedflux_z, feventflux_z  ! Fields read from forcing
+  integer :: fesedflux_nz
+  real, allocatable, dimension(:, :, :) :: fesedflux_in, feventflux_in  ! Fields read from forcing
   real, allocatable, dimension(:) :: &
-    fesedflux_z_edges  ! The depths of the cell centers in the input data [Z ~> m].
+    fesedflux_z ! The depths of the cell interfaces in the input data [Z ~> m]
+  ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
+  real, allocatable, dimension(:,:,:) :: &
+    fesedflux_dz    ! The thickness of the cell layers in the input data [Z ~> m]
 end type MARBL_tracers_CS
 
 !> If we can post data column by column, all we need are integer
@@ -439,7 +445,6 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   logical :: fesedflux_has_edges, fesedflux_use_missing
   real    :: fesedflux_missing
   integer :: i, j, k, m, diag_size
-  integer :: fesedflux_nz
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -470,18 +475,43 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   !     -- comes from fesedflux_file, assume same dimension in feventflux
   !        (maybe these fields should be combined?)
   fesedflux_use_missing = .false.
-  call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z_edges, fesedflux_nz, &
+  call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z, CS%fesedflux_nz, &
                     fesedflux_has_edges, fesedflux_use_missing, fesedflux_missing, &
                     scale=US%m_to_Z)
 
   ! (2) Allocate memory for fesedflux and feventflux
-  allocate(CS%fesedflux_z(SZI_(G), SZJ_(G), fesedflux_nz))
-  allocate(CS%feventflux_z(SZI_(G), SZJ_(G), fesedflux_nz))
+  allocate(CS%fesedflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
+  allocate(CS%feventflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
+  allocate(CS%fesedflux_dz(SZI_(G), SZJ_(G), CS%fesedflux_nz-1))
 
   ! (3) Read data
   !     TODO: Add US term to scale
-  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z, G%Domain, scale=CS%fesedflux_scale_factor)
-  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_z, G%Domain, scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in, G%Domain, scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in, G%Domain, scale=CS%fesedflux_scale_factor)
+
+  ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
+  do k=CS%fesedflux_nz, 2, -1
+    do j=G%jsc, G%jec
+      do i=G%isc, G%iec
+        ! Also figure out layer thickness while we're here
+        CS%fesedflux_dz(i,j,k-1) = CS%fesedflux_z(k) - CS%fesedflux_z(k-1)
+        if (CS%fesedflux_z(k) > G%bathyT(i,j)) then
+          if (CS%fesedflux_z(k-1) > G%bathyT(i,j)) then
+            CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
+            CS%fesedflux_in(i,j,k) = 0.
+            CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
+            CS%feventflux_in(i,j,k) = 0.
+          else
+            ! CS%fesedflux_z(k-1) <= G%bathyT(i,j) < CS%fesedflux_z(k)
+            ! So bathymetry is in cell index k-1 (between interfaces k-1 and k)
+            CS%fesedflux_dz(i,j,k-1) = G%bathyT(i,j) - CS%fesedflux_z(k-1)
+            if (k /= CS%fesedflux_nz) & ! is this if statement necessary?
+              CS%fesedflux_dz(i,j,k:CS%fesedflux_nz-1) = 0.
+          end if
+        end if
+      end do
+    end do
+  end do
 
 end subroutine initialize_MARBL_tracers
 
@@ -611,7 +641,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   integer :: secs, days   ! Integer components of the time type.
   real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
-  integer :: i, j, k, is, ie, js, je, nz, m
+  integer :: i, j, k, is, ie, js, je, nz, m, kmt ! TODO: kmt might be temporary?
   real :: kg_m2_s_conversion, ndep_conversion
   logical :: set_kmt ! Temporary variable; true if kmt has been set based on dz
 
@@ -731,10 +761,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
       do k = GV%ke, 1, -1
+        ! TODO: if we move this above vertical mixing, use h_old
         dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
         zc(k) = zi(k) - 0.5 * dz(k)
         zi(k-1) = zi(k) - dz(k)
-        ! TODO: better way of handling vanishing layers
+        ! TODO: better way of handling vanishing layers, e.g. average sediment over bottom 5m
         !       (this is a z* workaround for layers that have vanished at bottom of ocean)
         if ((.not. set_kmt) .and. (dz(k) > 0.01)) then
           set_kmt = .true.
@@ -780,9 +811,17 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%pressure_ind > 0) marbl_instances%interior_tendency_forcings(CS%pressure_ind)%field_1d(1,:) = &
           0.0598088*(exp(-0.025*zc(:)) - 1) + 0.100766*zc(:) + 2.28405e-7*(zc(:)**2)
 
-      !        TODO: does MOM have overflows parameterization? POP uses add_subsurf_to_bottom() function to account for it...
-      !              first need to read this field in from file, though
-      if (CS%fesedflux_ind > 0) marbl_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0
+      if (CS%fesedflux_ind > 0) then
+        kmt = marbl_instances%domain%kmt
+        marbl_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0.
+        call reintegrate_column(CS%fesedflux_nz, &
+                                CS%fesedflux_dz(i,j,:) * sum(dz(:)) / (G%bathyT(i,j)*GV%H_to_Z), &
+                                CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), &
+                                kmt, &
+                                marbl_instances%domain%delta_z(1:kmt), &
+                                0., &
+                                marbl_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,1:kmt))
+      end if
 
       !        TODO: and ability to read these fields from file
       !              also, add constant values to CS
