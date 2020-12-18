@@ -444,7 +444,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   logical :: OK
   logical :: fesedflux_has_edges, fesedflux_use_missing
   real    :: fesedflux_missing
-  integer :: i, j, k, m, diag_size
+  integer :: i, j, k, kbot, m, diag_size
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -474,6 +474,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   ! (1) get vertical dimension
   !     -- comes from fesedflux_file, assume same dimension in feventflux
   !        (maybe these fields should be combined?)
+  !     -- note: read_Z_edges treats depth as positive UP => 0 at surface, negative at depth
   fesedflux_use_missing = .false.
   call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z, CS%fesedflux_nz, &
                     fesedflux_has_edges, fesedflux_use_missing, fesedflux_missing, &
@@ -490,24 +491,24 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in, G%Domain, scale=CS%fesedflux_scale_factor)
 
   ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
-  do k=CS%fesedflux_nz, 2, -1
+  !     Remember, fesedflux_z = 0 at surface and is < 0 below surface
+  do k=CS%fesedflux_nz-1, 1, -1
+    kbot = k + 1 ! level k is between z(k) and z(k+1)
     do j=G%jsc, G%jec
       do i=G%isc, G%iec
         ! Also figure out layer thickness while we're here
-        CS%fesedflux_dz(i,j,k-1) = CS%fesedflux_z(k) - CS%fesedflux_z(k-1)
-        if (CS%fesedflux_z(k) > G%bathyT(i,j)) then
-          if (CS%fesedflux_z(k-1) > G%bathyT(i,j)) then
-            CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
-            CS%fesedflux_in(i,j,k) = 0.
-            CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
-            CS%feventflux_in(i,j,k) = 0.
-          else
-            ! CS%fesedflux_z(k-1) <= G%bathyT(i,j) < CS%fesedflux_z(k)
-            ! So bathymetry is in cell index k-1 (between interfaces k-1 and k)
-            CS%fesedflux_dz(i,j,k-1) = G%bathyT(i,j) - CS%fesedflux_z(k-1)
-            if (k /= CS%fesedflux_nz) & ! is this if statement necessary?
-              CS%fesedflux_dz(i,j,k:CS%fesedflux_nz-1) = 0.
-          end if
+        CS%fesedflux_dz(i,j,k) = CS%fesedflux_z(k) - CS%fesedflux_z(kbot)
+        ! If top interface is below ocean bottom, bring flux from bottom layer up
+        ! and set thickness of level below to 0
+        if (-CS%fesedflux_z(k) > G%bathyT(i,j)) then
+          CS%fesedflux_in(i,j,k) = CS%fesedflux_in(i,j,k) + CS%fesedflux_in(i,j,kbot)
+          CS%fesedflux_in(i,j,kbot) = 0.
+          CS%feventflux_in(i,j,k) = CS%feventflux_in(i,j,k) + CS%feventflux_in(i,j,kbot)
+          CS%feventflux_in(i,j,kbot) = 0.
+          CS%fesedflux_dz(i,j,k) = 0.
+        else if (-CS%fesedflux_z(kbot) > G%bathyT(i,j)) then
+          ! Otherwise, if lower interface is below bathymetry move interface to ocean bottom
+          CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z(k)
         end if
       end do
     end do
@@ -815,10 +816,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         kmt = marbl_instances%domain%kmt
         marbl_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0.
         call reintegrate_column(CS%fesedflux_nz, &
-                                CS%fesedflux_dz(i,j,:) * sum(dz(:)) / (G%bathyT(i,j)*GV%H_to_Z), &
+                                CS%fesedflux_dz(i,j,:) * sum(dz(:)) / (G%bathyT(i,j)), &
                                 CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), &
                                 kmt, &
-                                marbl_instances%domain%delta_z(1:kmt), &
+                                dz(1:kmt), &
                                 0., &
                                 marbl_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,1:kmt))
       end if
