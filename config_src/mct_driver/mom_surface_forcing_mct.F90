@@ -152,6 +152,8 @@ type, public :: surface_forcing_CS ; private
   real, pointer, dimension(:,:) :: trestore_mask => NULL() !< mask for SST restoring
   integer :: id_srestore = -1     !< id number for time_interp_external.
   integer :: id_trestore = -1     !< id number for time_interp_external.
+  integer :: id_noydep   = -1     !< id number for time_interp_external.
+  integer :: id_nhxdep   = -1     !< id number for time_interp_external.
 
   type(forcing_diags), public :: handles !< diagnostics handles
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< restart pointer
@@ -587,10 +589,10 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! TODO: we only want to call read_data if MARBL is active
   if (CS%read_ndep) then
-    call MOM_read_data(CS%ndep_file, 'NDEP_NOy_month', fluxes%noy_dep, G%domain, timelevel=1, &
-                       scale=ndep_conversion) ! units in file are g m-2 s-1 ; scale to mol L-2 T-1
-    call MOM_read_data(CS%ndep_file, 'NDEP_NHx_month', fluxes%nhx_dep, G%domain, timelevel=1, &
-                       scale=ndep_conversion) ! units in file are g m-2 s-1 ; scale to mol L-2 T-1
+    call time_interp_external(CS%id_noydep,Time,data_restore)
+    fluxes%noy_dep = ndep_conversion * data_restore
+    call time_interp_external(CS%id_nhxdep,Time,data_restore)
+    fluxes%nhx_dep = ndep_conversion * data_restore
     do j=js,je ; do i=is,ie
       fluxes%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%noy_dep(i,j)
       fluxes%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%nhx_dep(i,j)
@@ -1403,9 +1405,11 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
     call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
                    "The file in which the nitrogen deposition is found in "//&
                    "variables NOy_deposition and NHx_deposition.", &
-                   default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c201002.nc')
+                   default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210108.nc')
     ! CS%ndep_file = trim(CS%inputdir) // trim(CS%ndep_file)
     CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
+    CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
+    CS%id_nhxdep = init_external_field(CS%ndep_file, 'NDEP_NHx_month', domain=G%Domain%mpp_domain)
   end if
 
 
