@@ -249,8 +249,13 @@ logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, CS)
   CS%diag => diag
 
   ! Read parameters
+  call get_param(param_file, mdl, "USE_CVMix_TIDAL", CS%use_CVMix_tidal, &
+                 default=.false., do_not_log=.true.)
+  call get_param(param_file, mdl, "INT_TIDE_DISSIPATION", CS%int_tide_dissipation, &
+                 default=CS%use_CVMix_tidal, do_not_log=.true.)
   call log_version(param_file, mdl, version, &
-    "Vertical Tidal Mixing Parameterization")
+                 "Vertical Tidal Mixing Parameterization", &
+                 all_default=.not.(CS%use_CVMix_tidal .or. CS%int_tide_dissipation))
   call get_param(param_file, mdl, "USE_CVMix_TIDAL", CS%use_CVMix_tidal, &
                  "If true, turns on tidal mixing via CVMix", &
                  default=.false.)
@@ -268,7 +273,7 @@ logical function tidal_mixing_init(Time, G, GV, US, param_file, diag, CS)
 
   call get_param(param_file, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
-                 default=.true.)
+                 default=.false.)
   call get_param(param_file, mdl, "TIDAL_MIXING_2018_ANSWERS", CS%answers_2018, &
                  "If true, use the order of arithmetic and expressions that recover the "//&
                  "answers from the end of 2018.  Otherwise, use updated and more robust "//&
@@ -783,8 +788,8 @@ subroutine calculate_CVMix_tidal(h, j, G, GV, US, CS, N2_int, Kd_lay, Kd_int, Kv
 
 
       ! XXX: Temporary de-scaling of N2_int(i,:) into a temporary variable
-      do k=1,G%ke+1
-        N2_int_i(k) = US%s_to_T**2 * N2_int(i,k)
+      do K=1,G%ke+1
+        N2_int_i(K) = US%s_to_T**2 * N2_int(i,K)
       enddo
 
       call CVMix_coeffs_tidal( Mdiff_out               = Kv_tidal,            &
@@ -803,14 +808,14 @@ subroutine calculate_CVMix_tidal(h, j, G, GV, US, CS, N2_int, Kd_lay, Kd_int, Kv
         Kd_lay(i,j,k) = Kd_lay(i,j,k) + 0.5 * US%m2_s_to_Z2_T * (Kd_tidal(k) + Kd_tidal(k+1))
       enddo
       if (present(Kd_int)) then
-        do k=1,G%ke+1
-          Kd_int(i,j,k) = Kd_int(i,j,k) +  (US%m2_s_to_Z2_T * Kd_tidal(k))
+        do K=1,G%ke+1
+          Kd_int(i,j,K) = Kd_int(i,j,K) +  (US%m2_s_to_Z2_T * Kd_tidal(K))
         enddo
       endif
       ! Update viscosity with the proper unit conversion.
       if (associated(Kv)) then
-        do k=1,G%ke+1
-          Kv(i,j,k) = Kv(i,j,k) + US%m2_s_to_Z2_T * Kv_tidal(k)  ! Rescale from m2 s-1 to Z2 T-1.
+        do K=1,G%ke+1
+          Kv(i,j,K) = Kv(i,j,K) + US%m2_s_to_Z2_T * Kv_tidal(K)  ! Rescale from m2 s-1 to Z2 T-1.
         enddo
       endif
 
@@ -903,15 +908,15 @@ subroutine calculate_CVMix_tidal(h, j, G, GV, US, CS, N2_int, Kd_lay, Kd_int, Kv
         Kd_lay(i,j,k) = Kd_lay(i,j,k) + 0.5 * US%m2_s_to_Z2_T * (Kd_tidal(k) + Kd_tidal(k+1))
       enddo
       if (present(Kd_int)) then
-        do k=1,G%ke+1
-          Kd_int(i,j,k) = Kd_int(i,j,k) +  (US%m2_s_to_Z2_T * Kd_tidal(k))
+        do K=1,G%ke+1
+          Kd_int(i,j,K) = Kd_int(i,j,K) +  (US%m2_s_to_Z2_T * Kd_tidal(K))
         enddo
       endif
 
       ! Update viscosity
       if (associated(Kv)) then
-        do k=1,G%ke+1
-          Kv(i,j,k) = Kv(i,j,k) + US%m2_s_to_Z2_T * Kv_tidal(k)   ! Rescale from m2 s-1 to Z2 T-1.
+        do K=1,G%ke+1
+          Kv(i,j,K) = Kv(i,j,K) + US%m2_s_to_Z2_T * Kv_tidal(K)   ! Rescale from m2 s-1 to Z2 T-1.
         enddo
       endif
 

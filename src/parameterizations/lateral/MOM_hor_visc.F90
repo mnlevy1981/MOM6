@@ -19,6 +19,7 @@ use MOM_open_boundary,         only : ocean_OBC_type, OBC_DIRECTION_E, OBC_DIREC
 use MOM_open_boundary,         only : OBC_DIRECTION_N, OBC_DIRECTION_S, OBC_NONE
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
+use MOM_variables,             only : accel_diag_ptrs
 
 implicit none ; private
 
@@ -69,8 +70,6 @@ type, public :: hor_visc_CS ; private
                              !! viscosity is modified to include a term that
                              !! scales quadratically with the velocity shears.
   logical :: use_Kh_bg_2d    !< Read 2d background viscosity from a file.
-  logical :: Kh_bg_2d_bug    !< If true, retain an answer-changing horizontal indexing bug
-                             !! in setting the corner-point viscosities when USE_KH_BG_2D=True.
   real    :: Kh_bg_min       !< The minimum value allowed for Laplacian horizontal
                              !! viscosity [L2 T-1 ~> m2 s-1]. The default is 0.0.
   logical :: use_land_mask   !< Use the land mask for the computation of thicknesses
@@ -171,10 +170,17 @@ type, public :: hor_visc_CS ; private
 
   type(diag_ctrl), pointer :: diag => NULL() !< structure to regulate diagnostics
 
+  ! real, pointer :: hf_diffu(:,:,:)   => NULL() ! Zonal hor. visc. accel. x fract. thickness [L T-2 ~> m s-2].
+  ! real, pointer :: hf_diffv(:,:,:)   => NULL() ! Merdional hor. visc. accel. x fract. thickness [L T-2 ~> m s-2].
+  ! 3D diagnostics hf_diffu(diffv) are commented because there is no clarity on proper remapping grid option.
+  ! The code is retained for degugging purposes in the future.
+
   !>@{
   !! Diagnostic id
   integer :: id_grid_Re_Ah = -1, id_grid_Re_Kh   = -1
   integer :: id_diffu     = -1, id_diffv         = -1
+  ! integer :: id_hf_diffu  = -1, id_hf_diffv      = -1
+  integer :: id_hf_diffu_2d = -1, id_hf_diffv_2d = -1
   integer :: id_Ah_h      = -1, id_Ah_q          = -1
   integer :: id_Kh_h      = -1, id_Kh_q          = -1
   integer :: id_GME_coeff_h = -1, id_GME_coeff_q = -1
@@ -202,7 +208,7 @@ contains
 !!   v[is-2:ie+2,js-2:je+2]
 !!   h[is-1:ie+1,js-1:je+1]
 subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, &
-                                CS, OBC, BT, TD)
+                                CS, OBC, BT, TD, ADp)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(G)), &
@@ -229,6 +235,8 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                                                        !! barotropic velocities.
   type(thickness_diffuse_CS), optional, pointer :: TD  !< Pointer to a structure containing
                                                        !! thickness diffusivities.
+  type(accel_diag_ptrs), optional, pointer :: ADp      !< Acceleration diagnostic pointers
+
   ! Local variables
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     Del2u, &      ! The u-compontent of the Laplacian of velocity [L-1 T-1 ~> m-1 s-1]
@@ -262,6 +270,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     grad_vel_mag_bt_h, & ! Magnitude of the barotropic velocity gradient tensor squared at h-points [T-2 ~> s-2]
     grad_d2vel_mag_h, & ! Magnitude of the Laplacian of the velocity vector, squared [L-2 T-2 ~> m-2 s-2]
     boundary_mask_h ! A mask that zeroes out cells with at least one land edge [nondim]
+
+  real, allocatable, dimension(:,:) :: hf_diffu_2d ! Depth sum of hf_diffu [L T-2 ~> m s-2]
+  real, allocatable, dimension(:,:) :: hf_diffv_2d ! Depth sum of hf_diffv [L T-2 ~> m s-2]
 
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dvdx, dudy, & ! components in the shearing strain [T-1 ~> s-1]
@@ -515,7 +526,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     enddo ; enddo
 
     ! Components for the shearing strain
-    do J=js-2,Jeq+2 ; do I=is-2,Ieq+2
+    do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
       dvdx(I,J) = CS%DY_dxBu(I,J)*(v(i+1,J,k)*G%IdyCv(i+1,J) - v(i,J,k)*G%IdyCv(i,J))
       dudy(I,J) = CS%DX_dyBu(I,J)*(u(I,j+1,k)*G%IdxCu(I,j+1) - u(I,j,k)*G%IdxCu(I,j))
     enddo ; enddo
@@ -636,7 +647,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       elseif (OBC%segment(n)%direction == OBC_DIRECTION_S) then
         if ((J >= js-1) .and. (J <= je+1)) then
           do I = max(Isq-1,OBC%segment(n)%HI%isd), min(Ieq+1,OBC%segment(n)%HI%ied)
-            h_u(I,j) = h_u(i,j+1)
+            h_u(I,j) = h_u(I,j+1)
           enddo
         endif
       elseif (OBC%segment(n)%direction == OBC_DIRECTION_E) then
@@ -694,11 +705,11 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
     ! Vorticity
     if (CS%no_slip) then
-      do J=js-2,Jeq+2 ; do I=is-2,Ieq+2
+      do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
         vort_xy(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx(I,J) - dudy(I,J) )
       enddo ; enddo
     else
-      do J=js-2,Jeq+2 ; do I=is-2,Ieq+2
+      do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
         vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) )
       enddo ; enddo
     endif
@@ -711,22 +722,23 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     if ((CS%Leith_Kh) .or. (CS%Leith_Ah)) then
 
       ! Vorticity gradient
-      do J=js-2,Jeq+2 ; do i=is-1,Ieq+2
+      do J=Jsq-1,Jeq+1 ; do i=Isq-1,Ieq+2
         DY_dxBu = G%dyBu(I,J) * G%IdxBu(I,J)
         vort_xy_dx(i,J) = DY_dxBu * (vort_xy(I,J) * G%IdyCu(I,j) - vort_xy(I-1,J) * G%IdyCu(I-1,j))
       enddo ; enddo
 
-      do j=js-1,Jeq+2 ; do I=is-2,Ieq+2
+      do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+1
         DX_dyBu = G%dxBu(I,J) * G%IdyBu(I,J)
         vort_xy_dy(I,j) = DX_dyBu * (vort_xy(I,J) * G%IdxCv(i,J) - vort_xy(I,J-1) * G%IdxCv(i,J-1))
       enddo ; enddo
 
       ! Laplacian of vorticity
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-        DY_dxCv = G%dyCv(i,J) * G%IdxCv(i,J)
-        DX_dyCu = G%dyCu(I,j) * G%IdyCu(I,j)
-        Del2vort_q(I,J) = DY_dxCv * (vort_xy_dx(i+1,J) * G%IdyT(i+1,j) - vort_xy_dx(i,J) * G%IdyT(i,j)) + &
-                        DX_dyCu * (vort_xy_dy(I,j+1) * G%IdyT(i,j+1) - vort_xy_dy(I,j) * G%IdyT(i,j))
+        DY_dxBu = G%dyBu(I,J) * G%IdxBu(I,J)
+        DX_dyBu = G%dxBu(I,J) * G%IdyBu(I,J)
+
+        Del2vort_q(I,J) = DY_dxBu * (vort_xy_dx(i+1,J) * G%IdyCv(i+1,J) - vort_xy_dx(i,J) * G%IdyCv(i,J)) + &
+                        DX_dyBu * (vort_xy_dy(I,j+1) * G%IdyCu(I,j+1) - vort_xy_dy(I,j) * G%IdyCu(I,j))
       enddo ; enddo
       do J=Jsq,Jeq+1 ; do I=Isq,Ieq+1
         Del2vort_h(i,j) = 0.25*(Del2vort_q(I,J) + Del2vort_q(I-1,J) + Del2vort_q(I,J-1) + Del2vort_q(I-1,J-1))
@@ -1086,12 +1098,12 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         endif ! Smagorinsky_Ah or Leith_Ah
 
         if (use_MEKE_Au) then ! *Add* the MEKE contribution
-          Ah = Ah + 0.25*( (MEKE%Au(I,J) + MEKE%Au(I+1,J+1)) +  &
-                           (MEKE%Au(I+1,J) + MEKE%Au(I,J+1)) )
+          Ah = Ah + 0.25*( (MEKE%Au(i,j) + MEKE%Au(i+1,j+1)) +  &
+                           (MEKE%Au(i+1,j) + MEKE%Au(i,j+1)) )
         endif
 
         if (CS%Re_Ah > 0.0) then
-          KE = 0.125*((u(I,j,k)+u(I-1,j,k))**2 + (v(i,J,k)+v(i,J-1,k))**2)
+          KE = 0.125*((u(I,j,k)+u(I,j+1,k))**2 + (v(i,J,k)+v(i+1,J,k))**2)
           Ah = sqrt(KE) * CS%Re_Ah_const_xy(i,j)
         endif
 
@@ -1193,7 +1205,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                                      CS%dy2h(i+1,j)*str_xx(i+1,j)) + &
                        G%IdxCu(I,j)*(CS%dx2q(I,J-1)*str_xy(I,J-1) - &
                                      CS%dx2q(I,J) *str_xy(I,J))) * &
-                     G%IareaCu(I,j)) / (h_u(i,j) + h_neglect)
+                     G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
 
     enddo ; enddo
     if (apply_OBC) then
@@ -1359,12 +1371,47 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
     call post_data(CS%id_FrictWorkIntz, FrictWorkIntz, CS%diag)
   endif
 
+  ! Diagnostics for terms multiplied by fractional thicknesses
+
+  ! 3D diagnostics hf_diffu(diffv) are commented because there is no clarity on proper remapping grid option.
+  ! The code is retained for degugging purposes in the future.
+  !if (present(ADp) .and. (CS%id_hf_diffu > 0)) then
+  !  do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+  !    CS%hf_diffu(I,j,k) = diffu(I,j,k) * ADp%diag_hfrac_u(I,j,k)
+  !  enddo ; enddo ; enddo
+  !  call post_data(CS%id_hf_diffu, CS%hf_diffu, CS%diag)
+  !endif
+  !if (present(ADp) .and. (CS%id_hf_diffv > 0)) then
+  !  do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+  !    CS%hf_diffv(i,J,k) = diffv(i,J,k) * ADp%diag_hfrac_v(i,J,k)
+  !  enddo ; enddo ; enddo
+  !  call post_data(CS%id_hf_diffv, CS%hf_diffv, CS%diag)
+  !endif
+  if (present(ADp) .and. (CS%id_hf_diffu_2d > 0)) then
+    allocate(hf_diffu_2d(G%IsdB:G%IedB,G%jsd:G%jed))
+    hf_diffu_2d(:,:) = 0.0
+    do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      hf_diffu_2d(I,j) = hf_diffu_2d(I,j) + diffu(I,j,k) * ADp%diag_hfrac_u(I,j,k)
+    enddo ; enddo ; enddo
+    call post_data(CS%id_hf_diffu_2d, hf_diffu_2d, CS%diag)
+    deallocate(hf_diffu_2d)
+  endif
+  if (present(ADp) .and. (CS%id_hf_diffv_2d > 0)) then
+    allocate(hf_diffv_2d(G%isd:G%ied,G%JsdB:G%JedB))
+    hf_diffv_2d(:,:) = 0.0
+    do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      hf_diffv_2d(i,J) = hf_diffv_2d(i,J) + diffv(i,J,k) * ADp%diag_hfrac_v(i,J,k)
+    enddo ; enddo ; enddo
+    call post_data(CS%id_hf_diffv_2d, hf_diffv_2d, CS%diag)
+    deallocate(hf_diffv_2d)
+  endif
+
 end subroutine horizontal_viscosity
 
 !> Allocates space for and calculates static variables used by horizontal_viscosity().
 !! hor_visc_init calculates and stores the values of a number of metric functions that
 !! are used in horizontal_viscosity().
-subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
+subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE, ADp)
   type(time_type),         intent(in)    :: Time !< Current model time.
   type(ocean_grid_type),   intent(inout) :: G    !< The ocean's grid structure.
   type(unit_scale_type),   intent(in)    :: US   !< A dimensional unit scaling type
@@ -1373,6 +1420,7 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
   type(diag_ctrl), target, intent(inout) :: diag !< Structure to regulate diagnostic output.
   type(hor_visc_CS), pointer             :: CS   !< Pointer to the control structure for this module
   type(MEKE_type), pointer               :: MEKE !< MEKE data
+  type(accel_diag_ptrs), optional, pointer :: ADp !< Acceleration diagnostic pointers
   ! Local variables
   real, dimension(SZIB_(G),SZJ_(G)) :: u0u, u0v
   real, dimension(SZI_(G),SZJB_(G)) :: v0u, v0v
@@ -1454,7 +1502,7 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
   call get_param(param_file, mdl, "GET_ALL_PARAMS", get_all, default=.false.)
   call get_param(param_file, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
-                 default=.true.)
+                 default=.false.)
   call get_param(param_file, mdl, "HOR_VISC_2018_ANSWERS", CS%answers_2018, &
                  "If true, use the order of arithmetic and expressions that recover the "//&
                  "answers from the end of 2018.  Otherwise, use updated and more robust "//&
@@ -1631,9 +1679,7 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
   call get_param(param_file, mdl, "USE_LAND_MASK_FOR_HVISC", CS%use_land_mask, &
                  "If true, use Use the land mask for the computation of thicknesses "//&
                  "at velocity locations. This eliminates the dependence on arbitrary "//&
-                 "values over land or outside of the domain. Default is False in order to "//&
-                 "maintain answers with legacy experiments but should be changed to True "//&
-                 "for new experiments.", default=.false.)
+                 "values over land or outside of the domain.", default=.true.)
   if (CS%better_bound_Ah .or. CS%better_bound_Kh .or. get_all) &
     call get_param(param_file, mdl, "HORVISC_BOUND_COEF", CS%bound_coef, &
                  "The nondimensional coefficient of the ratio of the "//&
@@ -1651,11 +1697,6 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
                  "If true, read a file containing 2-d background harmonic "//&
                  "viscosities. The final viscosity is the maximum of the other "//&
                  "terms and this background value.", default=.false.)
-  if (CS%use_Kh_bg_2d) then
-    call get_param(param_file, mdl, "KH_BG_2D_BUG", CS%Kh_bg_2d_bug, &
-                 "If true, retain an answer-changing horizontal indexing bug in setting "//&
-                 "the corner-point viscosities when USE_KH_BG_2D=True.", default=.true.)
-  endif
 
   call get_param(param_file, mdl, "USE_GME", CS%use_GME, &
                  "If true, use the GM+E backscatter scheme in association \n"//&
@@ -1851,14 +1892,12 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
       ! Maximum of constant background and MICOM viscosity
       CS%Kh_bg_xy(I,J) = MAX(Kh, Kh_vel_scale * sqrt(grid_sp_q2))
       ! Use the larger of the above and values read from a file
-      if (CS%use_Kh_bg_2d) then ; if (CS%Kh_bg_2d_bug) then
-        ! This option is unambiguously wrong, and should be obsoleted as soon as possible.
-        CS%Kh_bg_xy(I,J) = MAX(CS%Kh_bg_2d(i,j), CS%Kh_bg_xy(I,J))
-      else
+      if (CS%use_Kh_bg_2d) then
         CS%Kh_bg_xy(I,J) = MAX(CS%Kh_bg_xy(I,J), &
             0.25*((CS%Kh_bg_2d(i,j) + CS%Kh_bg_2d(i+1,j+1)) + &
                   (CS%Kh_bg_2d(i+1,j) + CS%Kh_bg_2d(i,j+1))) )
-      endif ; endif
+      endif
+
       ! Use the larger of the above and a function of sin(latitude)
       if (Kh_sin_lat>0.) then
         slat_fn = abs( sin( deg2rad * G%geoLatBu(I,J) ) ) ** Kh_pwr_of_sine
@@ -1922,7 +1961,7 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
         endif
       endif
       if (CS%Leith_Ah) then
-         CS%biharm6_const_xy(i,j) = Leith_bi_const * (grid_sp_q3 * grid_sp_q3)
+         CS%biharm6_const_xy(I,J) = Leith_bi_const * (grid_sp_q3 * grid_sp_q3)
       endif
       CS%Ah_bg_xy(I,J) = MAX(Ah, Ah_vel_scale * grid_sp_q2 * sqrt(grid_sp_q2))
       if (CS%Re_Ah > 0.0) CS%Re_Ah_const_xy(i,j) = grid_sp_q3 / CS%Re_Ah
@@ -2024,6 +2063,37 @@ subroutine hor_visc_init(Time, G, US, param_file, diag, CS, MEKE)
       'Zonal Acceleration from Horizontal Viscosity', 'm s-2', conversion=US%L_T2_to_m_s2)
   CS%id_diffv = register_diag_field('ocean_model', 'diffv', diag%axesCvL, Time, &
       'Meridional Acceleration from Horizontal Viscosity', 'm s-2', conversion=US%L_T2_to_m_s2)
+
+  !CS%id_hf_diffu = register_diag_field('ocean_model', 'hf_diffu', diag%axesCuL, Time, &
+  !    'Fractional Thickness-weighted Zonal Acceleration from Horizontal Viscosity', 'm s-2', &
+  !    v_extensive=.true., conversion=US%L_T2_to_m_s2)
+  !if ((CS%id_hf_diffu > 0) .and. (present(ADp))) then
+  !  call safe_alloc_ptr(CS%hf_diffu,G%IsdB,G%IedB,G%jsd,G%jed,G%ke)
+  !  call safe_alloc_ptr(ADp%diag_hfrac_u,G%IsdB,G%IedB,G%jsd,G%jed,G%ke)
+  !endif
+
+  !CS%id_hf_diffv = register_diag_field('ocean_model', 'hf_diffv', diag%axesCvL, Time, &
+  !    'Fractional Thickness-weighted Meridional Acceleration from Horizontal Viscosity', 'm s-2', &
+  !    v_extensive=.true., conversion=US%L_T2_to_m_s2)
+  !if ((CS%id_hf_diffv > 0) .and. (present(ADp))) then
+  !  call safe_alloc_ptr(CS%hf_diffv,G%isd,G%ied,G%JsdB,G%JedB,G%ke)
+  !  call safe_alloc_ptr(ADp%diag_hfrac_v,G%isd,G%ied,G%JsdB,G%JedB,G%ke)
+  !endif
+
+  CS%id_hf_diffu_2d = register_diag_field('ocean_model', 'hf_diffu_2d', diag%axesCu1, Time, &
+      'Depth-sum Fractional Thickness-weighted Zonal Acceleration from Horizontal Viscosity', 'm s-2', &
+      conversion=US%L_T2_to_m_s2)
+  if ((CS%id_hf_diffu_2d > 0) .and. (present(ADp))) then
+    call safe_alloc_ptr(ADp%diag_hfrac_u,G%IsdB,G%IedB,G%jsd,G%jed,G%ke)
+  endif
+
+  CS%id_hf_diffv_2d = register_diag_field('ocean_model', 'hf_diffv_2d', diag%axesCv1, Time, &
+      'Depth-sum Fractional Thickness-weighted Meridional Acceleration from Horizontal Viscosity', 'm s-2', &
+      conversion=US%L_T2_to_m_s2)
+  if ((CS%id_hf_diffv_2d > 0) .and. (present(ADp))) then
+    call safe_alloc_ptr(ADp%diag_hfrac_v,G%isd,G%ied,G%JsdB,G%JedB,G%ke)
+  endif
+
   if (CS%biharmonic) then
     CS%id_Ah_h = register_diag_field('ocean_model', 'Ahh', diag%axesTL, Time,    &
         'Biharmonic Horizontal Viscosity at h Points', 'm4 s-1', conversion=US%L_to_m**4*US%s_to_T, &
