@@ -587,7 +587,11 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   enddo; enddo
 
+  ! TODO: call set_marbl_forcing() [or whatever it gets named] here
+
   ! TODO: we only want to call read_data if MARBL is active
+  ! ALTERNATE TODO: bring this into set_marbl_forcing(),
+  !                 which should only be called when MARBL is active
   if (CS%read_ndep) then
     call time_interp_external(CS%id_noydep,Time,data_restore)
     fluxes%noy_dep = ndep_conversion * data_restore

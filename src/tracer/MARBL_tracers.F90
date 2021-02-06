@@ -94,6 +94,13 @@ type, public :: MARBL_tracers_CS ; private
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
   type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:), interior_tendency_saved_state(:)
 
+  !> Need to store global output from both marbl_instance%surface_flux_compute() and
+  !! marbl_instance%interior_tendency_compute(). For the former, just need id to register
+  !! because we already copy data into CS%STF; latter requires copying data and indices
+  !! so currently using temp_MARBL_diag for that.
+  integer, allocatable :: id_surface_flux_out(:)
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out(:)
+
   !> Surface fluxes returned from MARBL and passed to tracer_vertdiff
   !! tracer_vertdiff expects units concentrations times meters per second,
   !! but MARBL will return in cgs so we need to remember to convert
@@ -436,11 +443,12 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                                                                   !! for the sponges, if they are in use.
 
 ! Local variables
-  character(len=48) :: name     ! A variable's name in a NetCDF file.
-  character(len=72) :: longname ! The long name of that variable.
-  character(len=48) :: units    ! The dimensions of the variable.
+  character(len=48) :: name       ! A variable's name in a NetCDF file.
+  character(len=72) :: longname   ! The long name of that variable.
+  character(len=48) :: units      ! The units of the variable.
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
-                                ! years m3 s-1 or years kg s-1.
+                                  ! years m3 s-1 or years kg s-1.
+  character(len=48) :: tracer_name
   logical :: OK
   logical :: fesedflux_has_edges, fesedflux_use_missing
   real    :: fesedflux_missing
@@ -458,6 +466,34 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   ! Register diagnostics (surface flux first, then interior tendency)
   call register_MARBL_diags(marbl_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
   call register_MARBL_diags(marbl_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
+  allocate(CS%id_surface_flux_out(CS%ntr))
+  allocate(CS%interior_tendency_out(CS%ntr))
+  do m=1,CS%ntr
+    write(name, "(2A)") "STF_", trim(marbl_instances%tracer_metadata(m)%short_name)
+    write(longname, "(2A)") trim(marbl_instances%tracer_metadata(m)%long_name), " Surface Flux"
+    write(units, "(2A)") trim(marbl_instances%tracer_metadata(m)%units), " m/s"
+    CS%id_surface_flux_out(m) = register_diag_field("ocean_model", &
+                                                    trim(name), &
+                                                    diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
+                                                    day, &
+                                                    trim(longname), &
+                                                    trim(units))
+
+    write(name, "(2A)") "J_", trim(marbl_instances%tracer_metadata(m)%short_name)
+    write(longname, "(2A)") trim(marbl_instances%tracer_metadata(m)%long_name), " Source Sink Term"
+    write(units, "(2A)") trim(marbl_instances%tracer_metadata(m)%units), "/s"
+    CS%interior_tendency_out(m)%id = register_diag_field("ocean_model", &
+                                                         trim(name), &
+                                                         diag%axesTL, & ! T=> tracer grid? L => layer center
+                                                         day, &
+                                                         trim(longname), &
+                                                         trim(units))
+    if (CS%interior_tendency_out(m)%id > 0) then
+      allocate(CS%interior_tendency_out(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
+      CS%interior_tendency_out(m)%field_3d(:,:,:) = 0.
+    end if
+
+  end do
 
   ! Initialize tracers from file (unless they were initialized by restart file)
   if (.not.restart) then
@@ -725,7 +761,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     end do
   end do
 
-  ! (2) Post surface flux diagnostics (currently all 2D)
+  ! (2) Post surface fluxes and their diagnostics (currently all 2D)
+  do m=1,CS%ntr
+    if (CS%id_surface_flux_out(m) > 0) &
+      call post_data(CS%id_surface_flux_out(m), CS%STF(:,:,m), CS%diag)
+  end do
   do m=1,size(CS%surface_flux_diags)
     if (CS%surface_flux_diags(m)%id > 0) &
       call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d(:,:), CS%diag)
@@ -869,13 +909,18 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           CS%interior_tendency_diags(m)%field_3d(i,j,:) = real(marbl_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
         end if
       end do
+      !     * tendency values themselves
+      do m=1,CS%ntr
+        if (allocated(CS%interior_tendency_out(m)%field_3d)) &
+          CS%interior_tendency_out(m)%field_3d(i,j,:) = G%mask2dT(i,j)*marbl_instances%interior_tendencies(m,:)
+      end do
 
     end do
   end do
 
   ! (5) Post diagnostics from our buffer
-  !     i. Surface flux diagnostics (currently all 2D)
-  !     ii. Interior tendency diagnostics (mix of 2D and 3D)
+  !     i. Interior tendency diagnostics (mix of 2D and 3D)
+  !     ii. Interior tendencies themselves
   do m=1,size(CS%interior_tendency_diags)
     if (CS%interior_tendency_diags(m)%id > 0) then
       if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
@@ -885,6 +930,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       end if
     end if
   end do
+  do m=1,CS%ntr
+    if (allocated(CS%interior_tendency_out(m)%field_3d)) &
+      call post_data(CS%interior_tendency_out(m)%id, CS%interior_tendency_out(m)%field_3d(:,:,:), CS%diag)
+  end do
+
 
 end subroutine MARBL_tracers_column_physics
 
@@ -1062,6 +1112,7 @@ subroutine print_marbl_log(log_to_print, G, i, j)
 
 end subroutine print_marbl_log
 
+! TODO: fix the comment below
 #endif /* _USE_MARBL_TRACERS */
 !> \namespace MARBL_tracers
 !!
