@@ -215,6 +215,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   if (is_root_PE()) close(marbl_settings_in)
 
   ! (3) call marbl%init()
+  ! TODO: the units in gcm_delta_z, gcm_zw, and gcm_zt are wrong, but we want to strip these values
+  !       out of init anyway because MOM updates them every time step / every column
   call MARBL_instances%init(&
                             gcm_num_levels = nz, &
                             gcm_num_PAR_subcols = 1, &
@@ -818,9 +820,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! mks -> cgs
       ! zw(1:nz) is bottom cell depth so no element of zw = 0, it is assumed to be top layer depth
-      marbl_instances%domain%zw(:) = zi(1:GV%ke) * m_per_cm
-      marbl_instances%domain%zt(:) = zc(:) * m_per_cm
-      marbl_instances%domain%delta_z(:) = dz(:) * m_per_cm
+      marbl_instances%domain%zw(:) = zi(1:GV%ke) * cm_per_m
+      marbl_instances%domain%zt(:) = zc(:) * cm_per_m
+      marbl_instances%domain%delta_z(:) = dz(:) * cm_per_m
 
       ! iii. Load proper column data
       !      * Forcing Fields
