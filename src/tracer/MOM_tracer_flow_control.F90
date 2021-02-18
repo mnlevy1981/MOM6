@@ -36,11 +36,9 @@ use RGC_tracer, only : RGC_tracer_end, RGC_tracer_CS
 use ideal_age_example, only : register_ideal_age_tracer, initialize_ideal_age_tracer
 use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_surface_state
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
-#ifdef _USE_MARBL_TRACERS
 use MARBL_tracers, only : register_MARBL_tracers, initialize_MARBL_tracers
 use MARBL_tracers, only : MARBL_tracers_column_physics
 use MARBL_tracers, only : MARBL_tracers_end, MARBL_tracers_CS
-#endif
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
 use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
@@ -96,9 +94,7 @@ type, public :: tracer_flow_control_CS ; private
   type(ISOMIP_tracer_CS), pointer :: ISOMIP_tracer_CSp => NULL()
   type(RGC_tracer_CS), pointer :: RGC_tracer_CSp => NULL()
   type(ideal_age_tracer_CS), pointer :: ideal_age_tracer_CSp => NULL()
-#ifdef _USE_MARBL_TRACERS
   type(MARBL_tracers_CS), pointer :: MARBL_tracers_CSp => NULL()
-#endif
   type(dye_tracer_CS), pointer :: dye_tracer_CSp => NULL()
   type(oil_tracer_CS), pointer :: oil_tracer_CSp => NULL()
   type(advection_test_tracer_CS), pointer :: advection_test_tracer_CSp => NULL()
@@ -219,14 +215,6 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                  "If true, use the dyed_obc_tracer tracer package.", &
                  default=.false.)
 
-#ifndef _USE_MARBL_TRACERS
-  if (CS%use_MARBL_tracers) then
-    call MOM_error(FATAL, &
-       "call_tracer_register: use_MARBL_tracers=.true. but MOM6 was "//&
-       "not compiled with _USE_MARBL_TRACERS")
-  end if
-#endif
-
 !    Add other user-provided calls to register tracers for restarting here. Each
 !  tracer package registration call returns a logical false if it cannot be run
 !  for some reason.  This then overrides the run-time selection from above.
@@ -245,11 +233,9 @@ subroutine call_tracer_register(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   if (CS%use_ideal_age) CS%use_ideal_age = &
     register_ideal_age_tracer(HI, GV, param_file,  CS%ideal_age_tracer_CSp, &
                               tr_Reg, restart_CS)
-#ifdef _USE_MARBL_TRACERS
   if (CS%use_MARBL_tracers) CS%use_MARBL_tracers = &
     register_MARBL_tracers(HI, GV, US, param_file,  CS%MARBL_tracers_CSp, &
                         tr_Reg, restart_CS)
-#endif
   if (CS%use_regional_dyes) CS%use_regional_dyes = &
     register_dye_tracer(HI, GV, US, param_file,  CS%dye_tracer_CSp, &
                         tr_Reg, restart_CS)
@@ -330,11 +316,9 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
   if (CS%use_ideal_age) &
     call initialize_ideal_age_tracer(restart, day, G, GV, US, h, diag, OBC, CS%ideal_age_tracer_CSp, &
                                      sponge_CSp)
-#ifdef _USE_MARBL_TRACERS
   if (CS%use_MARBL_tracers) &
     call initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS%MARBL_tracers_CSp, &
                                   sponge_CSp)
-#endif
   if (CS%use_regional_dyes) &
     call initialize_dye_tracer(restart, day, G, GV, h, diag, OBC, CS%dye_tracer_CSp, &
                                      sponge_CSp)
@@ -470,13 +454,11 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                            G, GV, US, CS%ideal_age_tracer_CSp, &
                                            evap_CFL_limit=evap_CFL_limit, &
                                            minimum_forcing_depth=minimum_forcing_depth)
-#ifdef _USE_MARBL_TRACERS
     if (CS%use_MARBL_tracers) &
       call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                         G, GV, US, CS%MARBL_tracers_CSp, tv, &
                                         evap_CFL_limit=evap_CFL_limit, &
                                         minimum_forcing_depth=minimum_forcing_depth)
-#endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%dye_tracer_CSp, &
@@ -540,11 +522,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_ideal_age) &
       call ideal_age_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, US, CS%ideal_age_tracer_CSp)
-#ifdef _USE_MARBL_TRACERS
     if (CS%use_MARBL_tracers) &
       call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                         G, GV, US, CS%MARBL_tracers_CSp, tv)
-#endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, US, CS%dye_tracer_CSp)
@@ -808,9 +788,7 @@ subroutine tracer_flow_control_end(CS)
   if (CS%use_ISOMIP_tracer) call ISOMIP_tracer_end(CS%ISOMIP_tracer_CSp)
   if (CS%use_RGC_tracer) call RGC_tracer_end(CS%RGC_tracer_CSp)
   if (CS%use_ideal_age) call ideal_age_example_end(CS%ideal_age_tracer_CSp)
-#ifdef _USE_MARBL_TRACERS
   if (CS%use_MARBL_tracers) call MARBL_tracers_end(CS%MARBL_tracers_CSp)
-#endif
   if (CS%use_regional_dyes) call regional_dyes_end(CS%dye_tracer_CSp)
   if (CS%use_oil) call oil_tracer_end(CS%oil_tracer_CSp)
   if (CS%use_advection_test_tracer) call advection_test_tracer_end(CS%advection_test_tracer_CSp)
