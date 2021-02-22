@@ -1406,7 +1406,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
     call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
                    "The file in which the nitrogen deposition is found in "//&
                    "variables NOy_deposition and NHx_deposition.", &
-                   default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210108.nc')
+                   default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc')
     ! CS%ndep_file = trim(CS%inputdir) // trim(CS%ndep_file)
     CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
     CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
