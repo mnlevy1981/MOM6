@@ -892,14 +892,22 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! v. Apply tendencies immediately
       !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
+      !    Also, set kmt because we need to avoid using MARBL values below that level
+      !    Current plan: treat all values below kmt as equal to the value of the kmt level
+      kmt = MARBL_instances%domain%kmt
       do k=1,GV%ke
-        CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, k)
+        if (k <= kmt) then
+          CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, k)
+        else
+          CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, kmt)
+        end if
       end do
 
       ! vi. Copy output that MOM6 needs to hold on to
       !     * saved state
       do m=1,size(MARBL_instances%interior_tendency_saved_state%state)
-        CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1)
+        CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = 0.
+        CS%interior_tendency_saved_state(m)%field_3d(i,j,1:kmt) = MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(1:kmt,1)
       end do
 
       !     * diagnostics
@@ -907,13 +915,20 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
           CS%interior_tendency_diags(m)%field_2d(i,j) = real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
         else
-          CS%interior_tendency_diags(m)%field_3d(i,j,:) = real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
+          CS%interior_tendency_diags(m)%field_3d(i,j,1:kmt) = real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(1:kmt,1))
+          if (kmt < GV%ke) then
+            CS%interior_tendency_diags(m)%field_3d(i,j,kmt+1:GV%ke) = CS%interior_tendency_diags(m)%field_3d(i,j,kmt)
+          end if
         end if
       end do
       !     * tendency values themselves
       do m=1,CS%ntr
-        if (allocated(CS%interior_tendency_out(m)%field_3d)) &
-          CS%interior_tendency_out(m)%field_3d(i,j,:) = G%mask2dT(i,j)*MARBL_instances%interior_tendencies(m,:)
+        if (allocated(CS%interior_tendency_out(m)%field_3d)) then
+          CS%interior_tendency_out(m)%field_3d(i,j,1:kmt) = G%mask2dT(i,j)*MARBL_instances%interior_tendencies(m,1:kmt)
+          if (kmt < GV%ke) then
+            CS%interior_tendency_out(m)%field_3d(i,j,kmt+1:GV%ke) = 0.
+          end if
+        end if
       end do
 
     end do
@@ -926,8 +941,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     if (CS%interior_tendency_diags(m)%id > 0) then
       if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
         call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_2d(:,:), CS%diag)
-      else
+      else if (allocated(CS%interior_tendency_diags(m)%field_3d)) then
         call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_3d(:,:,:), CS%diag)
+      else
+        write(log_message, "(A, I0, A, I0, A)") "Diagnostic number ", m, " post id ", CS%interior_tendency_diags(m)%id," did not allocate 2D or 3D array"
+        call MOM_error(FATAL, log_message)
       end if
     end if
   end do
