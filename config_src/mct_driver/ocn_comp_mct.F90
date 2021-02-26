@@ -44,6 +44,8 @@ use MOM_domains,          only: AGRID, BGRID_NE, CGRID_NE, pass_vector
 use mpp_domains_mod,      only: mpp_get_compute_domain
 use MOM_io,               only: stdout
 
+use marbl_forcing_type_main, only: marbl_iob_allocate
+
 ! Previously inlined - now in separate modules
 use MOM_ocean_model_mct,     only: ocean_public_type, ocean_state_type
 use MOM_ocean_model_mct,     only: ocean_model_init , update_ocean_model, ocean_model_end
@@ -860,11 +862,6 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
              IOB% u_flux (isc:iec,jsc:jec),          &
              IOB% v_flux (isc:iec,jsc:jec),          &
              IOB% t_flux (isc:iec,jsc:jec),          &
-             IOB% atm_fine_dust_flux (isc:iec,jsc:jec),&
-             IOB% atm_coarse_dust_flux (isc:iec,jsc:jec),&
-             IOB% seaice_dust_flux (isc:iec,jsc:jec),&
-             IOB% atm_bc_flux (isc:iec,jsc:jec),     &
-             IOB% seaice_bc_flux (isc:iec,jsc:jec),  &
              IOB% seaice_melt_heat (isc:iec,jsc:jec),&
              IOB% seaice_melt (isc:iec,jsc:jec),     &
              IOB% q_flux (isc:iec,jsc:jec),          &
@@ -882,8 +879,6 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
              IOB% calving (isc:iec,jsc:jec),         &
              IOB% runoff_hflx (isc:iec,jsc:jec),     &
              IOB% calving_hflx (isc:iec,jsc:jec),    &
-             IOB% ice_fraction (isc:iec,jsc:jec),    &
-             IOB% u10_sqr (isc:iec,jsc:jec),         &
              IOB% mi (isc:iec,jsc:jec),              &
              IOB% p (isc:iec,jsc:jec))
 
@@ -892,11 +887,6 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
   IOB%u_flux           = 0.0
   IOB%v_flux           = 0.0
   IOB%t_flux           = 0.0
-  IOB%atm_fine_dust_flux   = 0.0
-  IOB%atm_coarse_dust_flux = 0.0
-  IOB%seaice_dust_flux = 0.0
-  IOB%atm_bc_flux      = 0.0
-  IOB%seaice_bc_flux   = 0.0
   IOB%seaice_melt_heat = 0.0
   IOB%seaice_melt      = 0.0
   IOB%q_flux           = 0.0
@@ -914,10 +904,10 @@ subroutine IOB_allocate(IOB, isc, iec, jsc, jec)
   IOB%calving          = 0.0
   IOB%runoff_hflx      = 0.0
   IOB%calving_hflx     = 0.0
-  IOB%ice_fraction     = 0.0
-  IOB%u10_sqr          = 0.0
   IOB%mi               = 0.0
   IOB%p                = 0.0
+
+  call marbl_iob_allocate(isc, iec, jsc, jec, IOB%MARBL_IOB)
 
 end subroutine IOB_allocate
 

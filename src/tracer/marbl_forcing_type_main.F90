@@ -1,11 +1,15 @@
 module marbl_forcing_type_main
 
+use MOM_diag_mediator,        only : safe_alloc_ptr, time_type
 use MOM_error_handler,        only : MOM_error, WARNING
 use MOM_file_parser,          only : get_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
-use time_interp_external_mod, only : init_external_field
+use MOM_unit_scaling,         only : unit_scale_type
+use time_interp_external_mod, only : init_external_field, time_interp_external
 
 implicit none ; private
+
+#include <MOM_memory.h>
 
 !> Contains pointers to the forcing fields needed to drive MARBL
 type, public :: marbl_forcing_type
@@ -36,7 +40,20 @@ type, public :: marbl_forcing_CS
 
 end type marbl_forcing_CS
 
+type, public :: marbl_ice_ocean_boundary_type
+  real, pointer, dimension(:,:) :: atm_fine_dust_flux   => NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_coarse_dust_flux => NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_dust_flux     => NULL() !< Dust flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_bc_flux          => NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_bc_flux       => NULL() !< Black carbon flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: ice_fraction         => NULL() !< Fraction of ocn covered with ice
+  real, pointer, dimension(:,:) :: u10_sqr              => NULL() !< 10m wind speed squared (m^2/s^2)
+end type marbl_ice_ocean_boundary_type
+
 public :: marbl_forcing_init
+public :: marbl_forcing_type_init
+public :: marbl_iob_allocate
+public :: convert_marbl_IOB_to_forcings
 
 contains
 
@@ -90,5 +107,128 @@ contains
       CS%id_nhxdep = init_external_field(CS%ndep_file, 'NDEP_NHx_month', domain=G%Domain%mpp_domain)
     end if
   end subroutine marbl_forcing_init
+
+  subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing)
+    integer,                           intent(in)    :: isd,ied,jsd,jed
+    type(marbl_forcing_type), pointer, intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
+
+    if (associated(MARBL_forcing)) then
+      call MOM_error(WARNING, "marbl_forcing_type_init called with an associated "// &
+                              "marbl forcing structure.")
+      return
+    endif
+
+    allocate(MARBL_forcing)
+    call safe_alloc_ptr(MARBL_forcing%noy_dep,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%nhx_dep,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%dust_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%iron_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%ice_fraction,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%u10_sqr,isd,ied,jsd,jed)
+
+  end subroutine marbl_forcing_type_init
+
+  subroutine marbl_iob_allocate(isc, iec, jsc, jec, MARBL_IOB)
+
+    integer,                                      intent(in) :: isc, iec, jsc, jec  !< The ocean's local grid size
+    type(marbl_ice_ocean_boundary_type), pointer, intent(inout) :: MARBL_IOB        !< MARBL-specific ice-ocean boundary type
+
+    if (associated(MARBL_IOB)) then
+      call MOM_error(WARNING, "marbl_iob_allocate called with an associated "// &
+                              "ice-ocean boundary structure.")
+      return
+    endif
+
+    allocate(MARBL_IOB)
+    allocate(MARBL_IOB% atm_fine_dust_flux (isc:iec,jsc:jec),  &
+             MARBL_IOB% atm_coarse_dust_flux (isc:iec,jsc:jec),&
+             MARBL_IOB% seaice_dust_flux (isc:iec,jsc:jec),    &
+             MARBL_IOB% atm_bc_flux (isc:iec,jsc:jec),         &
+             MARBL_IOB% seaice_bc_flux (isc:iec,jsc:jec),      &
+             MARBL_IOB% ice_fraction (isc:iec,jsc:jec),        &
+             MARBL_IOB% u10_sqr (isc:iec,jsc:jec))
+
+    MARBL_IOB%atm_fine_dust_flux(:,:)   = 0.0
+    MARBL_IOB%atm_coarse_dust_flux(:,:) = 0.0
+    MARBL_IOB%seaice_dust_flux(:,:)     = 0.0
+    MARBL_IOB%atm_bc_flux(:,:)          = 0.0
+    MARBL_IOB%seaice_bc_flux(:,:)       = 0.0
+    MARBL_IOB%ice_fraction              = 0.0
+    MARBL_IOB%u10_sqr                   = 0.0
+
+  end subroutine marbl_iob_allocate
+
+  subroutine convert_marbl_IOB_to_forcings(MARBL_IOB, Time, G, US, i0, j0, MARBL_forcing, CS)
+
+    type(marbl_ice_ocean_boundary_type), pointer, intent(in)    :: MARBL_IOB      !< MARBL-specific ice-ocean boundary type
+    type(time_type),                              intent(in)    :: Time           !< The time of the fluxes, used for interpolating the
+                                                                                  !! salinity to the right time, when it is being restored.
+    type(ocean_grid_type),                        intent(in)    :: G              !< The ocean's grid structure
+    type(unit_scale_type),                        intent(in)    :: US             !< A dimensional unit scaling type
+    integer,                                      intent(in)    :: i0, j0         !< index offsets
+    type(marbl_forcing_type),                     intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
+    type(marbl_forcing_CS), pointer,              intent(inout) :: CS             !< A pointer that is set to point to control
+                                                                                  !! structure for MARBL forcing
+
+    real, dimension(SZI_(G),SZJ_(G)) :: ndep_data  !< The field read in from ndep_file (nhx_dep, noy_dep)
+    integer :: i, j, is, ie, js, je
+    real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
+                                     !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
+    real :: kg_m2_s_conversion       !< A combination of unit conversion factors for rescaling
+                                     !! mass fluxes [R Z s m2 kg-1 T-1 ~> 1].
+
+    is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
+    ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
+    kg_m2_s_conversion = US%kg_m2s_to_RZ_T
+
+    do j=js,je ; do i=is,ie
+      if (associated(MARBL_IOB%atm_fine_dust_flux)) then
+        MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+                                        MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) + MARBL_IOB%seaice_dust_flux(i-i0,j-j0))
+      end if
+
+      if (associated(MARBL_IOB%atm_bc_flux)) then
+        ! Contribution of atmospheric dust to iron flux
+        MARBL_forcing%iron_flux(i,j) = (CS%fe_bioavail_frac_offset * &
+                                 (CS%iron_frac_in_atm_fine_dust * MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+                                  CS%iron_frac_in_atm_coarse_dust * MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0)))
+        ! Contribution of atmospheric black carbon to iron flux
+        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
+                                 (CS%atm_fe_to_bc_ratio * MARBL_IOB%atm_bc_flux(i-i0,j-j0)))
+        ! Contribution of seaice dust to iron flux
+        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%fe_bioavail_frac_offset * &
+                                 (CS%iron_frac_in_seaice_dust * MARBL_IOB%seaice_dust_flux(i-i0,j-j0)))
+        ! Contribution of seaice black carbon to iron flux
+        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
+                                 (CS%seaice_fe_to_bc_ratio * MARBL_IOB%seaice_bc_flux(i-i0,j-j0)))
+        ! Unit conversion
+        MARBL_forcing%iron_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * MARBL_forcing%iron_flux(i,j)
+      end if
+
+      if (associated(MARBL_IOB%ice_fraction)) then
+        MARBL_forcing%ice_fraction(i,j) = G%mask2dT(i,j) * MARBL_IOB%ice_fraction(i-i0,j-j0)
+      end if
+
+      if (associated(MARBL_IOB%u10_sqr)) then
+        MARBL_forcing%u10_sqr(i,j) = G%mask2dT(i,j) * US%m_s_to_L_T**2 * MARBL_IOB%u10_sqr(i-i0,j-j0)
+      end if
+    enddo; enddo
+
+    if (CS%read_ndep) then
+      call time_interp_external(CS%id_noydep,Time,ndep_data)
+      MARBL_forcing%noy_dep = ndep_conversion * ndep_data
+      call time_interp_external(CS%id_nhxdep,Time,ndep_data)
+      MARBL_forcing%nhx_dep = ndep_conversion * ndep_data
+      do j=js,je ; do i=is,ie
+        MARBL_forcing%noy_dep(i,j) = G%mask2dT(i,j) * MARBL_forcing%noy_dep(i,j)
+        MARBL_forcing%nhx_dep(i,j) = G%mask2dT(i,j) * MARBL_forcing%nhx_dep(i,j)
+      enddo; enddo
+    else
+      ! This is temporary while I test the file we created
+      MARBL_forcing%noy_dep(:,:) = 0.
+      MARBL_forcing%nhx_dep(:,:) = 0.
+    endif
+
+  end subroutine convert_marbl_IOB_to_forcings
 
 end module marbl_forcing_type_main

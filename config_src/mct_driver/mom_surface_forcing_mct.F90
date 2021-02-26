@@ -38,8 +38,8 @@ use mpp_mod,              only : mpp_chksum
 use time_interp_external_mod, only : init_external_field, time_interp_external
 use time_interp_external_mod, only : time_interp_external_init
 use MOM_io,               only: stdout
-
-use marbl_forcing_type_main, only : marbl_forcing_CS, marbl_forcing_init
+use marbl_forcing_type_main, only : marbl_forcing_CS, marbl_forcing_init, marbl_forcing_type_init
+use marbl_forcing_type_main, only : marbl_ice_ocean_boundary_type, convert_marbl_IOB_to_forcings
 
 implicit none ; private
 
@@ -116,7 +116,6 @@ type, public :: surface_forcing_CS ; private
   logical :: mask_srestore_under_ice        !< If true, use an ice mask defined by frazil
 
   real    :: ice_salt_concentration         !< salt concentration for sea ice [kg/kg]
-
   logical :: mask_srestore_marginal_seas    !< if true, then mask SSS restoring in marginal seas
   real    :: max_delta_srestore             !< maximum delta salinity used for restoring
   real    :: max_delta_trestore             !< maximum delta sst used for restoring
@@ -159,11 +158,6 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: t_flux            =>NULL() !< sensible heat flux [W/m2]
   real, pointer, dimension(:,:) :: q_flux            =>NULL() !< specific humidity flux [kg/m2/s]
   real, pointer, dimension(:,:) :: salt_flux         =>NULL() !< salt flux [kg/m2/s]
-  real, pointer, dimension(:,:) :: atm_fine_dust_flux=>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: atm_coarse_dust_flux=>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: seaice_dust_flux  =>NULL() !< Dust flux from seaice [kg/m^2/s]
-  real, pointer, dimension(:,:) :: atm_bc_flux       =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: seaice_bc_flux    =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_melt_heat  =>NULL() !< sea ice and snow melt heat flux [W/m2]
   real, pointer, dimension(:,:) :: seaice_melt       =>NULL() !< water flux due to sea ice and snow melting [kg/m2/s]
   real, pointer, dimension(:,:) :: lw_flux           =>NULL() !< long wave radiation [W/m2]
@@ -187,8 +181,6 @@ type, public :: ice_ocean_boundary_type
                                                               !! ice-shelves, expressed as a coefficient
                                                               !! for divergence damping, as determined
                                                               !! outside of the ocean model in [m3/s]
-  real, pointer, dimension(:,:) :: ice_fraction      =>NULL() !< Fraction of ocn covered with ice
-  real, pointer, dimension(:,:) :: u10_sqr           =>NULL() !< 10m wind speed squared (m^2/s^2)
   integer :: xtype                                            !< The type of the exchange - REGRID, REDIST or DIRECT
   type(coupler_2d_bc_type)      :: fluxes                     !< A structure that may contain an array of
                                                               !! named fields used for passive tracer fluxes.
@@ -197,6 +189,8 @@ type, public :: ice_ocean_boundary_type
                                                               !! flux-exchange code, based on what the sea-ice
                                                               !! model is providing.  Otherwise, the value from
                                                               !! the surface_forcing_CS is used.
+
+  type(marbl_ice_ocean_boundary_type), pointer :: MARBL_IOB => NULL() !< Structure containing IOB fields only needed by MARBL
 end type ice_ocean_boundary_type
 
 integer :: id_clock_forcing
@@ -258,8 +252,6 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   real :: kg_m2_s_conversion  !< A combination of unit conversion factors for rescaling
                               !! mass fluxes [R Z s m2 kg-1 T-1 ~> 1].
-  real :: ndep_conversion     !< Combination of unit conversion factors for rescaling
-                              !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
   real :: C_p                 !< heat capacity of seawater [J kg-1 degC-1]
   real :: sign_for_net_FW_bug !< Should be +1. but an old bug can be recovered by using -1.
 
@@ -274,7 +266,6 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   isr = is-isd+1 ; ier  = ie-isd+1 ; jsr = js-jsd+1 ; jer = je-jsd+1
 
   kg_m2_s_conversion = US%kg_m2s_to_RZ_T
-  ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
   C_p                    = US%Q_to_J_kg*fluxes%C_p
   open_ocn_mask(:,:)     = 1.0
   pme_adj(:,:)           = 0.0
@@ -328,13 +319,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
 
-    allocate(fluxes%MARBL_forcing)
-    call safe_alloc_ptr(fluxes%MARBL_forcing%noy_dep,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%MARBL_forcing%nhx_dep,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%MARBL_forcing%dust_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%MARBL_forcing%iron_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%MARBL_forcing%ice_fraction,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%MARBL_forcing%u10_sqr,isd,ied,jsd,jed)
+    call marbl_forcing_type_init(isd,ied,jsd,jed,fluxes%MARBL_forcing)
 
   endif   ! endif for allocation and initialization
 
@@ -544,60 +529,12 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     fluxes%sw(i,j) = fluxes%sw_vis_dir(i,j) + fluxes%sw_vis_dif(i,j) + &
                      fluxes%sw_nir_dir(i,j) + fluxes%sw_nir_dif(i,j)
 
-    if (associated(IOB%atm_fine_dust_flux)) then
-      fluxes%MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (IOB%atm_fine_dust_flux(i-i0,j-j0) + &
-                                  IOB%atm_coarse_dust_flux(i-i0,j-j0) + IOB%seaice_dust_flux(i-i0,j-j0))
-    end if
-
-    if (associated(IOB%atm_bc_flux)) then
-      ! Contribution of atmospheric dust to iron flux
-      fluxes%MARBL_forcing%iron_flux(i,j) = (CS%marbl_forcing_CSp%fe_bioavail_frac_offset * &
-                               (CS%marbl_forcing_CSp%iron_frac_in_atm_fine_dust * IOB%atm_fine_dust_flux(i-i0,j-j0) + &
-                                CS%marbl_forcing_CSp%iron_frac_in_atm_coarse_dust * IOB%atm_coarse_dust_flux(i-i0,j-j0)))
-      ! Contribution of atmospheric black carbon to iron flux
-      fluxes%MARBL_forcing%iron_flux(i,j) = fluxes%MARBL_forcing%iron_flux(i,j) + (CS%marbl_forcing_CSp%atm_bc_fe_bioavail_frac * &
-                               (CS%marbl_forcing_CSp%atm_fe_to_bc_ratio * IOB%atm_bc_flux(i-i0,j-j0)))
-      ! Contribution of seaice dust to iron flux
-      fluxes%MARBL_forcing%iron_flux(i,j) = fluxes%MARBL_forcing%iron_flux(i,j) + (CS%marbl_forcing_CSp%fe_bioavail_frac_offset * &
-                               (CS%marbl_forcing_CSp%iron_frac_in_seaice_dust * IOB%seaice_dust_flux(i-i0,j-j0)))
-      ! Contribution of seaice black carbon to iron flux
-      fluxes%MARBL_forcing%iron_flux(i,j) = fluxes%MARBL_forcing%iron_flux(i,j) + (CS%marbl_forcing_CSp%seaice_bc_fe_bioavail_frac * &
-                               (CS%marbl_forcing_CSp%seaice_fe_to_bc_ratio * IOB%seaice_bc_flux(i-i0,j-j0)))
-      ! Unit conversion
-      fluxes%MARBL_forcing%iron_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * fluxes%MARBL_forcing%iron_flux(i,j)
-    end if
-
-    if (associated(IOB%ice_fraction)) then
-      fluxes%MARBL_forcing%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
-    end if
-
-    if (associated(IOB%u10_sqr)) then
-      fluxes%MARBL_forcing%u10_sqr(i,j) = G%mask2dT(i,j) * US%m_s_to_L_T**2 * IOB%u10_sqr(i-i0,j-j0)
-    end if
-
   enddo; enddo
 
-  ! TODO: call set_marbl_forcing() [or whatever it gets named] here
+  ! Copy MARBL-specific IOB fields into fluxes%MARBL_forcing
+  call convert_marbl_IOB_to_forcings(IOB%MARBL_IOB, Time, G, US, i0, j0, fluxes%MARBL_forcing, CS%marbl_forcing_CSp)
 
-  ! TODO: we only want to call read_data if MARBL is active
-  ! ALTERNATE TODO: bring this into set_marbl_forcing(),
-  !                 which should only be called when MARBL is active
-  if (CS%marbl_forcing_CSp%read_ndep) then
-    call time_interp_external(CS%marbl_forcing_CSp%id_noydep,Time,data_restore)
-    fluxes%MARBL_forcing%noy_dep = ndep_conversion * data_restore
-    call time_interp_external(CS%marbl_forcing_CSp%id_nhxdep,Time,data_restore)
-    fluxes%MARBL_forcing%nhx_dep = ndep_conversion * data_restore
-    do j=js,je ; do i=is,ie
-      fluxes%MARBL_forcing%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%MARBL_forcing%noy_dep(i,j)
-      fluxes%MARBL_forcing%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%MARBL_forcing%nhx_dep(i,j)
-    enddo; enddo
-  else
-    ! This is temporary while I test the file we created
-    fluxes%MARBL_forcing%noy_dep(:,:) = 0.
-    fluxes%MARBL_forcing%nhx_dep(:,:) = 0.
-  endif
-
-! applied surface pressure from atmosphere and cryosphere
+  ! applied surface pressure from atmosphere and cryosphere
   if (associated(IOB%p)) then
      if (CS%max_p_surf >= 0.0) then
         do j=js,je ; do i=is,ie
@@ -1368,7 +1305,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
     call data_override_init(Ocean_domain_in=G%Domain%mpp_domain)
   endif
 
-  ! Set up MARBL forcing
+  ! Set up MARBL forcing control structure
   call marbl_forcing_init(G, param_file, CS%inputdir, CS%marbl_forcing_CSp)
 
   if (present(restore_salt)) then ; if (restore_salt) then
