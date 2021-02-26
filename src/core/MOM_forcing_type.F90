@@ -23,6 +23,8 @@ use coupler_types_mod, only : coupler_2d_bc_type, coupler_type_spawn
 use coupler_types_mod, only : coupler_type_increment_data, coupler_type_initialized
 use coupler_types_mod, only : coupler_type_copy_data, coupler_type_destructor
 
+use marbl_forcing_type_main, only : marbl_forcing_type
+
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -167,13 +169,7 @@ type, public :: forcing
   real, pointer, dimension(:,:) :: iceshelf_melt => NULL() !< Ice shelf melt rate (positive)
                                  !! or freezing (negative) [R Z T-1 ~> kg m-2 s-1]
 
-  ! forcing fields brought in for MARBL
-  real, pointer, dimension(:,:) :: noy_dep => NULL() !> NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
-  real, pointer, dimension(:,:) :: nhx_dep => NULL() !> NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
-  real, pointer, dimension(:,:) :: dust_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
-  real, pointer, dimension(:,:) :: iron_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
-  real, pointer, dimension(:,:) :: ice_fraction => NULL() !< Fraction of ocean cell under seaice [m2 m-2]
-  real, pointer, dimension(:,:) :: u10_sqr => NULL() !< 10m wind speed squared [L2 T-2 ~> m2 s-2]
+  type(marbl_forcing_type), pointer :: MARBL_forcing => NULL() !< forcing fields needed if MARBL is active
 
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj = 0.     !< adjustment to restoring vprec to zero out global net [kg m-2 s-1]

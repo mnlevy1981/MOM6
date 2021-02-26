@@ -705,9 +705,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !             How does MOM pass SST and SSS to GFDL coupler? (look in core.F90?)
       if (CS%sss_ind > 0) MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
       if (CS%sst_ind > 0) MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
-      if (CS%ifrac_ind > 0) MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
+      if (CS%ifrac_ind > 0) MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%MARBL_forcing%ice_fraction(i,j)
       ! MARBL wants u10_sqr in (cm/s)^2
-      if (CS%u10_sqr_ind > 0) MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (US%L_t_to_m_s * cm_per_m)**2
+      if (CS%u10_sqr_ind > 0) MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%MARBL_forcing%u10_sqr(i,j) * (US%L_t_to_m_s * cm_per_m)**2
       ! mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
       if (CS%atmpress_ind > 0) MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
@@ -718,12 +718,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%xco2_alt_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = CS%atm_alt_co2_const
 
       !       These are okay, but need option to read in from file
-      if (CS%dust_dep_ind > 0) MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
-      if (CS%fe_dep_ind > 0) MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%dust_dep_ind > 0) MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%fe_dep_ind > 0) MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
       !       These are read from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc
-      if (CS%nox_flux_ind > 0) MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
-      if (CS%nhy_flux_ind > 0) MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
+      if (CS%nox_flux_ind > 0) MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%noy_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
+      if (CS%nhy_flux_ind > 0) MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%nhx_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
 
       !     * tracers at surface
       !       TODO: average over some shallow depth (e.g. 5m)
@@ -831,7 +831,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !       This are okay, but need option to read in from file
       !       (Same as dust_dep_ind for surface_flux_forcings)
-      if (CS%dustflux_ind > 0) MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = fluxes%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%dustflux_ind > 0) MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
       !        TODO: Support PAR (currently just using single subcolumn)
       !              (Look for Pen_sw_bnd?)

@@ -39,6 +39,8 @@ use time_interp_external_mod, only : init_external_field, time_interp_external
 use time_interp_external_mod, only : time_interp_external_init
 use MOM_io,               only: stdout
 
+use marbl_forcing_type_main, only : marbl_forcing_CS, marbl_forcing_init
+
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -115,19 +117,6 @@ type, public :: surface_forcing_CS ; private
 
   real    :: ice_salt_concentration         !< salt concentration for sea ice [kg/kg]
 
-  logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
-                                            !! This is temporary, we will always read NDEP
-  character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
-  real    :: dust_ratio_to_fe_bioavail_frac !< TODO: Add description
-  real    :: fe_bioavail_frac_offset        !< TODO: Add description
-  real    :: atm_fe_to_bc_ratio             !< TODO: Add description
-  real    :: atm_bc_fe_bioavail_frac        !< TODO: Add description
-  real    :: seaice_fe_to_bc_ratio          !< TODO: Add description
-  real    :: seaice_bc_fe_bioavail_frac     !< TODO: Add description
-  real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
-  real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
-  real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
-
   logical :: mask_srestore_marginal_seas    !< if true, then mask SSS restoring in marginal seas
   real    :: max_delta_srestore             !< maximum delta salinity used for restoring
   real    :: max_delta_trestore             !< maximum delta sst used for restoring
@@ -152,12 +141,12 @@ type, public :: surface_forcing_CS ; private
   real, pointer, dimension(:,:) :: trestore_mask => NULL() !< mask for SST restoring
   integer :: id_srestore = -1     !< id number for time_interp_external.
   integer :: id_trestore = -1     !< id number for time_interp_external.
-  integer :: id_noydep   = -1     !< id number for time_interp_external.
-  integer :: id_nhxdep   = -1     !< id number for time_interp_external.
 
   type(forcing_diags), public :: handles !< diagnostics handles
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< restart pointer
   type(user_revise_forcing_CS), pointer :: urf_CS => NULL() !< user revise pointer
+
+  type(marbl_forcing_CS), pointer :: marbl_forcing_CSp => NULL() !< parameters for getting MARBL forcing
 end type surface_forcing_CS
 
 !> Structure corresponding to forcing, but with the elements, units, and conventions
@@ -339,12 +328,13 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
 
-    call safe_alloc_ptr(fluxes%noy_dep,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%nhx_dep,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%dust_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%iron_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%ice_fraction,isd,ied,jsd,jed)
-    call safe_alloc_ptr(fluxes%u10_sqr,isd,ied,jsd,jed)
+    allocate(fluxes%MARBL_forcing)
+    call safe_alloc_ptr(fluxes%MARBL_forcing%noy_dep,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%MARBL_forcing%nhx_dep,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%MARBL_forcing%dust_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%MARBL_forcing%iron_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%MARBL_forcing%ice_fraction,isd,ied,jsd,jed)
+    call safe_alloc_ptr(fluxes%MARBL_forcing%u10_sqr,isd,ied,jsd,jed)
 
   endif   ! endif for allocation and initialization
 
@@ -555,34 +545,34 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
                      fluxes%sw_nir_dir(i,j) + fluxes%sw_nir_dif(i,j)
 
     if (associated(IOB%atm_fine_dust_flux)) then
-      fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+      fluxes%MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (IOB%atm_fine_dust_flux(i-i0,j-j0) + &
                                   IOB%atm_coarse_dust_flux(i-i0,j-j0) + IOB%seaice_dust_flux(i-i0,j-j0))
     end if
 
     if (associated(IOB%atm_bc_flux)) then
       ! Contribution of atmospheric dust to iron flux
-      fluxes%iron_flux(i,j) = (CS%fe_bioavail_frac_offset * &
-                               (CS%iron_frac_in_atm_fine_dust * IOB%atm_fine_dust_flux(i-i0,j-j0) + &
-                                CS%iron_frac_in_atm_coarse_dust * IOB%atm_coarse_dust_flux(i-i0,j-j0)))
+      fluxes%MARBL_forcing%iron_flux(i,j) = (CS%marbl_forcing_CSp%fe_bioavail_frac_offset * &
+                               (CS%marbl_forcing_CSp%iron_frac_in_atm_fine_dust * IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+                                CS%marbl_forcing_CSp%iron_frac_in_atm_coarse_dust * IOB%atm_coarse_dust_flux(i-i0,j-j0)))
       ! Contribution of atmospheric black carbon to iron flux
-      fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
-                               (CS%atm_fe_to_bc_ratio * IOB%atm_bc_flux(i-i0,j-j0)))
+      fluxes%MARBL_forcing%iron_flux(i,j) = fluxes%MARBL_forcing%iron_flux(i,j) + (CS%marbl_forcing_CSp%atm_bc_fe_bioavail_frac * &
+                               (CS%marbl_forcing_CSp%atm_fe_to_bc_ratio * IOB%atm_bc_flux(i-i0,j-j0)))
       ! Contribution of seaice dust to iron flux
-      fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%fe_bioavail_frac_offset * &
-                               (CS%iron_frac_in_seaice_dust * IOB%seaice_dust_flux(i-i0,j-j0)))
+      fluxes%MARBL_forcing%iron_flux(i,j) = fluxes%MARBL_forcing%iron_flux(i,j) + (CS%marbl_forcing_CSp%fe_bioavail_frac_offset * &
+                               (CS%marbl_forcing_CSp%iron_frac_in_seaice_dust * IOB%seaice_dust_flux(i-i0,j-j0)))
       ! Contribution of seaice black carbon to iron flux
-      fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
-                               (CS%seaice_fe_to_bc_ratio * IOB%seaice_bc_flux(i-i0,j-j0)))
+      fluxes%MARBL_forcing%iron_flux(i,j) = fluxes%MARBL_forcing%iron_flux(i,j) + (CS%marbl_forcing_CSp%seaice_bc_fe_bioavail_frac * &
+                               (CS%marbl_forcing_CSp%seaice_fe_to_bc_ratio * IOB%seaice_bc_flux(i-i0,j-j0)))
       ! Unit conversion
-      fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * fluxes%iron_flux(i,j)
+      fluxes%MARBL_forcing%iron_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * fluxes%MARBL_forcing%iron_flux(i,j)
     end if
 
     if (associated(IOB%ice_fraction)) then
-      fluxes%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
+      fluxes%MARBL_forcing%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
     end if
 
     if (associated(IOB%u10_sqr)) then
-      fluxes%u10_sqr(i,j) = G%mask2dT(i,j) * US%m_s_to_L_T**2 * IOB%u10_sqr(i-i0,j-j0)
+      fluxes%MARBL_forcing%u10_sqr(i,j) = G%mask2dT(i,j) * US%m_s_to_L_T**2 * IOB%u10_sqr(i-i0,j-j0)
     end if
 
   enddo; enddo
@@ -592,19 +582,19 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   ! TODO: we only want to call read_data if MARBL is active
   ! ALTERNATE TODO: bring this into set_marbl_forcing(),
   !                 which should only be called when MARBL is active
-  if (CS%read_ndep) then
-    call time_interp_external(CS%id_noydep,Time,data_restore)
-    fluxes%noy_dep = ndep_conversion * data_restore
-    call time_interp_external(CS%id_nhxdep,Time,data_restore)
-    fluxes%nhx_dep = ndep_conversion * data_restore
+  if (CS%marbl_forcing_CSp%read_ndep) then
+    call time_interp_external(CS%marbl_forcing_CSp%id_noydep,Time,data_restore)
+    fluxes%MARBL_forcing%noy_dep = ndep_conversion * data_restore
+    call time_interp_external(CS%marbl_forcing_CSp%id_nhxdep,Time,data_restore)
+    fluxes%MARBL_forcing%nhx_dep = ndep_conversion * data_restore
     do j=js,je ; do i=is,ie
-      fluxes%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%noy_dep(i,j)
-      fluxes%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%nhx_dep(i,j)
+      fluxes%MARBL_forcing%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%MARBL_forcing%noy_dep(i,j)
+      fluxes%MARBL_forcing%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%MARBL_forcing%nhx_dep(i,j)
     enddo; enddo
   else
     ! This is temporary while I test the file we created
-    fluxes%noy_dep(:,:) = 0.
-    fluxes%nhx_dep(:,:) = 0.
+    fluxes%MARBL_forcing%noy_dep(:,:) = 0.
+    fluxes%MARBL_forcing%nhx_dep(:,:) = 0.
   endif
 
 ! applied surface pressure from atmosphere and cryosphere
@@ -1196,25 +1186,6 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                  "limited by max_p_surf instead of the full atmospheric "//&
                  "pressure.", default=.true.)
 
-  call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
-                 "TODO: Add description", default=1./170.)
-  call get_param(param_file, mdl, "FE_BIOAVAIL_FRAC_OFFSET", CS%fe_bioavail_frac_offset, &
-                 "TODO: Add description", default=0.01)
-  call get_param(param_file, mdl, "ATM_FE_TO_BC_RATIO", CS%atm_fe_to_bc_ratio, &
-                 "TODO: Add description", default=1.)
-  call get_param(param_file, mdl, "ATM_BC_FE_BIOAVAIL_FRAC", CS%atm_bc_fe_bioavail_frac, &
-                 "TODO: Add description", default=0.06)
-  call get_param(param_file, mdl, "SEAICE_FE_TO_BC_RATIO", CS%seaice_fe_to_bc_ratio, &
-                 "TODO: Add description", default=1.)
-  call get_param(param_file, mdl, "SEAICE_BC_FE_BIOAVAIL_FRAC", CS%seaice_bc_fe_bioavail_frac, &
-                 "TODO: Add description", default=0.06)
-  call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_FINE_DUST", CS%iron_frac_in_atm_fine_dust, &
-                 "Fraction of fine dust from the atmosphere that is iron", default=0.035)
-  call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_COARSE_DUST", CS%iron_frac_in_atm_coarse_dust, &
-                 "Fraction of coarse dust from the atmosphere that is iron", default=0.035)
-  call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
-                 "Fraction of dust from sea ice that is iron", default=0.035)
-
   call get_param(param_file, mdl, "WIND_STAGGER", stagger, &
                  "A case-insensitive character string to indicate the "//&
                  "staggering of the input wind stress field.  Valid "//&
@@ -1398,21 +1369,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   endif
 
   ! Set up MARBL forcing
-  call get_param(param_file, mdl, "READ_NDEP", CS%read_ndep, &
-                 "If true, use nitrogen deposition supplied from "//&
-                 "an input file", default=.true.)
-  if (CS%read_ndep) then
-    ! TODO: we only want to read this variable in when running with MARBL
-    call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
-                   "The file in which the nitrogen deposition is found in "//&
-                   "variables NOy_deposition and NHx_deposition.", &
-                   default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc')
-    ! CS%ndep_file = trim(CS%inputdir) // trim(CS%ndep_file)
-    CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
-    CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
-    CS%id_nhxdep = init_external_field(CS%ndep_file, 'NDEP_NHx_month', domain=G%Domain%mpp_domain)
-  end if
-
+  call marbl_forcing_init(G, param_file, CS%inputdir, CS%marbl_forcing_CSp)
 
   if (present(restore_salt)) then ; if (restore_salt) then
     salt_file = trim(CS%inputdir) // trim(CS%salt_restore_file)
