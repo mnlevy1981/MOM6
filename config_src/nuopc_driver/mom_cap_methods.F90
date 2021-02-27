@@ -302,6 +302,43 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
        file=__FILE__)) &
        return  ! bail out
 
+  ! MARBL fields
+
+  !----
+  ! ice fraction
+  !----
+  ice_ocean_boundary%MARBL_IOB%ice_fraction(:,:) = 0._ESMF_KIND_R8
+  call state_getimport(importState, 'Si_ifrac',  &
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%ice_fraction, rc=rc)
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+       line=__LINE__, &
+       file=__FILE__)) &
+       return  ! bail out
+
+  !----
+  ! 10m wind squared
+  !----
+  ice_ocean_boundary%MARBL_IOB%u10_sqr(:,:) = 0._ESMF_KIND_R8
+  call state_getimport(importState, 'So_duu10n',  &
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%u10_sqr, rc=rc)
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+       line=__LINE__, &
+       file=__FILE__)) &
+       return  ! bail out
+
+  !----
+  ! seaice_dust_flux is a single field from the coupler
+  ! atm_fine_dust_flux, atm_coarse_dust_flux, atm_bc_flux, and seaice_bc_flux
+  ! are all sums of multiple fields and will be treated slightly differently
+  !----
+  ice_ocean_boundary%MARBL_IOB%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
+  call state_getimport(importState, 'Fioi_flxdst',  &
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_dust_flux, rc=rc)
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+       line=__LINE__, &
+       file=__FILE__)) &
+       return  ! bail out
+
 end subroutine mom_import
 
 !> Maps outgoing ocean data to ESMF State

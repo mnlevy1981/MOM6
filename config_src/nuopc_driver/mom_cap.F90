@@ -40,6 +40,7 @@ use MOM_cap_methods,          only: mom_import, mom_export, mom_set_geomtype
 use shr_file_mod,             only: shr_file_setLogUnit, shr_file_getLogUnit
 #endif
 use time_utils_mod,           only: esmf2fms_time
+use marbl_forcing_type_main, only: marbl_iob_allocate
 
 use, intrinsic :: iso_fortran_env, only: output_unit
 
@@ -754,6 +755,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   Ice_ocean_boundary%lrunoff         = 0.0
   Ice_ocean_boundary%frunoff         = 0.0
 
+  call marbl_iob_allocate(isc, iec, jsc, jec, Ice_ocean_boundary%MARBL_IOB)
+
   ocean_internalstate%ptr%ocean_state_type_ptr => ocean_state
   call ESMF_GridCompSetInternalState(gcomp, ocean_internalstate, rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
@@ -797,6 +800,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_rofi"                  , "will provide") !-> ice runoff
   call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_fresh_water_to_ocean_rate", "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "net_heat_flx_to_ocn"        , "will provide")
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac"                   , "will provide") !-> ice runoff
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "So_duu10n"                  , "will provide") !-> ice runoff
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_flxdst"                , "will provide") !-> ice runoff
   !These are not currently used and changing requires a nuopc dictionary change
   !call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_runoff_heat_flx"        , "will provide")
   !call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_calving_heat_flx"       , "will provide")
