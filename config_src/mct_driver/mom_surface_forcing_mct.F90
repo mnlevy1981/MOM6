@@ -38,8 +38,8 @@ use mpp_mod,              only : mpp_chksum
 use time_interp_external_mod, only : init_external_field, time_interp_external
 use time_interp_external_mod, only : time_interp_external_init
 use MOM_io,               only: stdout
-use marbl_forcing_type_main, only : marbl_forcing_CS, marbl_forcing_init, marbl_forcing_type_init
-use marbl_forcing_type_main, only : marbl_ice_ocean_boundary_type, convert_marbl_IOB_to_forcings
+use marbl_forcing_type_mod, only : marbl_forcing_CS, marbl_forcing_init, marbl_forcing_type_init
+use marbl_forcing_type_mod, only : marbl_ice_ocean_boundary_type, convert_marbl_IOB_to_forcings
 
 implicit none ; private
 

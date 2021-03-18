@@ -40,7 +40,7 @@ use MOM_cap_methods,          only: mom_import, mom_export, mom_set_geomtype
 use shr_file_mod,             only: shr_file_setLogUnit, shr_file_getLogUnit
 #endif
 use time_utils_mod,           only: esmf2fms_time
-use marbl_forcing_type_main, only: marbl_iob_allocate
+use marbl_forcing_type_mod,   only: marbl_iob_allocate
 
 use, intrinsic :: iso_fortran_env, only: output_unit
 

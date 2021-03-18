@@ -23,7 +23,7 @@ use coupler_types_mod, only : coupler_2d_bc_type, coupler_type_spawn
 use coupler_types_mod, only : coupler_type_increment_data, coupler_type_initialized
 use coupler_types_mod, only : coupler_type_copy_data, coupler_type_destructor
 
-use marbl_forcing_type_main, only : marbl_forcing_type
+use marbl_forcing_type_mod, only : marbl_forcing_type
 
 implicit none ; private
 

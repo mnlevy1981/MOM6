@@ -44,7 +44,7 @@ use MOM_domains,          only: AGRID, BGRID_NE, CGRID_NE, pass_vector
 use mpp_domains_mod,      only: mpp_get_compute_domain
 use MOM_io,               only: stdout
 
-use marbl_forcing_type_main, only: marbl_iob_allocate
+use marbl_forcing_type_mod, only: marbl_iob_allocate
 
 ! Previously inlined - now in separate modules
 use MOM_ocean_model_mct,     only: ocean_public_type, ocean_state_type

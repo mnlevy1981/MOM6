@@ -98,7 +98,7 @@ type, public :: MARBL_tracers_CS ; private
   !! because we already copy data into CS%STF; latter requires copying data and indices
   !! so currently using temp_MARBL_diag for that.
   integer, allocatable :: id_surface_flux_out(:)
-  type(temp_MARBL_diag), allocatable :: interior_tendency_out(:)
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out(:), interior_tendency_out_zint(:), interior_tendency_out_zint_100m(:)
 
   !> Surface fluxes returned from MARBL and passed to tracer_vertdiff
   !! tracer_vertdiff expects units concentrations times meters per second,
@@ -445,7 +445,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
 ! Local variables
   character(len=48) :: name       ! A variable's name in a NetCDF file.
-  character(len=72) :: longname   ! The long name of that variable.
+  character(len=100) :: longname   ! The long name of that variable.
   character(len=48) :: units      ! The units of the variable.
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
                                   ! years m3 s-1 or years kg s-1.
@@ -469,6 +469,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   call register_MARBL_diags(MARBL_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
   allocate(CS%id_surface_flux_out(CS%ntr))
   allocate(CS%interior_tendency_out(CS%ntr))
+  allocate(CS%interior_tendency_out_zint(CS%ntr))
+  allocate(CS%interior_tendency_out_zint_100m(CS%ntr))
   do m=1,CS%ntr
     write(name, "(2A)") "STF_", trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), " Surface Flux"
@@ -492,6 +494,34 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
     if (CS%interior_tendency_out(m)%id > 0) then
       allocate(CS%interior_tendency_out(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
       CS%interior_tendency_out(m)%field_3d(:,:,:) = 0.
+    end if
+
+    write(name, "(2A)") "Jint_", trim(MARBL_instances%tracer_metadata(m)%short_name)
+    write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), " Source Sink Term Vertical Integral"
+    write(units, "(2A)") trim(MARBL_instances%tracer_metadata(m)%units), " m/s"
+    CS%interior_tendency_out_zint(m)%id = register_diag_field("ocean_model", &
+                                                              trim(name), &
+                                                              diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                              day, &
+                                                              trim(longname), &
+                                                              trim(units))
+    if (CS%interior_tendency_out_zint(m)%id > 0) then
+      allocate(CS%interior_tendency_out_zint(m)%field_2d(SZI_(G),SZJ_(G)))
+      CS%interior_tendency_out_zint(m)%field_2d(:,:) = 0.
+    end if
+
+    write(name, "(2A)") "Jint_100m_", trim(MARBL_instances%tracer_metadata(m)%short_name)
+    write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), " Source Sink Term Vertical Integral, 0-100m"
+    write(units, "(2A)") trim(MARBL_instances%tracer_metadata(m)%units), " m/s"
+    CS%interior_tendency_out_zint_100m(m)%id = register_diag_field("ocean_model", &
+                                                                   trim(name), &
+                                                                   diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                                   day, &
+                                                                   trim(longname), &
+                                                                   trim(units))
+    if (CS%interior_tendency_out_zint_100m(m)%id > 0) then
+      allocate(CS%interior_tendency_out_zint_100m(m)%field_2d(SZI_(G),SZJ_(G)))
+      CS%interior_tendency_out_zint_100m(m)%field_2d(:,:) = 0.
     end if
 
   end do
@@ -921,13 +951,35 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           end if
         end if
       end do
-      !     * tendency values themselves
+      !     * tendency values themselves (and vertical integrals of them)
       do m=1,CS%ntr
         if (allocated(CS%interior_tendency_out(m)%field_3d)) then
           CS%interior_tendency_out(m)%field_3d(i,j,1:kmt) = G%mask2dT(i,j)*MARBL_instances%interior_tendencies(m,1:kmt)
           if (kmt < GV%ke) then
             CS%interior_tendency_out(m)%field_3d(i,j,kmt+1:GV%ke) = 0.
           end if
+        end if
+
+        if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) then
+          CS%interior_tendency_out_zint(m)%field_2d(i,j) = 0.
+          do k=1,kmt
+            CS%interior_tendency_out_zint(m)%field_2d(i,j) = CS%interior_tendency_out_zint(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
+          end do
+          CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j)*CS%interior_tendency_out_zint(m)%field_2d(i,j)
+        end if
+
+        if (allocated(CS%interior_tendency_out_zint_100m(m)%field_2d)) then
+          CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = 0.
+          do k=1,kmt
+            if (zi(k) < 100.) then
+              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
+            else if (zi(k-1) < 100.) then
+              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * MARBL_instances%interior_tendencies(m,k)
+            else
+              exit
+            end if
+          end do
+          CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = G%mask2dT(i,j)*CS%interior_tendency_out_zint_100m(m)%field_2d(i,j)
         end if
       end do
 
@@ -952,6 +1004,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   do m=1,CS%ntr
     if (allocated(CS%interior_tendency_out(m)%field_3d)) &
       call post_data(CS%interior_tendency_out(m)%id, CS%interior_tendency_out(m)%field_3d(:,:,:), CS%diag)
+    if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) &
+      call post_data(CS%interior_tendency_out_zint(m)%id, CS%interior_tendency_out_zint(m)%field_2d(:,:), CS%diag)
+    if (allocated(CS%interior_tendency_out_zint_100m(m)%field_2d)) &
+      call post_data(CS%interior_tendency_out_zint_100m(m)%id, CS%interior_tendency_out_zint_100m(m)%field_2d(:,:), CS%diag)
   end do
 
 

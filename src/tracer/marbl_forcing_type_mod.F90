@@ -1,4 +1,8 @@
-module marbl_forcing_type_main
+module marbl_forcing_type_mod
+
+!! This module exists to house code used by multiple drivers in config_src/
+!! for passing forcing fields to MARBL
+!! (This comment can go in the wiki on the NCAR fork?)
 
 use MOM_diag_mediator,        only : safe_alloc_ptr, time_type
 use MOM_error_handler,        only : MOM_error, WARNING
@@ -231,4 +235,4 @@ contains
 
   end subroutine convert_marbl_IOB_to_forcings
 
-end module marbl_forcing_type_main
+end module marbl_forcing_type_mod
