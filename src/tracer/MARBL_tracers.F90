@@ -464,9 +464,11 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr))
   CS%STF(:,:,:) = 0.
 
-  ! Register diagnostics (surface flux first, then interior tendency)
+  ! Register diagnostics returned from MARBL (surface flux first, then interior tendency)
   call register_MARBL_diags(MARBL_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
   call register_MARBL_diags(MARBL_instances%interior_tendency_diags, diag, day, G, CS%interior_tendency_diags)
+
+  ! Register per-tracer diagnostics computed from MARBL surface flux / interior tendency values
   allocate(CS%id_surface_flux_out(CS%ntr))
   allocate(CS%interior_tendency_out(CS%ntr))
   allocate(CS%interior_tendency_out_zint(CS%ntr))

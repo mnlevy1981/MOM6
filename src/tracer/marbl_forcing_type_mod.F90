@@ -4,7 +4,7 @@ module marbl_forcing_type_mod
 !! for passing forcing fields to MARBL
 !! (This comment can go in the wiki on the NCAR fork?)
 
-use MOM_diag_mediator,        only : safe_alloc_ptr, time_type
+use MOM_diag_mediator,        only : safe_alloc_ptr, time_type, diag_ctrl, register_diag_field, post_data
 use MOM_error_handler,        only : MOM_error, WARNING
 use MOM_file_parser,          only : get_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
@@ -14,6 +14,12 @@ use time_interp_external_mod, only : init_external_field, time_interp_external
 implicit none ; private
 
 #include <MOM_memory.h>
+
+!> Contains ids for the three fields comprising MARBL's dust flux
+!! and the two fields comprising black carbon flux (used to compute iron flux)
+type, private :: marbl_forcing_diag_ids
+  integer :: atm_fine_dust, atm_coarse_dust, atm_bc, ice_dust, ice_bc
+end type marbl_forcing_diag_ids
 
 !> Contains pointers to the forcing fields needed to drive MARBL
 type, public :: marbl_forcing_type
@@ -29,6 +35,9 @@ type, public :: marbl_forcing_CS
   logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
                                             !! This is temporary, we will always read NDEP
   character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
+  type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
+                                             !! regulate the timing of diagnostic output.
+
   real    :: dust_ratio_to_fe_bioavail_frac !< TODO: Add description
   real    :: fe_bioavail_frac_offset        !< TODO: Add description
   real    :: atm_fe_to_bc_ratio             !< TODO: Add description
@@ -38,6 +47,9 @@ type, public :: marbl_forcing_CS
   real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
   real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
   real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
+
+  type(marbl_forcing_diag_ids) :: diag_ids  !< used for registering and posting some MARBL forcing fields as diagnostics
+
 
   integer :: id_noydep   = -1     !< id number for time_interp_external.
   integer :: id_nhxdep   = -1     !< id number for time_interp_external.
@@ -61,9 +73,11 @@ public :: convert_marbl_IOB_to_forcings
 
 contains
 
-  subroutine marbl_forcing_init(G, param_file, inputdir, CS)
+  subroutine marbl_forcing_init(G, param_file, diag, day, inputdir, CS)
     type(ocean_grid_type),           intent(in)    :: G           !< The ocean's grid structure
     type(param_file_type),           intent(in)    :: param_file  !< A structure to parse for run-time parameters
+    type(diag_ctrl), target,         intent(in)    :: diag        !< Structure used to regulate diagnostic output.
+    type(time_type), target,         intent(in)    :: day         !< Time of the start of the run.
     character(len=*),                intent(in)    :: inputdir    !< Directory containing input files
     type(marbl_forcing_CS), pointer, intent(inout) :: CS          !< A pointer that is set to point to control
                                                                   !! structure for MARBL forcing
@@ -77,6 +91,8 @@ contains
     endif
 
     allocate(CS)
+    CS%diag => diag
+
     call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
     "TODO: Add description", default=1./170.)
     call get_param(param_file, mdl, "FE_BIOAVAIL_FRAC_OFFSET", CS%fe_bioavail_frac_offset, &
@@ -110,6 +126,40 @@ contains
       CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
       CS%id_nhxdep = init_external_field(CS%ndep_file, 'NDEP_NHx_month', domain=G%Domain%mpp_domain)
     end if
+
+    ! Register diagnostic fields for outputing forcing values
+    CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", &
+                                                    "ATM_FINE_DUST_FLUX_CPL", &
+                                                    CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                    day, &
+                                                    "ATM_FINE_DUST_FLUX from cpl", &
+                                                    "kg/m^2/s")
+    CS%diag_ids%atm_coarse_dust = register_diag_field("ocean_model", &
+                                                      "ATM_COARSE_DUST_FLUX_CPL", &
+                                                      CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                      day, &
+                                                      "ATM_COARSE_DUST_FLUX from cpl", &
+                                                      "kg/m^2/s")
+    CS%diag_ids%atm_bc = register_diag_field("ocean_model", &
+                                             "ATM_BLACK_CARBON_FLUX_CPL", &
+                                             CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                             day, &
+                                             "ATM_BLACK_CARBON_FLUX from cpl", &
+                                             "kg/m^2/s")
+
+    CS%diag_ids%ice_dust = register_diag_field("ocean_model", &
+                                               "SEAICE_DUST_FLUX_CPL", &
+                                               CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                               day, &
+                                               "SEAICE_DUST_FLUX from cpl", &
+                                               "kg/m^2/s")
+    CS%diag_ids%ice_bc = register_diag_field("ocean_model", &
+                                             "SEAICE_BLACK_CARBON_FLUX_CPL", &
+                                             CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                             day, &
+                                             "SEAICE_BLACK_CARBON_FLUX from cpl", &
+                                             "kg/m^2/s")
+
   end subroutine marbl_forcing_init
 
   subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing)
@@ -185,8 +235,22 @@ contains
     ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
     kg_m2_s_conversion = US%kg_m2s_to_RZ_T
 
+    ! Post fields from coupler to diagnostics
+    ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
+    if (CS%diag_ids%atm_fine_dust > 0) &
+      call post_data(CS%diag_ids%atm_fine_dust, kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+    if (CS%diag_ids%atm_coarse_dust > 0) &
+      call post_data(CS%diag_ids%atm_coarse_dust, kg_m2_s_conversion * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+    if (CS%diag_ids%atm_bc > 0) &
+      call post_data(CS%diag_ids%atm_bc, kg_m2_s_conversion * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+    if (CS%diag_ids%ice_dust > 0) &
+      call post_data(CS%diag_ids%ice_dust, kg_m2_s_conversion * MARBL_IOB%seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+    if (CS%diag_ids%ice_bc > 0) &
+      call post_data(CS%diag_ids%ice_bc, kg_m2_s_conversion * MARBL_IOB%seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+
     do j=js,je ; do i=is,ie
       if (associated(MARBL_IOB%atm_fine_dust_flux)) then
+        ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
         MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
                                         MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) + MARBL_IOB%seaice_dust_flux(i-i0,j-j0))
       end if
