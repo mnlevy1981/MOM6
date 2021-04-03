@@ -6,7 +6,7 @@ module marbl_forcing_type_mod
 
 use MOM_diag_mediator,        only : safe_alloc_ptr, time_type, diag_ctrl, register_diag_field, post_data
 use MOM_error_handler,        only : MOM_error, WARNING
-use MOM_file_parser,          only : get_param, param_file_type
+use MOM_file_parser,          only : get_param, log_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
 use MOM_unit_scaling,         only : unit_scale_type
 use time_interp_external_mod, only : init_external_field, time_interp_external
@@ -15,10 +15,24 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-!> Contains ids for the three fields comprising MARBL's dust flux
-!! and the two fields comprising black carbon flux (used to compute iron flux)
 type, private :: marbl_forcing_diag_ids
+  ! dust and black carbon fluxes
   integer :: atm_fine_dust, atm_coarse_dust, atm_bc, ice_dust, ice_bc
+  ! River fluxes
+  integer :: no3_riv_flux
+  integer :: po4_riv_flux
+  integer :: don_riv_flux
+  integer :: donr_riv_flux
+  integer :: dop_riv_flux
+  integer :: dopr_riv_flux
+  integer :: sio3_riv_flux
+  integer :: fe_riv_flux
+  integer :: doc_riv_flux
+  integer :: docr_riv_flux
+  integer :: alk_riv_flux
+  integer :: alk_alt_co2_riv_flux
+  integer :: dic_riv_flux
+  integer :: dic_alt_co2_riv_flux
 end type marbl_forcing_diag_ids
 
 !> Contains pointers to the forcing fields needed to drive MARBL
@@ -29,12 +43,28 @@ type, public :: marbl_forcing_type
   real, pointer, dimension(:,:) :: iron_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
   real, pointer, dimension(:,:) :: ice_fraction => NULL() !< Fraction of ocean cell under seaice [m2 m-2]
   real, pointer, dimension(:,:) :: u10_sqr => NULL() !< 10m wind speed squared [L2 T-2 ~> m2 s-2]
+
+  real, pointer, dimension(:,:) :: no3_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: po4_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: sio3_riv_flux => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: fe_riv_flux   => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: alk_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: doc_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: docr_riv_flux => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: don_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: donr_riv_flux => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dop_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dopr_riv_flux => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dic_riv_flux  => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: alk_alt_co2_riv_flux => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dic_alt_co2_riv_flux => NULL() !> [mmol / m^2 / s]
 end type marbl_forcing_type
 
 type, public :: marbl_forcing_CS
   logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
                                             !! This is temporary, we will always read NDEP
   character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
+  character(len=200) :: riv_flux_file       !< File containing river fluxes (always read)
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                              !! regulate the timing of diagnostic output.
 
@@ -47,12 +77,22 @@ type, public :: marbl_forcing_CS
   real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
   real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
   real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
+  real    :: riv_flux_scale_factor          !< Convert from nmol / cm^2 / s to mmol / m^2 / s
 
   type(marbl_forcing_diag_ids) :: diag_ids  !< used for registering and posting some MARBL forcing fields as diagnostics
 
 
   integer :: id_noydep   = -1     !< id number for time_interp_external.
   integer :: id_nhxdep   = -1     !< id number for time_interp_external.
+  integer :: id_din_riv  = -1     !< id number for time_interp_external.
+  integer :: id_don_riv  = -1     !< id number for time_interp_external.
+  integer :: id_dip_riv  = -1     !< id number for time_interp_external.
+  integer :: id_dop_riv  = -1     !< id number for time_interp_external.
+  integer :: id_dsi_riv  = -1     !< id number for time_interp_external.
+  integer :: id_dfe_riv  = -1     !< id number for time_interp_external.
+  integer :: id_dic_riv  = -1     !< id number for time_interp_external.
+  integer :: id_alk_riv  = -1     !< id number for time_interp_external.
+  integer :: id_doc_riv  = -1     !< id number for time_interp_external.
 
 end type marbl_forcing_CS
 
@@ -121,11 +161,37 @@ contains
             "The file in which the nitrogen deposition is found in "//&
             "variables NOy_deposition and NHx_deposition.", &
             default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc')
-      ! CS%ndep_file = trim(inputdir) // trim(CS%ndep_file)
-      CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
+      if (scan(CS%ndep_file,'/') == 0) then
+        ! CS%ndep_file = trim(inputdir) // trim(CS%ndep_file)
+        CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
+        call log_param(param_file, mdl, "INPUTDIR/NDEP_FILE", CS%ndep_file)
+      end if
       CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
       CS%id_nhxdep = init_external_field(CS%ndep_file, 'NDEP_NHx_month', domain=G%Domain%mpp_domain)
     end if
+
+    ! ** River fluxes
+    call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_file, &
+                   "The file in which the river fluxes can be found", &
+                   default="riv_nut.gnews_gnm.rx1_to_tx0.66v1_nnsm_e1000r300_190315.20210401.nc")
+    if (scan(CS%riv_flux_file,'/') == 0) then
+      ! CS%riv_flux_file = trim(inputdir) // trim(CS%riv_flux_file)
+      CS%riv_flux_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%riv_flux_file)
+      call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_file)
+    end if
+    ! ** Scale factor for river fluxes
+    call get_param(param_file, mdl, "RIV_FLUX_SCALE_FACTOR", CS%riv_flux_scale_factor, &
+                   "Conversion factor between RIV_FLUX file units and MMOM units (nmol / cm^2 / s -> mmol / m^2 / s)", &
+                   default=0.01)
+    CS%id_din_riv = init_external_field(CS%riv_flux_file, 'din_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_don_riv = init_external_field(CS%riv_flux_file, 'don_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dip_riv = init_external_field(CS%riv_flux_file, 'dip_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dop_riv = init_external_field(CS%riv_flux_file, 'dop_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dsi_riv = init_external_field(CS%riv_flux_file, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dfe_riv = init_external_field(CS%riv_flux_file, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dic_riv = init_external_field(CS%riv_flux_file, 'dic_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_alk_riv = init_external_field(CS%riv_flux_file, 'alk_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_doc_riv = init_external_field(CS%riv_flux_file, 'doc_riv_flux', domain=G%Domain%mpp_domain)
 
     ! Register diagnostic fields for outputing forcing values
     CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", &
@@ -160,6 +226,91 @@ contains
                                              "SEAICE_BLACK_CARBON_FLUX from cpl", &
                                              "kg/m^2/s")
 
+    CS%diag_ids%no3_riv_flux = register_diag_field("ocean_model", &
+                                                   "NO3_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Dissolved Inorganic Nitrate Riverine Flux", &
+                                                   "mmol/m^3 m/s")
+    CS%diag_ids%po4_riv_flux = register_diag_field("ocean_model", &
+                                                   "PO4_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Dissolved Inorganic Phosphate Riverine Flux", &
+                                                   "mmol/m^3 m/s")
+    CS%diag_ids%don_riv_flux = register_diag_field("ocean_model", &
+                                                   "DON_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Dissolved Organic Nitrogen Riverine Flux", &
+                                                   "mmol/m^3 m/s")
+    CS%diag_ids%donr_riv_flux = register_diag_field("ocean_model", &
+                                                    "DONR_RIV_FLUX", &
+                                                    CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                    day, &
+                                                    "Refractory DON Riverine Flux", &
+                                                    "mmol/m^3 m/s")
+    CS%diag_ids%dop_riv_flux = register_diag_field("ocean_model", &
+                                                   "DOP_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Dissolved Organic Phosphorus Riverine Flux", &
+                                                   "mmol/m^3 m/s")
+    CS%diag_ids%dopr_riv_flux = register_diag_field("ocean_model", &
+                                                    "DOPR_RIV_FLUX", &
+                                                    CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                    day, &
+                                                    "Refractory DOP Riverine Flux", &
+                                                    "mmol/m^3 m/s")
+    CS%diag_ids%sio3_riv_flux = register_diag_field("ocean_model", &
+                                                    "SiO3_RIV_FLUX", &
+                                                    CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                    day, &
+                                                    "Dissolved Inorganic Silicate Riverine Flux", &
+                                                    "mmol/m^3 m/s")
+    CS%diag_ids%fe_riv_flux = register_diag_field("ocean_model", &
+                                                  "Fe_RIV_FLUX", &
+                                                  CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                  day, &
+                                                  "Dissolved Inorganic Iron Riverine Flux", &
+                                                  "mmol/m^3 m/s")
+    CS%diag_ids%doc_riv_flux = register_diag_field("ocean_model", &
+                                                   "DOC_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Dissolved Organic Carbon Riverine Flux", &
+                                                   "mmol/m^3 m/s")
+    CS%diag_ids%docr_riv_flux = register_diag_field("ocean_model", &
+                                                    "DOCR_RIV_FLUX", &
+                                                    CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                    day, &
+                                                    "Refractory DOC Riverine Flux", &
+                                                    "mmol/m^3 m/s")
+    CS%diag_ids%alk_riv_flux = register_diag_field("ocean_model", &
+                                                   "ALK_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Alkalinity Riverine Flux", &
+                                                   "meq/m^3 m/s")
+    CS%diag_ids%alk_alt_co2_riv_flux = register_diag_field("ocean_model", &
+                                                          "ALK_ALT_CO2_RIV_FLUX", &
+                                                          CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                          day, &
+                                                          "Alkalinity Riverine Flux, Alternative CO2", &
+                                                          "meq/m^3 m/s")
+    CS%diag_ids%dic_riv_flux = register_diag_field("ocean_model", &
+                                                   "DIC_RIV_FLUX", &
+                                                   CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                   day, &
+                                                   "Dissolved Inorganic Carbon Riverine Flux", &
+                                                   "mmol/m^3 m/s")
+    CS%diag_ids%dic_alt_co2_riv_flux = register_diag_field("ocean_model", &
+                                                          "DIC_ALT_CO2_RIV_FLUX", &
+                                                          CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                          day, &
+                                                          "Dissolved Inorganic Carbon Riverine Flux, Alternative CO2", &
+                                                          "mmol/m^3 m/s")
+
   end subroutine marbl_forcing_init
 
   subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing)
@@ -173,12 +324,30 @@ contains
     endif
 
     allocate(MARBL_forcing)
+
+    ! Fields from coupler
     call safe_alloc_ptr(MARBL_forcing%noy_dep,isd,ied,jsd,jed)
     call safe_alloc_ptr(MARBL_forcing%nhx_dep,isd,ied,jsd,jed)
     call safe_alloc_ptr(MARBL_forcing%dust_flux,isd,ied,jsd,jed)
     call safe_alloc_ptr(MARBL_forcing%iron_flux,isd,ied,jsd,jed)
     call safe_alloc_ptr(MARBL_forcing%ice_fraction,isd,ied,jsd,jed)
     call safe_alloc_ptr(MARBL_forcing%u10_sqr,isd,ied,jsd,jed)
+
+    ! Fields read from file
+    call safe_alloc_ptr(MARBL_forcing%no3_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%po4_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%sio3_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%fe_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%alk_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%doc_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%docr_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%don_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%donr_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%dop_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%dopr_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%dic_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%alk_alt_co2_riv_flux,isd,ied,jsd,jed)
+    call safe_alloc_ptr(MARBL_forcing%dic_alt_co2_riv_flux,isd,ied,jsd,jed)
 
   end subroutine marbl_forcing_type_init
 
@@ -224,7 +393,12 @@ contains
     type(marbl_forcing_CS), pointer,              intent(inout) :: CS             !< A pointer that is set to point to control
                                                                                   !! structure for MARBL forcing
 
-    real, dimension(SZI_(G),SZJ_(G)) :: ndep_data  !< The field read in from ndep_file (nhx_dep, noy_dep)
+    ! These are Fortran parameters in POP
+    real, parameter :: DONriv_refract = 0.1
+    real, parameter :: DOCriv_refract = 0.2
+    real, parameter :: DOPriv_refract = 0.025
+
+    real, dimension(SZI_(G),SZJ_(G)) :: time_varying_data  !< The field read in from forcing file with time dimension
     integer :: i, j, is, ie, js, je
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
                                      !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
@@ -283,10 +457,10 @@ contains
     enddo; enddo
 
     if (CS%read_ndep) then
-      call time_interp_external(CS%id_noydep,Time,ndep_data)
-      MARBL_forcing%noy_dep = ndep_conversion * ndep_data
-      call time_interp_external(CS%id_nhxdep,Time,ndep_data)
-      MARBL_forcing%nhx_dep = ndep_conversion * ndep_data
+      call time_interp_external(CS%id_noydep,Time,time_varying_data)
+      MARBL_forcing%noy_dep = ndep_conversion * time_varying_data
+      call time_interp_external(CS%id_nhxdep,Time,time_varying_data)
+      MARBL_forcing%nhx_dep = ndep_conversion * time_varying_data
       do j=js,je ; do i=is,ie
         MARBL_forcing%noy_dep(i,j) = G%mask2dT(i,j) * MARBL_forcing%noy_dep(i,j)
         MARBL_forcing%nhx_dep(i,j) = G%mask2dT(i,j) * MARBL_forcing%nhx_dep(i,j)
@@ -296,6 +470,75 @@ contains
       MARBL_forcing%noy_dep(:,:) = 0.
       MARBL_forcing%nhx_dep(:,:) = 0.
     endif
+
+    ! River fluxes
+    MARBL_forcing%alk_riv_flux(:,:) = 0.
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = 0.
+
+    ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
+    call time_interp_external(CS%id_din_riv,Time,time_varying_data)
+    MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - CS%riv_flux_scale_factor * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_dip_riv,Time,time_varying_data)
+    MARBL_forcing%po4_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_don_riv,Time,time_varying_data)
+    MARBL_forcing%don_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DONriv_refract) * time_varying_data(:,:)
+    MARBL_forcing%donr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DONriv_refract * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_dop_riv,Time,time_varying_data)
+    MARBL_forcing%dop_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOPriv_refract) * time_varying_data(:,:)
+    MARBL_forcing%dopr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOPriv_refract * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_dsi_riv,Time,time_varying_data)
+    MARBL_forcing%sio3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_dfe_riv,Time,time_varying_data)
+    MARBL_forcing%fe_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_dic_riv,Time,time_varying_data)
+    MARBL_forcing%dic_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_alk_riv,Time,time_varying_data)
+    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + CS%riv_flux_scale_factor * time_varying_data(:,:)
+
+    call time_interp_external(CS%id_doc_riv,Time,time_varying_data)
+    MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOCriv_refract) * time_varying_data(:,:)
+    MARBL_forcing%docr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOCriv_refract * time_varying_data(:,:)
+
+    ! Post to diags
+    if (CS%diag_ids%no3_riv_flux > 0) &
+      call post_data(CS%diag_ids%no3_riv_flux, MARBL_forcing%no3_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%po4_riv_flux > 0) &
+      call post_data(CS%diag_ids%po4_riv_flux, MARBL_forcing%po4_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%don_riv_flux > 0) &
+      call post_data(CS%diag_ids%don_riv_flux, MARBL_forcing%don_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%donr_riv_flux > 0) &
+      call post_data(CS%diag_ids%donr_riv_flux, MARBL_forcing%donr_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%dop_riv_flux > 0) &
+      call post_data(CS%diag_ids%dop_riv_flux, MARBL_forcing%dop_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%dopr_riv_flux > 0) &
+      call post_data(CS%diag_ids%dopr_riv_flux, MARBL_forcing%dopr_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%sio3_riv_flux > 0) &
+      call post_data(CS%diag_ids%sio3_riv_flux, MARBL_forcing%sio3_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%fe_riv_flux > 0) &
+      call post_data(CS%diag_ids%fe_riv_flux, MARBL_forcing%fe_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%doc_riv_flux > 0) &
+      call post_data(CS%diag_ids%doc_riv_flux, MARBL_forcing%doc_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%docr_riv_flux > 0) &
+      call post_data(CS%diag_ids%docr_riv_flux, MARBL_forcing%docr_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%alk_riv_flux > 0) &
+      call post_data(CS%diag_ids%alk_riv_flux, MARBL_forcing%alk_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%alk_alt_co2_riv_flux > 0) &
+      call post_data(CS%diag_ids%alk_alt_co2_riv_flux, MARBL_forcing%alk_alt_co2_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%dic_riv_flux > 0) &
+      call post_data(CS%diag_ids%dic_riv_flux, MARBL_forcing%dic_riv_flux(:,:), CS%diag)
+    if (CS%diag_ids%dic_alt_co2_riv_flux > 0) &
+      call post_data(CS%diag_ids%dic_alt_co2_riv_flux, MARBL_forcing%dic_alt_co2_riv_flux(:,:), CS%diag)
 
   end subroutine convert_marbl_IOB_to_forcings
 

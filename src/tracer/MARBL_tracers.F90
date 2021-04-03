@@ -54,6 +54,24 @@ type :: temp_MARBL_diag
   real, allocatable :: field_3d(:,:,:) !< memory for 3D field
 end type temp_MARBL_diag
 
+!> MOM6 needs to know the index of some MARBL tracers to properly apply river fluxes
+type :: tracer_ind_type
+  integer :: no3_ind
+  integer :: po4_ind
+  integer :: don_ind
+  integer :: donr_ind
+  integer :: dop_ind
+  integer :: dopr_ind
+  integer :: sio3_ind
+  integer :: fe_ind
+  integer :: doc_ind
+  integer :: docr_ind
+  integer :: alk_ind
+  integer :: alk_alt_co2_ind
+  integer :: dic_ind
+  integer :: dic_alt_co2_ind
+end type tracer_ind_type
+
 type :: saved_state_for_MARBL_type
   character(len=200) :: short_name !< name of variable being saved
   character(len=200) :: file_varname !< name of variable in restart file
@@ -92,6 +110,9 @@ type, public :: MARBL_tracers_CS ; private
   !> Indices to the registered diagnostics and saved state match the indices used in MARBL
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
   type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:), interior_tendency_saved_state(:)
+
+  !> Indices to tracers that will have river fluxes added to STF
+  type(tracer_ind_type) :: tracer_inds
 
   !> Need to store global output from both marbl_instance%surface_flux_compute() and
   !! marbl_instance%interior_tendency_compute(). For the former, just need id to register
@@ -444,6 +465,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                                                                   !! for the sponges, if they are in use.
 
 ! Local variables
+  character(len=200) :: log_message
   character(len=48) :: name       ! A variable's name in a NetCDF file.
   character(len=100) :: longname   ! The long name of that variable.
   character(len=48) :: units      ! The units of the variable.
@@ -529,15 +551,89 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   end do
 
   ! Initialize tracers from file (unless they were initialized by restart file)
+  ! Also save indices of tracers that have river fluxes
+  CS%tracer_inds%no3_ind = 0
+  CS%tracer_inds%po4_ind = 0
+  CS%tracer_inds%don_ind = 0
+  CS%tracer_inds%donr_ind = 0
+  CS%tracer_inds%dop_ind = 0
+  CS%tracer_inds%dopr_ind = 0
+  CS%tracer_inds%sio3_ind = 0
+  CS%tracer_inds%fe_ind = 0
+  CS%tracer_inds%doc_ind = 0
+  CS%tracer_inds%docr_ind = 0
+  CS%tracer_inds%alk_ind = 0
+  CS%tracer_inds%alk_alt_co2_ind = 0
+  CS%tracer_inds%dic_ind = 0
+  CS%tracer_inds%dic_alt_co2_ind = 0
   if (.not.restart) then
     do m= 1, CS%ntr
       write(name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%short_name)
+      if (trim(name) == "NO3") then
+        CS%tracer_inds%no3_ind = m
+      elseif (trim(name) == "PO4") then
+         CS%tracer_inds%po4_ind = m
+      elseif (trim(name) == "DON") then
+         CS%tracer_inds%don_ind = m
+      elseif (trim(name) == "DONr") then
+         CS%tracer_inds%donr_ind = m
+      elseif (trim(name) == "DOP") then
+         CS%tracer_inds%dop_ind = m
+      elseif (trim(name) == "DOPr") then
+         CS%tracer_inds%dopr_ind = m
+      elseif (trim(name) == "SiO3") then
+         CS%tracer_inds%sio3_ind = m
+        elseif (trim(name) == "Fe") then
+          CS%tracer_inds%fe_ind = m
+       elseif (trim(name) == "DOC") then
+          CS%tracer_inds%doc_ind = m
+       elseif (trim(name) == "DOCr") then
+          CS%tracer_inds%docr_ind = m
+       elseif (trim(name) == "ALK") then
+          CS%tracer_inds%alk_ind = m
+       elseif (trim(name) == "ALK_ALT_CO2") then
+          CS%tracer_inds%alk_alt_co2_ind = m
+       elseif (trim(name) == "DIC") then
+          CS%tracer_inds%dic_ind = m
+       elseif (trim(name) == "DIC_ALT_CO2") then
+          CS%tracer_inds%dic_alt_co2_ind = m
+       end if
       OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, US, -1e34)
       if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")
     end do
   end if
+
+  ! Log indices for each tracer to ensure we set them all correctly
+  write(log_message, "(A,I0)") "NO3 index: ", CS%tracer_inds%no3_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "PO4 index: ", CS%tracer_inds%po4_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DON index: ", CS%tracer_inds%don_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DONr index: ", CS%tracer_inds%donr_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOP index: ", CS%tracer_inds%dop_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOPr index: ", CS%tracer_inds%dopr_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "SiO3 index: ", CS%tracer_inds%sio3_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "Fe index: ", CS%tracer_inds%fe_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOC index: ", CS%tracer_inds%doc_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOCr index: ", CS%tracer_inds%docr_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "ALK index: ", CS%tracer_inds%alk_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "ALK_ALT_CO2 index: ", CS%tracer_inds%alk_alt_co2_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DIC index: ", CS%tracer_inds%dic_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DIC_ALT_CO2 index: ", CS%tracer_inds%dic_alt_co2_ind
+  call MOM_error(NOTE, log_message)
 
   ! Read initial fesedflux and feventflux fields
   ! (1) get vertical dimension
@@ -556,8 +652,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   ! (3) Read data
   !     TODO: Add US term to scale
-  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in, G%Domain, scale=CS%fesedflux_scale_factor)
-  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in, G%Domain, scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in(:,:,:), G%Domain, scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in(:,:,:), G%Domain, scale=CS%fesedflux_scale_factor)
 
   ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
   !     Remember, fesedflux_z = 0 at surface and is < 0 below surface
@@ -793,6 +889,35 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       CS%STF(i,j,:) = MARBL_instances%surface_fluxes(1,:) * m_per_cm
     end do
   end do
+  ! Add River Fluxes to STF
+  if (CS%tracer_inds%no3_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%no3_ind) = CS%STF(:,:,CS%tracer_inds%no3_ind) + fluxes%MARBL_forcing%no3_riv_flux(:,:)
+  if (CS%tracer_inds%po4_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%po4_ind) = CS%STF(:,:,CS%tracer_inds%po4_ind) + fluxes%MARBL_forcing%po4_riv_flux(:,:)
+  if (CS%tracer_inds%don_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%don_ind) = CS%STF(:,:,CS%tracer_inds%don_ind) + fluxes%MARBL_forcing%don_riv_flux(:,:)
+  if (CS%tracer_inds%donr_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%donr_ind) = CS%STF(:,:,CS%tracer_inds%donr_ind) + fluxes%MARBL_forcing%donr_riv_flux(:,:)
+  if (CS%tracer_inds%dop_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%dop_ind) = CS%STF(:,:,CS%tracer_inds%dop_ind) + fluxes%MARBL_forcing%dop_riv_flux(:,:)
+  if (CS%tracer_inds%dopr_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%dopr_ind) = CS%STF(:,:,CS%tracer_inds%dopr_ind) + fluxes%MARBL_forcing%dopr_riv_flux(:,:)
+  if (CS%tracer_inds%sio3_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%sio3_ind) = CS%STF(:,:,CS%tracer_inds%sio3_ind) + fluxes%MARBL_forcing%sio3_riv_flux(:,:)
+  if (CS%tracer_inds%fe_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%fe_ind) = CS%STF(:,:,CS%tracer_inds%fe_ind) + fluxes%MARBL_forcing%fe_riv_flux(:,:)
+  if (CS%tracer_inds%doc_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%doc_ind) = CS%STF(:,:,CS%tracer_inds%doc_ind) + fluxes%MARBL_forcing%doc_riv_flux(:,:)
+  if (CS%tracer_inds%docr_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%docr_ind) = CS%STF(:,:,CS%tracer_inds%docr_ind) + fluxes%MARBL_forcing%docr_riv_flux(:,:)
+  if (CS%tracer_inds%alk_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%alk_ind) = CS%STF(:,:,CS%tracer_inds%alk_ind) + fluxes%MARBL_forcing%alk_riv_flux(:,:)
+  if (CS%tracer_inds%alk_alt_co2_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) + fluxes%MARBL_forcing%alk_alt_co2_riv_flux(:,:)
+  if (CS%tracer_inds%dic_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%dic_ind) = CS%STF(:,:,CS%tracer_inds%dic_ind) + fluxes%MARBL_forcing%dic_riv_flux(:,:)
+  if (CS%tracer_inds%dic_alt_co2_ind > 0) &
+    CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) + fluxes%MARBL_forcing%dic_alt_co2_riv_flux(:,:)
 
   ! (2) Post surface fluxes and their diagnostics (currently all 2D)
   do m=1,CS%ntr
