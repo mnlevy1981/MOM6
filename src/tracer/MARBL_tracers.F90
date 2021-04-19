@@ -598,7 +598,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
        elseif (trim(name) == "DIC_ALT_CO2") then
           CS%tracer_inds%dic_alt_co2_ind = m
        end if
-      OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, US, -1e34)
+      OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, GV, US, -1e34)
       if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")

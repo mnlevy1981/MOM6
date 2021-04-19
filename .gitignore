@@ -13,7 +13,7 @@ deps/
 pkg/MARBL
 
 
-# Autoconf
+# Autoconf output
 aclocal.m4
 autom4te.cache/
 config.log
