@@ -412,15 +412,20 @@ contains
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
     if (CS%diag_ids%atm_fine_dust > 0) &
-      call post_data(CS%diag_ids%atm_fine_dust, kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%atm_fine_dust, kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_coarse_dust > 0) &
-      call post_data(CS%diag_ids%atm_coarse_dust, kg_m2_s_conversion * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%atm_coarse_dust, kg_m2_s_conversion * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_bc > 0) &
-      call post_data(CS%diag_ids%atm_bc, kg_m2_s_conversion * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%atm_bc, kg_m2_s_conversion * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_dust > 0) &
-      call post_data(CS%diag_ids%ice_dust, kg_m2_s_conversion * MARBL_IOB%seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%ice_dust, kg_m2_s_conversion * MARBL_IOB%seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_bc > 0) &
-      call post_data(CS%diag_ids%ice_bc, kg_m2_s_conversion * MARBL_IOB%seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%ice_bc, kg_m2_s_conversion * MARBL_IOB%seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     CS%diag, mask=G%mask2dT(is:ie,js:je))
 
     do j=js,je ; do i=is,ie
       if (associated(MARBL_IOB%atm_fine_dust_flux)) then
@@ -479,7 +484,8 @@ contains
     call time_interp_external(CS%id_din_riv,Time,time_varying_data)
     MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
     MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - &
+                                              CS%riv_flux_scale_factor * time_varying_data(:,:)
 
     call time_interp_external(CS%id_dip_riv,Time,time_varying_data)
     MARBL_forcing%po4_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
@@ -504,7 +510,8 @@ contains
 
     call time_interp_external(CS%id_alk_riv,Time,time_varying_data)
     MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + &
+                                              CS%riv_flux_scale_factor * time_varying_data(:,:)
 
     call time_interp_external(CS%id_doc_riv,Time,time_varying_data)
     MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOCriv_refract) * time_varying_data(:,:)

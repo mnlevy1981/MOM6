@@ -437,8 +437,10 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   enddo
 
   ! Set up memory for saved state
-  call setup_saved_state(MARBL_instances%surface_flux_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%surface_flux_saved_state)
-  call setup_saved_state(MARBL_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, CS%interior_tendency_saved_state)
+  call setup_saved_state(MARBL_instances%surface_flux_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, &
+                         CS%surface_flux_saved_state)
+  call setup_saved_state(MARBL_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, &
+                         CS%interior_tendency_saved_state)
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
@@ -731,7 +733,7 @@ subroutine setup_saved_state(MARBL_saved_state, HI, GV, restart_CS, tracers_may_
   type(verticalGrid_type),                       intent(in)    :: GV   !< The ocean's vertical grid structure
   type(MOM_restart_CS), pointer,                 intent(in)    :: restart_CS !< control structure to add saved state to restarts
   logical,                                       intent(in)    :: tracers_may_reinit  !< used to determine mandatory flag in restart
-  type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array storing saved state locally
+  type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array for local saved state
 
   integer :: num_fields, m
   character(len=200) :: log_message, varname
@@ -835,23 +837,34 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%sst_ind > 0) MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%MARBL_forcing%ice_fraction(i,j)
       ! MARBL wants u10_sqr in (cm/s)^2
-      if (CS%u10_sqr_ind > 0) MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%MARBL_forcing%u10_sqr(i,j) * (US%L_t_to_m_s * cm_per_m)**2
+      if (CS%u10_sqr_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%MARBL_forcing%u10_sqr(i,j) * &
+                                                                            (US%L_t_to_m_s * cm_per_m)**2
       ! mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
-      if (CS%atmpress_ind > 0) MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
-                                                                                                    ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * atm_per_Pa)
+      if (CS%atmpress_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
+                                                                             ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * atm_per_Pa)
 
       !       These are okay, but need option to come in from coupler
       if (CS%xco2_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
       if (CS%xco2_alt_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = CS%atm_alt_co2_const
 
       !       These are okay, but need option to read in from file
-      if (CS%dust_dep_ind > 0) MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
-      if (CS%fe_dep_ind > 0) MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%dust_dep_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * &
+                                                                             (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%fe_dep_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j) * &
+                                                                           (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
       !       These are read from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc
-      if (CS%nox_flux_ind > 0) MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%noy_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
-      if (CS%nhy_flux_ind > 0) MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%nhx_dep(i,j) * (ndep_conversion * CS%ndep_scale_factor)
+      if (CS%nox_flux_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%noy_dep(i,j) * &
+                                                                             (ndep_conversion * CS%ndep_scale_factor)
+      if (CS%nhy_flux_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%nhx_dep(i,j) * &
+                                                                             (ndep_conversion * CS%ndep_scale_factor)
 
       !     * tracers at surface
       !       TODO: average over some shallow depth (e.g. 5m)
@@ -913,11 +926,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   if (CS%tracer_inds%alk_ind > 0) &
     CS%STF(:,:,CS%tracer_inds%alk_ind) = CS%STF(:,:,CS%tracer_inds%alk_ind) + fluxes%MARBL_forcing%alk_riv_flux(:,:)
   if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) + fluxes%MARBL_forcing%alk_alt_co2_riv_flux(:,:)
+    CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) + &
+                                                 fluxes%MARBL_forcing%alk_alt_co2_riv_flux(:,:)
   if (CS%tracer_inds%dic_ind > 0) &
     CS%STF(:,:,CS%tracer_inds%dic_ind) = CS%STF(:,:,CS%tracer_inds%dic_ind) + fluxes%MARBL_forcing%dic_riv_flux(:,:)
   if (CS%tracer_inds%dic_alt_co2_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) + fluxes%MARBL_forcing%dic_alt_co2_riv_flux(:,:)
+    CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) + &
+                                                 fluxes%MARBL_forcing%dic_alt_co2_riv_flux(:,:)
 
   ! (2) Post surface fluxes and their diagnostics (currently all 2D)
   do m=1,CS%ntr
@@ -969,8 +984,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         if ((.not. set_kmt) .and. (dz(k) > 0.01)) then
           set_kmt = .true.
           MARBL_instances%domain%kmt = k
-          ! write(log_message, "(A, I0, A, I0, A, I0, A)") "Adjusted kmt to ", MARBL_instances%domain%kmt, " for (i,j) (", i, ",", j, ")"
-          ! call MOM_error(WARNING, log_message, all_print=.true.)
         end if
       enddo
 
@@ -988,7 +1001,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !       This are okay, but need option to read in from file
       !       (Same as dust_dep_ind for surface_flux_forcings)
-      if (CS%dustflux_ind > 0) MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+      if (CS%dustflux_ind > 0) &
+        MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * &
+                                                                                  (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
       !        TODO: Support PAR (currently just using single subcolumn)
       !              (Look for Pen_sw_bnd?)
@@ -1064,7 +1079,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * saved state
       do m=1,size(MARBL_instances%interior_tendency_saved_state%state)
         CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = 0.
-        CS%interior_tendency_saved_state(m)%field_3d(i,j,1:kmt) = MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(1:kmt,1)
+        CS%interior_tendency_saved_state(m)%field_3d(i,j,1:kmt) = &
+            MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(1:kmt,1)
       end do
 
       !     * diagnostics
@@ -1072,7 +1088,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
           CS%interior_tendency_diags(m)%field_2d(i,j) = real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
         else
-          CS%interior_tendency_diags(m)%field_3d(i,j,1:kmt) = real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(1:kmt,1))
+          CS%interior_tendency_diags(m)%field_3d(i,j,1:kmt) = &
+              real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(1:kmt,1))
           if (kmt < GV%ke) then
             CS%interior_tendency_diags(m)%field_3d(i,j,kmt+1:GV%ke) = CS%interior_tendency_diags(m)%field_3d(i,j,kmt)
           end if
@@ -1090,7 +1107,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) then
           CS%interior_tendency_out_zint(m)%field_2d(i,j) = 0.
           do k=1,kmt
-            CS%interior_tendency_out_zint(m)%field_2d(i,j) = CS%interior_tendency_out_zint(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
+            CS%interior_tendency_out_zint(m)%field_2d(i,j) = CS%interior_tendency_out_zint(m)%field_2d(i,j) + &
+                                                             dz(k) * MARBL_instances%interior_tendencies(m,k)
           end do
           CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j)*CS%interior_tendency_out_zint(m)%field_2d(i,j)
         end if
@@ -1099,9 +1117,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = 0.
           do k=1,kmt
             if (zi(k) < 100.) then
-              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
+              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + &
+                                                                    dz(k) * MARBL_instances%interior_tendencies(m,k)
             else if (zi(k-1) < 100.) then
-              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * MARBL_instances%interior_tendencies(m,k)
+              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + &
+                                                                    dz(k) * ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * &
+                                                                    MARBL_instances%interior_tendencies(m,k)
             else
               exit
             end if
@@ -1123,7 +1144,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       else if (allocated(CS%interior_tendency_diags(m)%field_3d)) then
         call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_3d(:,:,:), CS%diag)
       else
-        write(log_message, "(A, I0, A, I0, A)") "Diagnostic number ", m, " post id ", CS%interior_tendency_diags(m)%id," did not allocate 2D or 3D array"
+        write(log_message, "(A, I0, A, I0, A)") "Diagnostic number ", m, " post id ", &
+                                                CS%interior_tendency_diags(m)%id," did not allocate 2D or 3D array"
         call MOM_error(FATAL, log_message)
       end if
     end if
