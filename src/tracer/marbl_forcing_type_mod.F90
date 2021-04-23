@@ -1,3 +1,5 @@
+!> This module provides a common datatype to provide forcing for MARBL tracers
+!! regardless of driver
 module marbl_forcing_type_mod
 
 !! This module exists to house code used by multiple drivers in config_src/
@@ -15,51 +17,57 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
+!> Data type used to store diagnostic index returned from register_diag_field()
+!! For the forcing fields that can be written via post_data()
 type, private :: marbl_forcing_diag_ids
-  ! dust and black carbon fluxes
-  integer :: atm_fine_dust, atm_coarse_dust, atm_bc, ice_dust, ice_bc
+  integer :: atm_fine_dust   !< Atmospheric fine dust component of dust_flux
+  integer :: atm_coarse_dust !< Atmospheric coarse dust component of dust_flux
+  integer :: atm_bc          !< Atmospheric black carbon component of iron_flux
+  integer :: ice_dust        !< Sea-ice dust component of dust_flux
+  integer :: ice_bc          !< Sea-ice black carbon component of iron_flux
   ! River fluxes
-  integer :: no3_riv_flux
-  integer :: po4_riv_flux
-  integer :: don_riv_flux
-  integer :: donr_riv_flux
-  integer :: dop_riv_flux
-  integer :: dopr_riv_flux
-  integer :: sio3_riv_flux
-  integer :: fe_riv_flux
-  integer :: doc_riv_flux
-  integer :: docr_riv_flux
-  integer :: alk_riv_flux
-  integer :: alk_alt_co2_riv_flux
-  integer :: dic_riv_flux
-  integer :: dic_alt_co2_riv_flux
+  integer :: no3_riv_flux          !< NO3 riverine flux
+  integer :: po4_riv_flux          !< PO4 riverine flux
+  integer :: don_riv_flux          !< DON riverine flux
+  integer :: donr_riv_flux         !< DONr riverine flux
+  integer :: dop_riv_flux          !< DOP riverine flux
+  integer :: dopr_riv_flux         !< DOPr riverine flux
+  integer :: sio3_riv_flux         !< SiO3 riverine flux
+  integer :: fe_riv_flux           !< Fe riverine flux
+  integer :: doc_riv_flux          !< DOC riverine flux
+  integer :: docr_riv_flux         !< DOCr riverine flux
+  integer :: alk_riv_flux          !< ALK riverine flux
+  integer :: alk_alt_co2_riv_flux  !< ALK (alternate CO2) riverine flux
+  integer :: dic_riv_flux          !< DIC riverine flux
+  integer :: dic_alt_co2_riv_flux  !< DIC (alternate CO2) riverine flux
 end type marbl_forcing_diag_ids
 
 !> Contains pointers to the forcing fields needed to drive MARBL
 type, public :: marbl_forcing_type
-  real, pointer, dimension(:,:) :: noy_dep => NULL() !> NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
-  real, pointer, dimension(:,:) :: nhx_dep => NULL() !> NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
+  real, pointer, dimension(:,:) :: noy_dep => NULL() !< NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
+  real, pointer, dimension(:,:) :: nhx_dep => NULL() !< NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
   real, pointer, dimension(:,:) :: dust_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
   real, pointer, dimension(:,:) :: iron_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
   real, pointer, dimension(:,:) :: ice_fraction => NULL() !< Fraction of ocean cell under seaice [m2 m-2]
   real, pointer, dimension(:,:) :: u10_sqr => NULL() !< 10m wind speed squared [L2 T-2 ~> m2 s-2]
 
-  real, pointer, dimension(:,:) :: no3_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: po4_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: sio3_riv_flux => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: fe_riv_flux   => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: alk_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: doc_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: docr_riv_flux => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: don_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: donr_riv_flux => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dop_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dopr_riv_flux => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dic_riv_flux  => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: alk_alt_co2_riv_flux => NULL() !> [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dic_alt_co2_riv_flux => NULL() !> [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: no3_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: po4_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: sio3_riv_flux => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: fe_riv_flux   => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: alk_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: doc_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: docr_riv_flux => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: don_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: donr_riv_flux => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dop_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dopr_riv_flux => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dic_riv_flux  => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: alk_alt_co2_riv_flux => NULL() !< [mmol / m^2 / s]
+  real, pointer, dimension(:,:) :: dic_alt_co2_riv_flux => NULL() !< [mmol / m^2 / s]
 end type marbl_forcing_type
 
+!> Control structure for this module
 type, public :: marbl_forcing_CS
   logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
                                             !! This is temporary, we will always read NDEP
@@ -96,6 +104,7 @@ type, public :: marbl_forcing_CS
 
 end type marbl_forcing_CS
 
+!> Contains pointers to IOB fields that are used to compute MARBL forcing
 type, public :: marbl_ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: atm_fine_dust_flux   => NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_coarse_dust_flux => NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
@@ -314,7 +323,10 @@ contains
   end subroutine marbl_forcing_init
 
   subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing)
-    integer,                           intent(in)    :: isd,ied,jsd,jed
+    integer,                           intent(in)    :: isd            !< start of i-indices for current block
+    integer,                           intent(in)    :: ied            !< end of i-indices for current block
+    integer,                           intent(in)    :: jsd            !< start of j-indices for current block
+    integer,                           intent(in)    :: jed            !< end of j-indices for current block
     type(marbl_forcing_type), pointer, intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
 
     if (associated(MARBL_forcing)) then
@@ -353,8 +365,11 @@ contains
 
   subroutine marbl_iob_allocate(isc, iec, jsc, jec, MARBL_IOB)
 
-    integer,                                      intent(in) :: isc, iec, jsc, jec  !< The ocean's local grid size
-    type(marbl_ice_ocean_boundary_type), pointer, intent(inout) :: MARBL_IOB        !< MARBL-specific ice-ocean boundary type
+    integer,                                      intent(in) :: isc           !< start of i-indices for current block
+    integer,                                      intent(in) :: iec           !< end of i-indices for current block
+    integer,                                      intent(in) :: jsc           !< start of j-indices for current block
+    integer,                                      intent(in) :: jec           !< end of j-indices for current block
+    type(marbl_ice_ocean_boundary_type), pointer, intent(inout) :: MARBL_IOB  !< MARBL-specific ice-ocean boundary type
 
     if (associated(MARBL_IOB)) then
       call MOM_error(WARNING, "marbl_iob_allocate called with an associated "// &
@@ -388,7 +403,8 @@ contains
                                                                                   !! salinity to the right time, when it is being restored.
     type(ocean_grid_type),                        intent(in)    :: G              !< The ocean's grid structure
     type(unit_scale_type),                        intent(in)    :: US             !< A dimensional unit scaling type
-    integer,                                      intent(in)    :: i0, j0         !< index offsets
+    integer,                                      intent(in)    :: i0             !< i index offset
+    integer,                                      intent(in)    :: j0             !< j index offset
     type(marbl_forcing_type),                     intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
     type(marbl_forcing_CS), pointer,              intent(inout) :: CS             !< A pointer that is set to point to control
                                                                                   !! structure for MARBL forcing

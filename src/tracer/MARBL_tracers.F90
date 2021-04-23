@@ -1,11 +1,12 @@
 !> A tracer package for tracers computed in the MARBL library
+!!
+!! Currently configured for use with marbl0.36.0
+!! https://github.com/marbl-ecosys/MARBL/releases/tag/marbl0.36.0
+!! (clone entire repo into pkg/MARBL)
 module MARBL_tracers
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-! Currently configured for use with marbl0.36.0
-! https://github.com/marbl-ecosys/MARBL/releases/tag/marbl0.36.0
-! (clone entire repo into pkg/MARBL)
 use MOM_coms,            only : root_PE, broadcast
 use MOM_diag_mediator,   only : diag_ctrl
 use MOM_diag_vkernels,   only : reintegrate_column
@@ -56,22 +57,24 @@ end type temp_MARBL_diag
 
 !> MOM6 needs to know the index of some MARBL tracers to properly apply river fluxes
 type :: tracer_ind_type
-  integer :: no3_ind
-  integer :: po4_ind
-  integer :: don_ind
-  integer :: donr_ind
-  integer :: dop_ind
-  integer :: dopr_ind
-  integer :: sio3_ind
-  integer :: fe_ind
-  integer :: doc_ind
-  integer :: docr_ind
-  integer :: alk_ind
-  integer :: alk_alt_co2_ind
-  integer :: dic_ind
-  integer :: dic_alt_co2_ind
+  integer :: no3_ind  !< NO3 index
+  integer :: po4_ind  !< PO4 index
+  integer :: don_ind  !< DON index
+  integer :: donr_ind  !< DONr index
+  integer :: dop_ind  !< DOP index
+  integer :: dopr_ind  !< DOPr index
+  integer :: sio3_ind  !< SiO3 index
+  integer :: fe_ind  !< Fe index
+  integer :: doc_ind  !< DOC index
+  integer :: docr_ind  !< DOCr index
+  integer :: alk_ind  !< ALK index
+  integer :: alk_alt_co2_ind  !< ALK_ALT_CO2 index
+  integer :: dic_ind  !< DIC index
+  integer :: dic_alt_co2_ind  !< DIC_ALT_CO2 index
 end type tracer_ind_type
 
+!> MOM needs to store some information about saved_state; besides providing these
+!! fields to MARBL, they are also written to restart files
 type :: saved_state_for_MARBL_type
   character(len=200) :: short_name !< name of variable being saved
   character(len=200) :: file_varname !< name of variable in restart file
@@ -101,57 +104,72 @@ type, public :: MARBL_tracers_CS ; private
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 
-  !> Driver-specific parameters
-  character(len=200) :: fesedflux_file, feventflux_file
-  character(len=35) :: marbl_settings_file
-  real :: atm_co2_const, atm_alt_co2_const
-  real :: ndep_scale_factor
+  character(len=200) :: fesedflux_file  !< name of [netCDF] file containing iron sediment flux
+  character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
+  character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
+  real :: atm_co2_const  !< atmospheric CO2 (if specifying a constant value)
+  real :: atm_alt_co2_const  !< alternate atmospheric CO2 for _ALT_CO2 tracers (if specifying a constant value)
+  real :: ndep_scale_factor  !< scale factor to apply to nitrogen deposition
 
-  !> Indices to the registered diagnostics and saved state match the indices used in MARBL
-  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:), interior_tendency_diags(:)
-  type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:), interior_tendency_saved_state(:)
+  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:)  !< collect surface flux diagnostics from all columns before posting
+  type(temp_MARBL_diag), allocatable :: interior_tendency_diags(:)  !< collect tendency diagnostics from all columns before posting
+  type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:)  !< surface_flux saved state
+  type(saved_state_for_MARBL_type), allocatable :: interior_tendency_saved_state(:)  !< interior_tendency saved state
 
-  !> Indices to tracers that will have river fluxes added to STF
-  type(tracer_ind_type) :: tracer_inds
+  ! TODO: If we can post data column by column, all we need are integer arrays for ids
+  ! integer, allocatable :: id_surface_flux_diags(:)  !< array of indices for surface_flux diagnostics
+  ! integer, allocatable :: id_interior_tendency_diags(:)  !< array of indices for interior_tendency diagnostics
+
+  type(tracer_ind_type) :: tracer_inds  !< Indices to tracers that will have river fluxes added to STF
 
   !> Need to store global output from both marbl_instance%surface_flux_compute() and
   !! marbl_instance%interior_tendency_compute(). For the former, just need id to register
   !! because we already copy data into CS%STF; latter requires copying data and indices
   !! so currently using temp_MARBL_diag for that.
-  integer, allocatable :: id_surface_flux_out(:)
-  type(temp_MARBL_diag), allocatable :: interior_tendency_out(:), interior_tendency_out_zint(:), interior_tendency_out_zint_100m(:)
+  integer, allocatable :: id_surface_flux_out(:)  !< register_diag indices for surface_flux output
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out(:)  !< collect interior tendencies for diagnostic output
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint(:)  !< vertical integral of interior tendencies (full column)
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint_100m(:)  !< vertical integral of interior tendencies (top 100m)
 
-  !> Surface fluxes returned from MARBL and passed to tracer_vertdiff
-  !! tracer_vertdiff expects units concentrations times meters per second,
-  !! but MARBL will return in cgs so we need to remember to convert
-  real, allocatable :: STF(:,:,:) ! i, j, tracer
+  ! NOTE: MARBL will return in cgs so we need to convert to mks
+  real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff [i, j, tracer]
 
-  !> Indices for forcing fields required to compute surface fluxes
-  integer :: u10_sqr_ind, sss_ind, sst_ind, ifrac_ind, dust_dep_ind, fe_dep_ind
-  integer :: nox_flux_ind, nhy_flux_ind, atmpress_ind, xco2_ind, xco2_alt_ind
+  integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
+  integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
+  integer :: sst_ind  !< index of MARBL forcing field array to copy sea surface temperature into
+  integer :: ifrac_ind  !< index of MARBL forcing field array to copy ice fraction into
+  integer :: dust_dep_ind  !< index of MARBL forcing field array to copy dust flux into
+  integer :: fe_dep_ind  !< index of MARBL forcing field array to copy iron flux into
+  integer :: nox_flux_ind  !< index of MARBL forcing field array to copy NOx flux into
+  integer :: nhy_flux_ind  !< index of MARBL forcing field array to copy NHy flux into
+  integer :: atmpress_ind  !< index of MARBL forcing field array to copy atmospheric pressure into
+  integer :: xco2_ind  !< index of MARBL forcing field array to copy CO2 flux into
+  integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
 
   !> Indices for forcing fields required to compute interior tendencies
-  integer :: dustflux_ind, PAR_col_frac_ind, surf_shortwave_ind, potemp_ind
-  integer :: salinity_ind, pressure_ind, fesedflux_ind
-  integer :: o2_scalef_ind, remin_scalef_ind
+  integer :: dustflux_ind  !< index of MARBL forcing field array to copy dust flux into
+  integer :: PAR_col_frac_ind  !< index of MARBL forcing field array to copy PAR column fraction into
+  integer :: surf_shortwave_ind  !< index of MARBL forcing field array to copy surface shortwave into
+  integer :: potemp_ind  !< index of MARBL forcing field array to copy potential temperature into
+  integer :: salinity_ind  !< index of MARBL forcing field array to copy salinity into
+  integer :: pressure_ind  !< index of MARBL forcing field array to copy pressure into
+  integer :: fesedflux_ind  !< index of MARBL forcing field array to copy iron sediment flux into
+  integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
+  integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
 
-  !> Memory used for storing iron sediment flux
   ! TODO: create generic 3D forcing input type to read z coordinate + values
-  real    :: fesedflux_scale_factor
-  integer :: fesedflux_nz
-  real, allocatable, dimension(:, :, :) :: fesedflux_in, feventflux_in  ! Fields read from forcing
+  real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
+  integer :: fesedflux_nz  !< number of levels in iron sediment flux file
+  real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into
+  real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into
   real, allocatable, dimension(:) :: &
-    fesedflux_z ! The depths of the cell interfaces in the input data [Z ~> m]
+    fesedflux_z  !< The depths of the cell interfaces in the input data [Z ~> m]
   ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
   real, allocatable, dimension(:,:,:) :: &
-    fesedflux_dz    ! The thickness of the cell layers in the input data [Z ~> m]
+    fesedflux_dz  !< The thickness of the cell layers in the input data [Z ~> m]
 end type MARBL_tracers_CS
 
-!> If we can post data column by column, all we need are integer
-!! arrays for ids
-! integer, allocatable :: id_surface_flux_diags(:) !, id_interior_tendency_diags(:)
-
-!> Module parameters
+  ! Module parameters
   real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
   real, parameter :: g_per_kg = 1000. !< convert from kg -> g (MARBL is cgs)
   real, parameter :: m_per_cm = 0.01  !< convert from cm -> m
@@ -1244,8 +1262,8 @@ end subroutine MARBL_tracers_surface_state
 
 !> Clean up any allocated memory after the run.
 subroutine MARBL_tracers_end(CS)
-  type(MARBL_tracers_CS), pointer :: CS !< The control structure returned by a previous
-                                        !! call to register_MARBL_tracers.
+  type(MARBL_tracers_CS), pointer, intent(inout) :: CS !< The control structure returned by a previous
+                                                       !! call to register_MARBL_tracers.
   integer :: m
 
   call print_marbl_log(MARBL_instances%StatusLog)
@@ -1259,18 +1277,19 @@ subroutine MARBL_tracers_end(CS)
   endif
 end subroutine MARBL_tracers_end
 
+! TODO: some log messages come from a specific grid point, and this routine
+!       needs to include the location in the preamble
 !> This subroutine writes the contents of the MARBL log using MOM_error(NOTE, ...).
-!! TODO: some log messages come from a specific grid point, and this routine
-!!       needs to include the location in the preamble
 subroutine print_marbl_log(log_to_print, G, i, j)
 
   use marbl_logging, only : marbl_status_log_entry_type
   use marbl_logging, only : marbl_log_type
   use MOM_coms,      only : PE_here
 
-  class(marbl_log_type),           intent(in) :: log_to_print
-  type(ocean_grid_type), optional, intent(in) :: G    !< The ocean's grid structure
-  integer,               optional, intent(in) :: i, j
+  class(marbl_log_type),           intent(in) :: log_to_print  !< MARBL log to include in MOM6 logfile
+  type(ocean_grid_type), optional, intent(in) :: G             !< The ocean's grid structure
+  integer,               optional, intent(in) :: i             !< i of (i,j) index of column providing the log
+  integer,               optional, intent(in) :: j             !< j of (i,j) index of column providing the log
 
   character(len=*), parameter :: subname = 'MARBL_tracers:print_marbl_log'
   character(len=256)          :: message_prefix, message_location, log_message
