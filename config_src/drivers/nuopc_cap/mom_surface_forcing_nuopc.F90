@@ -206,7 +206,8 @@ type, public :: ice_ocean_boundary_type
                                                               !! model is providing.  Otherwise, the value from
                                                               !! the surface_forcing_CS is used.
 
-  type(marbl_ice_ocean_boundary_type), pointer :: MARBL_IOB => NULL() !< Structure containing IOB fields only needed by MARBL
+  type(marbl_ice_ocean_boundary_type), pointer :: MARBL_IOB => NULL() !< Structure containing IOB fields
+                                                                      !! (only needed by MARBL)
 end type ice_ocean_boundary_type
 
 integer :: id_clock_forcing

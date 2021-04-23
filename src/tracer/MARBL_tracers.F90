@@ -111,8 +111,10 @@ type, public :: MARBL_tracers_CS ; private
   real :: atm_alt_co2_const  !< alternate atmospheric CO2 for _ALT_CO2 tracers (if specifying a constant value)
   real :: ndep_scale_factor  !< scale factor to apply to nitrogen deposition
 
-  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:)  !< collect surface flux diagnostics from all columns before posting
-  type(temp_MARBL_diag), allocatable :: interior_tendency_diags(:)  !< collect tendency diagnostics from all columns before posting
+  type(temp_MARBL_diag), allocatable :: surface_flux_diags(:)  !< collect surface flux diagnostics from all columns
+                                                               !! before posting
+  type(temp_MARBL_diag), allocatable :: interior_tendency_diags(:)  !< collect tendency diagnostics from all columns
+                                                                    !! before posting
   type(saved_state_for_MARBL_type), allocatable :: surface_flux_saved_state(:)  !< surface_flux saved state
   type(saved_state_for_MARBL_type), allocatable :: interior_tendency_saved_state(:)  !< interior_tendency saved state
 
@@ -128,8 +130,10 @@ type, public :: MARBL_tracers_CS ; private
   !! so currently using temp_MARBL_diag for that.
   integer, allocatable :: id_surface_flux_out(:)  !< register_diag indices for surface_flux output
   type(temp_MARBL_diag), allocatable :: interior_tendency_out(:)  !< collect interior tendencies for diagnostic output
-  type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint(:)  !< vertical integral of interior tendencies (full column)
-  type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint_100m(:)  !< vertical integral of interior tendencies (top 100m)
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint(:)  !< vertical integral of interior tendencies
+                                                                       !! (full column)
+  type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint_100m(:)  !< vertical integral of interior tendencies
+                                                                            !! (top 100m)
 
   ! NOTE: MARBL will return in cgs so we need to convert to mks
   real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff [i, j, tracer]
@@ -555,11 +559,12 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
     end if
 
     write(name, "(2A)") "Jint_100m_", trim(MARBL_instances%tracer_metadata(m)%short_name)
-    write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), " Source Sink Term Vertical Integral, 0-100m"
+    write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), &
+                            " Source Sink Term Vertical Integral, 0-100m"
     write(units, "(2A)") trim(MARBL_instances%tracer_metadata(m)%units), " m/s"
     CS%interior_tendency_out_zint_100m(m)%id = register_diag_field("ocean_model", &
                                                                    trim(name), &
-                                                                   diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                                   diag%axesT1, &
                                                                    day, &
                                                                    trim(longname), &
                                                                    trim(units))
@@ -672,8 +677,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   ! (3) Read data
   !     TODO: Add US term to scale
-  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in(:,:,:), G%Domain, scale=CS%fesedflux_scale_factor)
-  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in(:,:,:), G%Domain, scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in(:,:,:), G%Domain, &
+                     scale=CS%fesedflux_scale_factor)
+  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in(:,:,:), G%Domain, &
+                     scale=CS%fesedflux_scale_factor)
 
   ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
   !     Remember, fesedflux_z = 0 at surface and is < 0 below surface
@@ -746,12 +753,16 @@ end subroutine register_MARBL_diags
 !> This subroutine allocates memory for saved state fields and registers them in the restart files
 subroutine setup_saved_state(MARBL_saved_state, HI, GV, restart_CS, tracers_may_reinit, local_saved_state)
 
-  type(marbl_saved_state_type),                  intent(in)    :: MARBL_saved_state !< MARBL saved state from MARBL_instances
+  type(marbl_saved_state_type),                  intent(in)    :: MARBL_saved_state !< MARBL saved state from
+                                                                                    !! MARBL_instances
   type(hor_index_type),                          intent(in)    :: HI   !< A horizontal index type structure.
   type(verticalGrid_type),                       intent(in)    :: GV   !< The ocean's vertical grid structure
-  type(MOM_restart_CS), pointer,                 intent(in)    :: restart_CS !< control structure to add saved state to restarts
-  logical,                                       intent(in)    :: tracers_may_reinit  !< used to determine mandatory flag in restart
-  type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array for local saved state
+  type(MOM_restart_CS), pointer,                 intent(in)    :: restart_CS !< control structure to add saved state
+                                                                             !! to restarts
+  logical,                                       intent(in)    :: tracers_may_reinit  !< used to determine mandatory
+                                                                                      !! flag in restart
+  type(saved_state_for_MARBL_type), allocatable, intent(inout) :: local_saved_state(:) !< allocatable array for local
+                                                                                       !! saved state
 
   integer :: num_fields, m
   character(len=200) :: log_message, varname
@@ -853,7 +864,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !             How does MOM pass SST and SSS to GFDL coupler? (look in core.F90?)
       if (CS%sss_ind > 0) MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
       if (CS%sst_ind > 0) MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
-      if (CS%ifrac_ind > 0) MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%MARBL_forcing%ice_fraction(i,j)
+      if (CS%ifrac_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%MARBL_forcing%ice_fraction(i,j)
       ! MARBL wants u10_sqr in (cm/s)^2
       if (CS%u10_sqr_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%MARBL_forcing%u10_sqr(i,j) * &
@@ -862,7 +874,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
       if (CS%atmpress_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
-                                                                             ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * atm_per_Pa)
+                                                                             ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * &
+                                                                              atm_per_Pa)
 
       !       These are okay, but need option to come in from coupler
       if (CS%xco2_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
@@ -871,7 +884,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * &
-                                                                             (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+                                                                             (kg_m2_s_conversion * g_per_kg * &
+                                                                              m_per_cm**2)
       if (CS%fe_dep_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j) * &
                                                                            (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
@@ -1020,8 +1034,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       This are okay, but need option to read in from file
       !       (Same as dust_dep_ind for surface_flux_forcings)
       if (CS%dustflux_ind > 0) &
-        MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * &
-                                                                                  (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+        MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = &
+            fluxes%MARBL_forcing%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
 
       !        TODO: Support PAR (currently just using single subcolumn)
       !              (Look for Pen_sw_bnd?)
@@ -1069,7 +1083,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * interior tendency saved state
       !       (currently only 3D fields are saved from interior_tendency_compute())
       do m=1,size(MARBL_instances%interior_tendency_saved_state%state)
-        MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1) = CS%interior_tendency_saved_state(m)%field_3d(i,j,:)
+        MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1) = &
+            CS%interior_tendency_saved_state(m)%field_3d(i,j,:)
       end do
 
       ! iv. Compute interior tendencies in MARBL
@@ -1104,7 +1119,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * diagnostics
       do m=1,size(MARBL_instances%interior_tendency_diags%diags)
         if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
-          CS%interior_tendency_diags(m)%field_2d(i,j) = real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
+          CS%interior_tendency_diags(m)%field_2d(i,j) = &
+              real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
         else
           CS%interior_tendency_diags(m)%field_3d(i,j,1:kmt) = &
               real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(1:kmt,1))
@@ -1135,17 +1151,19 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = 0.
           do k=1,kmt
             if (zi(k) < 100.) then
-              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + &
-                                                                    dz(k) * MARBL_instances%interior_tendencies(m,k)
+              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
+                  CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
             else if (zi(k-1) < 100.) then
-              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + &
-                                                                    dz(k) * ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * &
-                                                                    MARBL_instances%interior_tendencies(m,k)
+              CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
+                  CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * &
+                                                                        ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * &
+                                                                        MARBL_instances%interior_tendencies(m,k)
             else
               exit
             end if
           end do
-          CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = G%mask2dT(i,j)*CS%interior_tendency_out_zint_100m(m)%field_2d(i,j)
+          CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
+              G%mask2dT(i,j)*CS%interior_tendency_out_zint_100m(m)%field_2d(i,j)
         end if
       end do
 
@@ -1174,7 +1192,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) &
       call post_data(CS%interior_tendency_out_zint(m)%id, CS%interior_tendency_out_zint(m)%field_2d(:,:), CS%diag)
     if (allocated(CS%interior_tendency_out_zint_100m(m)%field_2d)) &
-      call post_data(CS%interior_tendency_out_zint_100m(m)%id, CS%interior_tendency_out_zint_100m(m)%field_2d(:,:), CS%diag)
+      call post_data(CS%interior_tendency_out_zint_100m(m)%id, CS%interior_tendency_out_zint_100m(m)%field_2d(:,:), &
+                     CS%diag)
   end do
 
 

@@ -398,16 +398,19 @@ contains
 
   subroutine convert_marbl_IOB_to_forcings(MARBL_IOB, Time, G, US, i0, j0, MARBL_forcing, CS)
 
-    type(marbl_ice_ocean_boundary_type), pointer, intent(in)    :: MARBL_IOB      !< MARBL-specific ice-ocean boundary type
-    type(time_type),                              intent(in)    :: Time           !< The time of the fluxes, used for interpolating the
-                                                                                  !! salinity to the right time, when it is being restored.
+    type(marbl_ice_ocean_boundary_type), pointer, intent(in)    :: MARBL_IOB      !< MARBL-specific ice-ocean boundary
+                                                                                  !! type
+    type(time_type),                              intent(in)    :: Time           !< The time of the fluxes, used for
+                                                                                  !! interpolating the salinity to the
+                                                                                  !! right time, when it is being
+                                                                                  !! restored.
     type(ocean_grid_type),                        intent(in)    :: G              !< The ocean's grid structure
     type(unit_scale_type),                        intent(in)    :: US             !< A dimensional unit scaling type
     integer,                                      intent(in)    :: i0             !< i index offset
     integer,                                      intent(in)    :: j0             !< j index offset
     type(marbl_forcing_type),                     intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
-    type(marbl_forcing_CS), pointer,              intent(inout) :: CS             !< A pointer that is set to point to control
-                                                                                  !! structure for MARBL forcing
+    type(marbl_forcing_CS), pointer,              intent(inout) :: CS             !< A pointer that is set to point to
+                                                                                  !! control structure for MARBL forcing
 
     ! These are Fortran parameters in POP
     real, parameter :: DONriv_refract = 0.1
@@ -428,10 +431,12 @@ contains
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
     if (CS%diag_ids%atm_fine_dust > 0) &
-      call post_data(CS%diag_ids%atm_fine_dust, kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%atm_fine_dust, &
+                     kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_coarse_dust > 0) &
-      call post_data(CS%diag_ids%atm_coarse_dust, kg_m2_s_conversion * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%atm_coarse_dust, &
+                     kg_m2_s_conversion * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_bc > 0) &
       call post_data(CS%diag_ids%atm_bc, kg_m2_s_conversion * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
@@ -446,8 +451,10 @@ contains
     do j=js,je ; do i=is,ie
       if (associated(MARBL_IOB%atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
-        MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * (MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
-                                        MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) + MARBL_IOB%seaice_dust_flux(i-i0,j-j0))
+        MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * &
+                                       (MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
+                                        MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) + &
+                                        MARBL_IOB%seaice_dust_flux(i-i0,j-j0))
       end if
 
       if (associated(MARBL_IOB%atm_bc_flux)) then
@@ -499,7 +506,8 @@ contains
     ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
     call time_interp_external(CS%id_din_riv,Time,time_varying_data)
     MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - &
+                                      CS%riv_flux_scale_factor * time_varying_data(:,:)
     MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - &
                                               CS%riv_flux_scale_factor * time_varying_data(:,:)
 
@@ -507,12 +515,16 @@ contains
     MARBL_forcing%po4_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
 
     call time_interp_external(CS%id_don_riv,Time,time_varying_data)
-    MARBL_forcing%don_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DONriv_refract) * time_varying_data(:,:)
-    MARBL_forcing%donr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DONriv_refract * time_varying_data(:,:)
+    MARBL_forcing%don_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DONriv_refract) * &
+                                      time_varying_data(:,:)
+    MARBL_forcing%donr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DONriv_refract * &
+                                       time_varying_data(:,:)
 
     call time_interp_external(CS%id_dop_riv,Time,time_varying_data)
-    MARBL_forcing%dop_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOPriv_refract) * time_varying_data(:,:)
-    MARBL_forcing%dopr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOPriv_refract * time_varying_data(:,:)
+    MARBL_forcing%dop_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOPriv_refract) * &
+                                      time_varying_data(:,:)
+    MARBL_forcing%dopr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOPriv_refract * &
+                                       time_varying_data(:,:)
 
     call time_interp_external(CS%id_dsi_riv,Time,time_varying_data)
     MARBL_forcing%sio3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
@@ -525,13 +537,16 @@ contains
     MARBL_forcing%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
 
     call time_interp_external(CS%id_alk_riv,Time,time_varying_data)
-    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + CS%riv_flux_scale_factor * time_varying_data(:,:)
+    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + &
+                                      CS%riv_flux_scale_factor * time_varying_data(:,:)
     MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + &
                                               CS%riv_flux_scale_factor * time_varying_data(:,:)
 
     call time_interp_external(CS%id_doc_riv,Time,time_varying_data)
-    MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOCriv_refract) * time_varying_data(:,:)
-    MARBL_forcing%docr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOCriv_refract * time_varying_data(:,:)
+    MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOCriv_refract) * &
+                                      time_varying_data(:,:)
+    MARBL_forcing%docr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOCriv_refract * &
+                                       time_varying_data(:,:)
 
     ! Post to diags
     if (CS%diag_ids%no3_riv_flux > 0) &
