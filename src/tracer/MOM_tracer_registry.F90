@@ -467,11 +467,11 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
     Tr%id_zint = register_diag_field("ocean_model", trim(shortnm)//"_zint", &
         diag%axesT1, Time, &
         "Thickness-weighted integral of " // trim(longname), &
-        trim(units) // " m", conversion=GV%H_to_m)
+        trim(units) // " m")
     Tr%id_zint_100m = register_diag_field("ocean_model", trim(shortnm)//"_zint_100m", &
         diag%axesT1, Time, &
         "Thickness-weighted integral of "// trim(longname) // " over top 100m", &
-        trim(units) // " m", conversion=GV%H_to_m)
+        trim(units) // " m")
     Tr%id_surf = register_diag_field("ocean_model", trim(shortnm)//"_SURF", &
         diag%axesT1, Time, "Surface values of "// trim(longname), trim(units))
     if (Tr%id_adx > 0) call safe_alloc_ptr(Tr%ad_x,IsdB,IedB,jsd,jed,nz)
@@ -805,7 +805,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
       do k=1, nz
         do j=js,je ; do i=is,ie
           ztop(i,j) = zbot(i,j)
-          zbot(i,j) = ztop(i,j) + h_diag(i,j,k)*GV%H_to_Z
+          zbot(i,j) = ztop(i,j) + h_diag(i,j,k)*GV%H_to_m
           if (zbot(i,j) <= 100.0) then
             frac_under_100m(i,j,k) = 1.0
           else if (ztop(i,j) < 100.0) then
@@ -846,7 +846,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
     if (Tr%id_zint > 0) then
       work2d(:,:) = 0.0
       do k=1,nz ; do j=js,je ; do i=is,ie
-        work2d(i,j) = work2d(i,j) + (GV%H_to_RZ*h_diag(i,j,k))*tr%t(i,j,k)
+        work2d(i,j) = work2d(i,j) + (h_diag(i,j,k)*GV%H_to_m)*tr%t(i,j,k)
       enddo ; enddo ; enddo
       call post_data(Tr%id_zint, work2d, diag)
     endif
@@ -855,7 +855,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
     if (Tr%id_zint_100m > 0) then
       work2d(:,:) = 0.0
       do k=1,khi ; do j=js,je ; do i=is,ie
-        work2d(i,j) = work2d(i,j) + frac_under_100m(i,j,k)*(GV%H_to_RZ*h_diag(i,j,k))*tr%t(i,j,k)
+        work2d(i,j) = work2d(i,j) + frac_under_100m(i,j,k)*((h_diag(i,j,k)*GV%H_to_m)*tr%t(i,j,k))
       enddo ; enddo ; enddo
       call post_data(Tr%id_zint_100m, work2d, diag)
     endif
