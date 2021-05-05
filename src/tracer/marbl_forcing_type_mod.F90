@@ -6,7 +6,8 @@ module marbl_forcing_type_mod
 !! for passing forcing fields to MARBL
 !! (This comment can go in the wiki on the NCAR fork?)
 
-use MOM_diag_mediator,        only : safe_alloc_ptr, time_type, diag_ctrl, register_diag_field, post_data
+use MOM_diag_mediator,        only : safe_alloc_ptr, diag_ctrl, register_diag_field, post_data
+use MOM_time_manager,         only : time_type, real_to_time
 use MOM_error_handler,        only : MOM_error, WARNING
 use MOM_file_parser,          only : get_param, log_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
@@ -85,7 +86,6 @@ type, public :: marbl_forcing_CS
   real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
   real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
   real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
-  real    :: riv_flux_scale_factor          !< Convert from nmol / cm^2 / s to mmol / m^2 / s
 
   type(marbl_forcing_diag_ids) :: diag_ids  !< used for registering and posting some MARBL forcing fields as diagnostics
 
@@ -182,16 +182,12 @@ contains
     ! ** River fluxes
     call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_file, &
                    "The file in which the river fluxes can be found", &
-                   default="riv_nut.gnews_gnm.rx1_to_tx0.66v1_nnsm_e1000r300_190315.20210401.nc")
+                   default="riv_nut.gnews_gnm.rx1_to_tx0.66v1_nnsm_e1000r300_190315.20210405.nc")
     if (scan(CS%riv_flux_file,'/') == 0) then
       ! CS%riv_flux_file = trim(inputdir) // trim(CS%riv_flux_file)
       CS%riv_flux_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%riv_flux_file)
       call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_file)
     end if
-    ! ** Scale factor for river fluxes
-    call get_param(param_file, mdl, "RIV_FLUX_SCALE_FACTOR", CS%riv_flux_scale_factor, &
-                   "Conversion factor between RIV_FLUX file units and MMOM units (nmol / cm^2 / s -> mmol / m^2 / s)", &
-                   default=0.01)
     CS%id_din_riv = init_external_field(CS%riv_flux_file, 'din_riv_flux', domain=G%Domain%mpp_domain)
     CS%id_don_riv = init_external_field(CS%riv_flux_file, 'don_riv_flux', domain=G%Domain%mpp_domain)
     CS%id_dip_riv = init_external_field(CS%riv_flux_file, 'dip_riv_flux', domain=G%Domain%mpp_domain)
@@ -418,6 +414,7 @@ contains
     real, parameter :: DOPriv_refract = 0.025
 
     real, dimension(SZI_(G),SZJ_(G)) :: time_varying_data  !< The field read in from forcing file with time dimension
+    type(time_type) :: Time_riv_flux  !< For reading river flux fields, we use a modified version of Time
     integer :: i, j, is, ie, js, je
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
                                      !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
@@ -504,49 +501,47 @@ contains
     MARBL_forcing%alk_alt_co2_riv_flux(:,:) = 0.
 
     ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
-    call time_interp_external(CS%id_din_riv,Time,time_varying_data)
-    MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - &
-                                      CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - &
-                                              CS%riv_flux_scale_factor * time_varying_data(:,:)
+    ! TODO: Function that properly converts from model time to file time
+    !       But for now, our input file has time stamp of 693316.5 days past 0001-01-01 0:00
+    !       and that is converted to seconds below
+    Time_riv_flux = real_to_time(693316.5*86400.)
+    call time_interp_external(CS%id_din_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - time_varying_data(:,:)
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dip_riv,Time,time_varying_data)
-    MARBL_forcing%po4_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+    call time_interp_external(CS%id_dip_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%po4_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_don_riv,Time,time_varying_data)
-    MARBL_forcing%don_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DONriv_refract) * &
+    call time_interp_external(CS%id_don_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%don_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DONriv_refract) * &
                                       time_varying_data(:,:)
-    MARBL_forcing%donr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DONriv_refract * &
+    MARBL_forcing%donr_riv_flux(:,:) = G%mask2dT(:,:) * DONriv_refract * &
                                        time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dop_riv,Time,time_varying_data)
-    MARBL_forcing%dop_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOPriv_refract) * &
+    call time_interp_external(CS%id_dop_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%dop_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOPriv_refract) * &
                                       time_varying_data(:,:)
-    MARBL_forcing%dopr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOPriv_refract * &
+    MARBL_forcing%dopr_riv_flux(:,:) = G%mask2dT(:,:) * DOPriv_refract * &
                                        time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dsi_riv,Time,time_varying_data)
-    MARBL_forcing%sio3_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+    call time_interp_external(CS%id_dsi_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%sio3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dfe_riv,Time,time_varying_data)
-    MARBL_forcing%fe_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+    call time_interp_external(CS%id_dfe_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%fe_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dic_riv,Time,time_varying_data)
-    MARBL_forcing%dic_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * time_varying_data(:,:)
+    call time_interp_external(CS%id_dic_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%dic_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    MARBL_forcing%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_alk_riv,Time,time_varying_data)
-    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + &
-                                      CS%riv_flux_scale_factor * time_varying_data(:,:)
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + &
-                                              CS%riv_flux_scale_factor * time_varying_data(:,:)
+    call time_interp_external(CS%id_alk_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + time_varying_data(:,:)
+    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + time_varying_data(:,:)
 
-    call time_interp_external(CS%id_doc_riv,Time,time_varying_data)
-    MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * (1. - DOCriv_refract) * &
-                                      time_varying_data(:,:)
-    MARBL_forcing%docr_riv_flux(:,:) = G%mask2dT(:,:) * CS%riv_flux_scale_factor * DOCriv_refract * &
-                                       time_varying_data(:,:)
+    call time_interp_external(CS%id_doc_riv,Time_riv_flux,time_varying_data)
+    MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOCriv_refract) * time_varying_data(:,:)
+    MARBL_forcing%docr_riv_flux(:,:) = G%mask2dT(:,:) * DOCriv_refract * time_varying_data(:,:)
 
     ! Post to diags
     if (CS%diag_ids%no3_riv_flux > 0) &
