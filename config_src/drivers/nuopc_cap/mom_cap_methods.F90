@@ -83,7 +83,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   real(ESMF_KIND_R8), allocatable :: tauy(:,:)
   real(ESMF_KIND_R8), allocatable :: stkx1(:,:),stkx2(:,:),stkx3(:,:)
   real(ESMF_KIND_R8), allocatable :: stky1(:,:),stky2(:,:),stky3(:,:)
-  real(ESMF_KIND_R8), allocatable :: marbl_work(:,:)
   character(len=*)  , parameter   :: subname = '(mom_import)'
 
   rc = ESMF_SUCCESS
@@ -307,6 +306,11 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   endif
 
   ! MARBL fields
+  !
+  ! ice fraction, 10m wind squared, and seaice_dust_flux are single fields from the coupler
+  ! atm_fine_dust_flux, atm_coarse_dust_flux, atm_bc_flux, and seaice_bc_flux
+  ! are all sums of multiple fields and will be treated slightly differently
+  ! For those fields, note that state_getimport is additive
 
   !----
   ! ice fraction
@@ -331,86 +335,62 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
        return  ! bail out
 
   !----
-  ! seaice_dust_flux is a single field from the coupler
-  ! atm_fine_dust_flux, atm_coarse_dust_flux, atm_bc_flux, and seaice_bc_flux
-  ! are all sums of multiple fields and will be treated slightly differently
+  ! fine dust flux from atmosphere
   !----
-  allocate (marbl_work(isc:iec,jsc:jec))
   ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:) = 0._ESMF_KIND_R8
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstwet1',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:), rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:) + &
-                                                         marbl_work(:,:)
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstdry1',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:), rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:) + &
-                                                         marbl_work(:,:)
 
+  !----
+  ! coarse dust flux from atmosphere
+  !----
   ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = 0._ESMF_KIND_R8
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstwet2',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) + &
-                                                           marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstwet3',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) + &
-                                                           marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstwet4',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) + &
-                                                           marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstdry2',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) + &
-                                                           marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstdry3',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) + &
-                                                           marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstdry4',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) + &
-                                                           marbl_work
 
   !----
   ! dust flux from sea ice
@@ -427,49 +407,35 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   ! black carbon flux from atmosphere
   !----
   ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) = 0._ESMF_KIND_R8
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_bcphidry',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_bc_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) + &
-                                                  marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_bcphodry',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_bc_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) = ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) + &
-                                                  marbl_work
 
   !----
   ! black carbon flux from sea ice
   !----
   ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) = 0._ESMF_KIND_R8
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Fioi_bcpho',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) = ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) + &
-                                                     marbl_work
-  marbl_work = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Fioi_bcphi',  &
-       isc, iec, jsc, jec, marbl_work, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
-  ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) = ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) + &
-                                                     marbl_work
-
-  deallocate (marbl_work)
 
 end subroutine mom_import
 
