@@ -7,12 +7,15 @@ module marbl_forcing_type_mod
 !! (This comment can go in the wiki on the NCAR fork?)
 
 use MOM_diag_mediator,        only : safe_alloc_ptr, diag_ctrl, register_diag_field, post_data
-use MOM_time_manager,         only : time_type, real_to_time
+use MOM_time_manager,         only : time_type
 use MOM_error_handler,        only : MOM_error, WARNING
 use MOM_file_parser,          only : get_param, log_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
 use MOM_unit_scaling,         only : unit_scale_type
-use time_interp_external_mod, only : init_external_field, time_interp_external
+use MOM_interpolate,          only : init_external_field, time_interp_external
+use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
+use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
+use tracer_forcing_utils_mod, only : map_model_time_to_forcing_time
 
 implicit none ; private
 
@@ -73,7 +76,7 @@ type, public :: marbl_forcing_CS
   logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
                                             !! This is temporary, we will always read NDEP
   character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
-  character(len=200) :: riv_flux_file       !< File containing river fluxes (always read)
+  type(forcing_timeseries_dataset) :: riv_flux_dataset !< File and time axis information for river fluxes
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                              !! regulate the timing of diagnostic output.
 
@@ -132,6 +135,11 @@ contains
                                                                   !! structure for MARBL forcing
 
     character(len=40)  :: mdl = "MOM_forcing_type"  ! This module's name.
+    integer :: riv_flux_file_start_year
+    integer :: riv_flux_file_end_year
+    integer :: riv_flux_file_data_ref_year
+    integer :: riv_flux_file_model_ref_year
+    integer :: riv_flux_forcing_year
 
     if (associated(CS)) then
       call MOM_error(WARNING, "marbl_forcing_init called with an associated "// &
@@ -180,23 +188,46 @@ contains
     end if
 
     ! ** River fluxes
-    call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_file, &
+    call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
                    "The file in which the river fluxes can be found", &
                    default="riv_nut.gnews_gnm.rx1_to_tx0.66v1_nnsm_e1000r300_190315.20210405.nc")
-    if (scan(CS%riv_flux_file,'/') == 0) then
-      ! CS%riv_flux_file = trim(inputdir) // trim(CS%riv_flux_file)
-      CS%riv_flux_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%riv_flux_file)
-      call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_file)
+    ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
+    if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
+      ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
+      CS%riv_flux_dataset%file_name = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%riv_flux_dataset%file_name)
+      call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
     end if
-    CS%id_din_riv = init_external_field(CS%riv_flux_file, 'din_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_don_riv = init_external_field(CS%riv_flux_file, 'don_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dip_riv = init_external_field(CS%riv_flux_file, 'dip_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dop_riv = init_external_field(CS%riv_flux_file, 'dop_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dsi_riv = init_external_field(CS%riv_flux_file, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dfe_riv = init_external_field(CS%riv_flux_file, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dic_riv = init_external_field(CS%riv_flux_file, 'dic_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_alk_riv = init_external_field(CS%riv_flux_file, 'alk_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_doc_riv = init_external_field(CS%riv_flux_file, 'doc_riv_flux', domain=G%Domain%mpp_domain)
+    call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
+                   ".true. for time-varying forcing, .false. for static forcing", default=.false.)
+    if (CS%riv_flux_dataset%l_time_varying) then
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
+                     "Time coordinate of earliest date in RIV_FLUX_FILE", default=1900)
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
+                     "Time coordinate of earliest date in RIV_FLUX_FILE", default=1999)
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
+                     "Time coordinate of latest date in RIV_FLUX_FILE", default=1900)
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
+                     "Time coordinate of latest date in RIV_FLUX_FILE",  default=1900)
+    else
+      call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
+                     "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
+    end if
+    call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
+                                               riv_flux_file_end_year, &
+                                               riv_flux_file_data_ref_year, &
+                                               riv_flux_file_model_ref_year, &
+                                               riv_flux_forcing_year, &
+                                               CS%riv_flux_dataset)
+
+    CS%id_din_riv = init_external_field(CS%riv_flux_dataset%file_name, 'din_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_don_riv = init_external_field(CS%riv_flux_dataset%file_name, 'don_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dip_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dip_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dop_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dop_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dsi_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dfe_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dic_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dic_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_alk_riv = init_external_field(CS%riv_flux_dataset%file_name, 'alk_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_doc_riv = init_external_field(CS%riv_flux_dataset%file_name, 'doc_riv_flux', domain=G%Domain%mpp_domain)
 
     ! Register diagnostic fields for outputing forcing values
     CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", &
@@ -501,10 +532,8 @@ contains
     MARBL_forcing%alk_alt_co2_riv_flux(:,:) = 0.
 
     ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
-    ! TODO: Function that properly converts from model time to file time
-    !       But for now, our input file has time stamp of 693316.5 days past 0001-01-01 0:00
-    !       and that is converted to seconds below
-    Time_riv_flux = real_to_time(693316.5*86400.)
+    Time_riv_flux = map_model_time_to_forcing_time(Time, CS%riv_flux_dataset)
+
     call time_interp_external(CS%id_din_riv,Time_riv_flux,time_varying_data)
     MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
     MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - time_varying_data(:,:)
