@@ -12,7 +12,7 @@ use MOM_time_manager, only : time_type, real_to_time, operator(+), operator(<), 
 type, public :: forcing_timeseries_dataset
     character(len=200) :: file_name  !< name of file containing river flux forcing
     logical :: l_time_varying        !< .true. => forcing is dependent on model time, .false. => static forcing
-    ! logical :: l_FMS_modulo          !< .true. => let FMS handle determining time level to read (e.g. for climatologies)
+    ! logical :: l_FMS_modulo        !< .true. => let FMS handle determining time level to read (e.g. for climatologies)
     type(time_type) :: data_forcing  !< convert data_forcing_year to time type
     type(time_type) :: data_start    !< convert data_start_year to time type
     type(time_type) :: data_end      !< convert data_end_year to time type
@@ -39,8 +39,9 @@ contains
         integer,                          intent(in)    :: model_ref_year     !< for time-varying forcing, align
                                                                               !! data_ref_year in file with
                                                                               !! model_ref_year in model
-        integer,                          intent(in)    :: data_forcing_year  !< for static forcing, read file at this date
-                                                                              !! (this is ignored for time-varying forcing)
+        integer,                          intent(in)    :: data_forcing_year  !< for static forcing, read file at this
+                                                                              !! date (this is ignored for time-varying
+                                                                              !! forcing)
         type(forcing_timeseries_dataset), intent(inout) :: forcing_dataset    !< information about forcing file
 
         if (forcing_dataset%l_time_varying) then
@@ -57,9 +58,9 @@ contains
     !! ensure result is within acceptable bounds
     function map_model_time_to_forcing_time(Time, forcing_dataset)
 
-        type(time_type),                  intent(in)  :: Time                           !< Model time
-        type(forcing_timeseries_dataset), intent(in)  :: forcing_dataset                !< information about forcing file
-        type(time_type) :: map_model_time_to_forcing_time                               !< time to read forcing file
+        type(time_type),                  intent(in)  :: Time             !< Model time
+        type(forcing_timeseries_dataset), intent(in)  :: forcing_dataset  !< information about forcing file
+        type(time_type) :: map_model_time_to_forcing_time                 !< time to read forcing file
 
         if (forcing_dataset%l_time_varying) then
             map_model_time_to_forcing_time = Time + forcing_dataset%m2d_offset
