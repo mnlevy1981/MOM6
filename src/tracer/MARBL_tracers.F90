@@ -1087,6 +1087,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
             CS%interior_tendency_saved_state(m)%field_3d(i,j,:)
       end do
 
+      !     * conversion for bottom flux -> tendency
+      kmt = MARBL_instances%domain%kmt
+      MARBL_instances%bot_flux_to_tend(:) = 0.
+      MARBL_instances%bot_flux_to_tend(kmt) = 1. / (dz(kmt) * cm_per_m)
+
       ! iv. Compute interior tendencies in MARBL
       call MARBL_instances%interior_tendency_compute()
       if (MARBL_instances%StatusLog%labort_marbl) then
