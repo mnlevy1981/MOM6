@@ -832,6 +832,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 ! Local variables
   character(len=256) :: log_message
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: bot_flux_to_tend
+  real, dimension(SZI_(G),SZJ_(G)) :: dummy_bot_flux
   real :: sfc_val  ! The surface value for the tracers.
   real :: Isecs_per_year  ! The number of seconds in a year.
   real :: year            ! The time in years.
@@ -977,6 +979,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   end do
 
   ! (3) Apply surface fluxes via vertical diffusion
+  !     Also, prepare for populating bot_flux_to_tend
+  ! bot_flux_to_tend is needed by MARBL to help redistribute sinking particulate
+  ! matter that hits the sea floor and are remineralized. These fluxes are added
+  ! to tendency terms, so bot_flux_to_tend provides the conversion between
+  ! bottom flux and tendency across the whole column.
+  bot_flux_to_tend(:,:,:) = 0.
+  dummy_bot_flux(:,:) = -GV%Rho0 * G%mask2dT(:,:)
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,CS%ntr
       do k=1,nz ;do j=js,je ; do i=is,ie
@@ -984,13 +993,16 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       enddo ; enddo ; enddo
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
           evap_CFL_limit, minimum_forcing_depth)
-      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
+      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=GV%Rho0 * CS%STF(:,:,m))
     enddo
+    call tracer_vertdiff(h_work, ea, eb, dt, bot_flux_to_tend, G, GV, btm_flux=dummy_bot_flux)
   else
     do m=1,CS%ntr
-      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=CS%STF(:,:,m))
+      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=GV%Rho0 * CS%STF(:,:,m))
     enddo
+    call tracer_vertdiff(h_old, ea, eb, dt, bot_flux_to_tend, G, GV, btm_flux=dummy_bot_flux)
   endif
+  bot_flux_to_tend(:, :, :) = (1. / dt) * bot_flux_to_tend(:, :, :)
 
   ! (4) Compute interior tendencies
   do i=is,ie
@@ -1088,9 +1100,27 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       end do
 
       !     * conversion for bottom flux -> tendency
+      ! sum(dz(:) * bot_flux_to_tend(i, j, :)) = -100
+      ! m_per_cm gets us to -1, need to figure out why minus sign
+      ! but maybe we are getting sign of btm_flux wrong in tracer_vertdiff?
+      MARBL_instances%bot_flux_to_tend(:) = -m_per_cm * bot_flux_to_tend(i, j, :)
+
+      ! Kludge to maintain conservation with the KMT kludge in place
+      ! This can be removed when we remove the KMT kludge itself
       kmt = MARBL_instances%domain%kmt
-      MARBL_instances%bot_flux_to_tend(:) = 0.
-      MARBL_instances%bot_flux_to_tend(kmt) = 1. / (dz(kmt) * cm_per_m)
+      if (kmt .lt. GV%ke) then
+        MARBL_instances%bot_flux_to_tend(kmt) = sum(dz(kmt:) * MARBL_instances%bot_flux_to_tend(kmt:)) / dz(kmt)
+        MARBL_instances%bot_flux_to_tend(kmt+1:) = 0.
+      end if
+
+      ! For conservation (I think), sum(dz(:) * bot_flux_to_tend(:)) must be
+      ! one. Since MARBL is using cgs, we convert dz to cm for this check.
+      if (abs(1. - sum((cm_per_m * dz(:)) * MARBL_instances%bot_flux_to_tend(:))) > 1e-8) then
+        write(log_message, "(A, E11.3, A)") "Sum of dz * bot_flux_to_tend is ", &
+                                             sum((cm_per_m * dz(:)) * MARBL_instances%bot_flux_to_tend(:)), &
+                                             "Which is not close to 1.0"
+        call MOM_error(FATAL, log_message)
+      end if
 
       ! iv. Compute interior tendencies in MARBL
       call MARBL_instances%interior_tendency_compute()
