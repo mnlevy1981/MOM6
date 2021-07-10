@@ -840,9 +840,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   integer :: secs, days   ! Integer components of the time type.
   real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
-  integer :: i, j, k, is, ie, js, je, nz, m, kmt ! TODO: kmt might be temporary?
+  integer :: i, j, k, is, ie, js, je, nz, m
   real :: kg_m2_s_conversion, ndep_conversion
-  logical :: set_kmt ! Temporary variable; true if kmt has been set based on dz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   kg_m2_s_conversion = US%RZ_T_to_kg_m2s
@@ -1011,10 +1010,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (G%mask2dT(i,j) == 0) cycle
 
       ! ii. Set up vertical domain
-      !     TODO: for z*, we may want to set kmt to last layer thicker than (say) 1cm or 1mm
-      !           need to update MARBL to handle vanishing layers better
       MARBL_instances%domain%kmt = GV%ke
-      set_kmt=.false.
       ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
@@ -1023,12 +1019,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
         zc(k) = zi(k) - 0.5 * dz(k)
         zi(k-1) = zi(k) - dz(k)
-        ! TODO: better way of handling vanishing layers, e.g. average sediment over bottom 5m
-        !       (this is a z* workaround for layers that have vanished at bottom of ocean)
-        if ((.not. set_kmt) .and. (dz(k) > 0.01)) then
-          set_kmt = .true.
-          MARBL_instances%domain%kmt = k
-        end if
       enddo
 
       ! mks -> cgs
@@ -1070,15 +1060,14 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           0.0598088*(exp(-0.025*zc(:)) - 1) + 0.100766*zc(:) + 2.28405e-7*(zc(:)**2)
 
       if (CS%fesedflux_ind > 0) then
-        kmt = MARBL_instances%domain%kmt
         MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0.
         call reintegrate_column(CS%fesedflux_nz, &
                                 CS%fesedflux_dz(i,j,:) * sum(dz(:)) / (G%bathyT(i,j)), &
                                 CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), &
-                                kmt, &
-                                dz(1:kmt), &
+                                GV%ke, &
+                                dz(:), &
                                 0., &
-                                MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,1:kmt))
+                                MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:))
       end if
 
       !        TODO: and ability to read these fields from file
@@ -1105,14 +1094,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! but maybe we are getting sign of btm_flux wrong in tracer_vertdiff?
       MARBL_instances%bot_flux_to_tend(:) = -m_per_cm * bot_flux_to_tend(i, j, :)
 
-      ! Kludge to maintain conservation with the KMT kludge in place
-      ! This can be removed when we remove the KMT kludge itself
-      kmt = MARBL_instances%domain%kmt
-      if (kmt .lt. GV%ke) then
-        MARBL_instances%bot_flux_to_tend(kmt) = sum(dz(kmt:) * MARBL_instances%bot_flux_to_tend(kmt:)) / dz(kmt)
-        MARBL_instances%bot_flux_to_tend(kmt+1:) = 0.
-      end if
-
       ! For conservation (I think), sum(dz(:) * bot_flux_to_tend(:)) must be
       ! one. Since MARBL is using cgs, we convert dz to cm for this check.
       if (abs(1. - sum((cm_per_m * dz(:)) * MARBL_instances%bot_flux_to_tend(:))) > 1e-8) then
@@ -1132,23 +1113,15 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! v. Apply tendencies immediately
       !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
-      !    Also, set kmt because we need to avoid using MARBL values below that level
-      !    Current plan: treat all values below kmt as equal to the value of the kmt level
-      kmt = MARBL_instances%domain%kmt
       do k=1,GV%ke
-        if (k <= kmt) then
-          CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, k)
-        else
-          CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, kmt)
-        end if
+        CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, k)
       end do
 
       ! vi. Copy output that MOM6 needs to hold on to
       !     * saved state
       do m=1,size(MARBL_instances%interior_tendency_saved_state%state)
-        CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = 0.
-        CS%interior_tendency_saved_state(m)%field_3d(i,j,1:kmt) = &
-            MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(1:kmt,1)
+        CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = &
+            MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1)
       end do
 
       !     * diagnostics
@@ -1157,34 +1130,23 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           CS%interior_tendency_diags(m)%field_2d(i,j) = &
               real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
         else
-          CS%interior_tendency_diags(m)%field_3d(i,j,1:kmt) = &
-              real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(1:kmt,1))
-          if (kmt < GV%ke) then
-            CS%interior_tendency_diags(m)%field_3d(i,j,kmt+1:GV%ke) = CS%interior_tendency_diags(m)%field_3d(i,j,kmt)
-          end if
+          CS%interior_tendency_diags(m)%field_3d(i,j,:) = &
+              real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
         end if
       end do
       !     * tendency values themselves (and vertical integrals of them)
       do m=1,CS%ntr
         if (allocated(CS%interior_tendency_out(m)%field_3d)) then
-          CS%interior_tendency_out(m)%field_3d(i,j,1:kmt) = G%mask2dT(i,j)*MARBL_instances%interior_tendencies(m,1:kmt)
-          if (kmt < GV%ke) then
-            CS%interior_tendency_out(m)%field_3d(i,j,kmt+1:GV%ke) = 0.
-          end if
+          CS%interior_tendency_out(m)%field_3d(i,j,:) = G%mask2dT(i,j)*MARBL_instances%interior_tendencies(m,:)
         end if
 
         if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) then
-          CS%interior_tendency_out_zint(m)%field_2d(i,j) = 0.
-          do k=1,kmt
-            CS%interior_tendency_out_zint(m)%field_2d(i,j) = CS%interior_tendency_out_zint(m)%field_2d(i,j) + &
-                                                             dz(k) * MARBL_instances%interior_tendencies(m,k)
-          end do
-          CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j)*CS%interior_tendency_out_zint(m)%field_2d(i,j)
+          CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j) * sum(dz(:) * MARBL_instances%interior_tendencies(m,:))
         end if
 
         if (allocated(CS%interior_tendency_out_zint_100m(m)%field_2d)) then
           CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = 0.
-          do k=1,kmt
+          do k=1,GV%ke
             if (zi(k) < 100.) then
               CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
                   CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
