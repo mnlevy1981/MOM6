@@ -134,6 +134,7 @@ type, public :: MARBL_tracers_CS ; private
                                                                        !! (full column)
   type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint_100m(:)  !< vertical integral of interior tendencies
                                                                             !! (top 100m)
+  integer :: bot_flux_to_tend_id  !< register_diag index for BOT_FLUX_TO_TEND
 
   ! NOTE: MARBL will return in cgs so we need to convert to mks
   real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff [i, j, tracer]
@@ -575,6 +576,14 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   end do
 
+  ! Register diagnostics for MOM to report that are not tracer specific
+  CS%bot_flux_to_tend_id = register_diag_field("ocean_model", &
+                                               "BOT_FLUX_TO_TEND", &
+                                               diag%axesTL, & ! T=> tracer grid? L => layer center
+                                               day, &
+                                               "Conversion Factor for Bottom Flux -> Tend", &
+                                               "1/m")
+
   ! Initialize tracers from file (unless they were initialized by restart file)
   ! Also save indices of tracers that have river fluxes
   CS%tracer_inds%no3_ind = 0
@@ -1001,7 +1010,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     enddo
     call tracer_vertdiff(h_old, ea, eb, dt, bot_flux_to_tend, G, GV, btm_flux=dummy_bot_flux)
   endif
-  bot_flux_to_tend(:, :, :) = (1. / dt) * bot_flux_to_tend(:, :, :)
+  ! sum(dz(:) * bot_flux_to_tend(i, j, :)/dt) = -100
+  ! m_per_cm (applied when copying into MARBL) gets us to -1
+  ! need to figure out why minus sign - maybe we are getting sign of btm_flux wrong in tracer_vertdiff?
+  bot_flux_to_tend(:, :, :) = -(1. / dt) * bot_flux_to_tend(:, :, :)
+  if (CS%bot_flux_to_tend_id > 0) &
+    call post_data(CS%bot_flux_to_tend_id, bot_flux_to_tend(:, :, :), CS%diag)
 
   ! (4) Compute interior tendencies
   do i=is,ie
@@ -1089,19 +1103,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       end do
 
       !     * conversion for bottom flux -> tendency
-      ! sum(dz(:) * bot_flux_to_tend(i, j, :)) = -100
-      ! m_per_cm gets us to -1, need to figure out why minus sign
-      ! but maybe we are getting sign of btm_flux wrong in tracer_vertdiff?
-      MARBL_instances%bot_flux_to_tend(:) = -m_per_cm * bot_flux_to_tend(i, j, :)
-
-      ! For conservation (I think), sum(dz(:) * bot_flux_to_tend(:)) must be
-      ! one. Since MARBL is using cgs, we convert dz to cm for this check.
-      if (abs(1. - sum((cm_per_m * dz(:)) * MARBL_instances%bot_flux_to_tend(:))) > 1e-8) then
-        write(log_message, "(A, E11.3, A)") "Sum of dz * bot_flux_to_tend is ", &
-                                             sum((cm_per_m * dz(:)) * MARBL_instances%bot_flux_to_tend(:)), &
-                                             "Which is not close to 1.0"
-        call MOM_error(FATAL, log_message)
-      end if
+      ! When MARBL is mks, we can drop the m_per_cm conversion
+      MARBL_instances%bot_flux_to_tend(:) = m_per_cm * bot_flux_to_tend(i, j, :)
 
       ! iv. Compute interior tendencies in MARBL
       call MARBL_instances%interior_tendency_compute()
