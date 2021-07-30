@@ -13,6 +13,7 @@ use MOM_file_parser,          only : get_param, log_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
 use MOM_unit_scaling,         only : unit_scale_type
 use MOM_interpolate,          only : init_external_field, time_interp_external
+use MOM_io,                   only : slasher
 use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
 use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
 use tracer_forcing_utils_mod, only : map_model_time_to_forcing_time
@@ -105,6 +106,9 @@ type, public :: marbl_forcing_CS
   integer :: id_alk_riv  = -1     !< id number for time_interp_external.
   integer :: id_doc_riv  = -1     !< id number for time_interp_external.
 
+  logical :: use_marbl_tracers    !< most functions can return immediately
+                                  !! MARBL tracers are turned off
+
 end type marbl_forcing_CS
 
 !> Contains pointers to IOB fields that are used to compute MARBL forcing
@@ -135,6 +139,7 @@ contains
                                                                   !! structure for MARBL forcing
 
     character(len=40)  :: mdl = "MOM_forcing_type"  ! This module's name.
+    character(len=200) :: inputdir2 ! The directory where the input files are.
     integer :: riv_flux_file_start_year
     integer :: riv_flux_file_end_year
     integer :: riv_flux_file_data_ref_year
@@ -149,6 +154,16 @@ contains
 
     allocate(CS)
     CS%diag => diag
+
+    call get_param(param_file, mdl, "USE_MARBL_TRACERS", CS%use_marbl_tracers, &
+         "A local copy of USE_MARBL_TRACERS to help define READ_NDEP default", &
+         do_not_log=.true.)
+    CS%use_marbl_tracers = .true.
+    if (.not. CS%use_marbl_tracers) then
+      return
+    end if
+    ! TODO: just use DIN_LOC_ROOT
+    call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir2, default="/glade/work/mlevy/cesm_inputdata")
 
     call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
     "TODO: Add description", default=1./170.)
@@ -180,7 +195,7 @@ contains
             default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc')
       if (scan(CS%ndep_file,'/') == 0) then
         ! CS%ndep_file = trim(inputdir) // trim(CS%ndep_file)
-        CS%ndep_file = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%ndep_file)
+        CS%ndep_file = trim(slasher(inputdir2)) // trim(CS%ndep_file)
         call log_param(param_file, mdl, "INPUTDIR/NDEP_FILE", CS%ndep_file)
       end if
       CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
@@ -194,7 +209,7 @@ contains
     ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
     if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
       ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
-      CS%riv_flux_dataset%file_name = trim('/glade/work/mlevy/cesm_inputdata/') // trim(CS%riv_flux_dataset%file_name)
+      CS%riv_flux_dataset%file_name = trim(slasher(inputdir2)) // trim(CS%riv_flux_dataset%file_name)
       call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
     end if
     call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
@@ -349,18 +364,21 @@ contains
 
   end subroutine marbl_forcing_init
 
-  subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing)
+  subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing, CS)
     integer,                           intent(in)    :: isd            !< start of i-indices for current block
     integer,                           intent(in)    :: ied            !< end of i-indices for current block
     integer,                           intent(in)    :: jsd            !< start of j-indices for current block
     integer,                           intent(in)    :: jed            !< end of j-indices for current block
     type(marbl_forcing_type), pointer, intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
+    type(marbl_forcing_CS), pointer,   intent(in)    :: CS          !< A pointer that is set to point to control
 
     if (associated(MARBL_forcing)) then
       call MOM_error(WARNING, "marbl_forcing_type_init called with an associated "// &
                               "marbl forcing structure.")
       return
     endif
+
+    if (.not. CS%use_marbl_tracers) return
 
     allocate(MARBL_forcing)
 
@@ -451,6 +469,8 @@ contains
                                      !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
     real :: kg_m2_s_conversion       !< A combination of unit conversion factors for rescaling
                                      !! mass fluxes [R Z s m2 kg-1 T-1 ~> 1].
+
+    if (.not. CS%use_marbl_tracers) return
 
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
     ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)

@@ -320,7 +320,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
 
-    call marbl_forcing_type_init(isd,ied,jsd,jed,fluxes%MARBL_forcing)
+    call marbl_forcing_type_init(isd,ied,jsd,jed,fluxes%MARBL_forcing, CS%marbl_forcing_CSp)
 
   endif   ! endif for allocation and initialization
 
