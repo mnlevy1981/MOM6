@@ -1144,7 +1144,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         end if
 
         if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) then
-          CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j) * sum(dz(:) * MARBL_instances%interior_tendencies(m,:))
+          CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j) * &
+                                                           sum(dz(:) * MARBL_instances%interior_tendencies(m,:))
         end if
 
         if (allocated(CS%interior_tendency_out_zint_100m(m)%field_2d)) then
