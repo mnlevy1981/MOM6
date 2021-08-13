@@ -28,12 +28,12 @@ use MOM_file_parser,          only: get_param, log_version, param_file_type, clo
 use MOM_get_input,            only: get_MOM_input, directories
 use MOM_domains,              only: pass_var
 use MOM_error_handler,        only: MOM_error, FATAL, is_root_pe
-use MOM_ocean_model_nuopc,    only: ice_ocean_boundary_type
 use MOM_grid,                 only: ocean_grid_type, get_global_grid_size
+use MOM_ocean_model_nuopc,    only: ice_ocean_boundary_type
 use MOM_ocean_model_nuopc,    only: ocean_model_restart, ocean_public_type, ocean_state_type
-use MOM_ocean_model_nuopc,    only: ocean_model_init_sfc
+use MOM_ocean_model_nuopc,    only: ocean_model_init_sfc, ocean_model_flux_init
 use MOM_ocean_model_nuopc,    only: ocean_model_init, update_ocean_model, ocean_model_end
-use MOM_ocean_model_nuopc,    only: get_ocean_grid, get_eps_omesh
+use MOM_ocean_model_nuopc,    only: get_ocean_grid, get_eps_omesh, query_ocean_state
 use MOM_cap_time,             only: AlarmInit
 use MOM_cap_methods,          only: mom_import, mom_export, mom_set_geomtype, mod2med_areacor
 use MOM_cap_methods,          only: med2mod_areacor, state_diagnose
@@ -54,7 +54,7 @@ use ESMF,  only: ESMF_ClockSet, ESMF_Clock, ESMF_GeomType_Flag, ESMF_LOGMSG_INFO
 use ESMF,  only: ESMF_Grid, ESMF_GridCreate, ESMF_GridAddCoord
 use ESMF,  only: ESMF_GridGetCoord, ESMF_GridAddItem, ESMF_GridGetItem
 use ESMF,  only: ESMF_GridComp, ESMF_GridCompSetEntryPoint, ESMF_GridCompGet
-use ESMF,  only: ESMF_LogFoundError, ESMF_LogWrite, ESMF_LogSetError
+use ESMF,  only: ESMF_LogWrite, ESMF_LogSetError
 use ESMF,  only: ESMF_LOGERR_PASSTHRU, ESMF_KIND_R8, ESMF_RC_VAL_WRONG
 use ESMF,  only: ESMF_GEOMTYPE_MESH, ESMF_GEOMTYPE_GRID, ESMF_SUCCESS
 use ESMF,  only: ESMF_METHOD_INITIALIZE, ESMF_MethodRemove, ESMF_State
@@ -80,6 +80,7 @@ use ESMF,  only: ESMF_VMBroadcast, ESMF_VMReduce, ESMF_REDUCE_MAX, ESMF_REDUCE_M
 use ESMF,  only: ESMF_AlarmCreate, ESMF_ClockGetAlarmList, ESMF_AlarmList_Flag
 use ESMF,  only: ESMF_AlarmGet, ESMF_AlarmIsCreated, ESMF_ALARMLIST_ALL, ESMF_AlarmIsEnabled
 use ESMF,  only: ESMF_STATEITEM_NOTFOUND, ESMF_FieldWrite
+use ESMF,  only: ESMF_END_ABORT, ESMF_Finalize
 use ESMF,  only: operator(==), operator(/=), operator(+), operator(-)
 
 ! TODO ESMF_GridCompGetInternalState does not have an explicit Fortran interface.
@@ -141,6 +142,7 @@ integer              :: logunit  !< stdout logging unit number
 logical              :: profile_memory = .true.
 logical              :: grid_attach_area = .false.
 logical              :: use_coldstart = .true.
+logical              :: use_mommesh = .true.
 character(len=128)   :: scalar_field_name = ''
 integer              :: scalar_field_count = 0
 integer              :: scalar_field_idx_grid_nx = 0
@@ -154,7 +156,7 @@ logical :: cesm_coupled = .true.
 type(ESMF_GeomType_Flag) :: geomtype = ESMF_GEOMTYPE_MESH
 #else
 logical :: cesm_coupled = .false.
-type(ESMF_GeomType_Flag) :: geomtype = ESMF_GEOMTYPE_GRID
+type(ESMF_GeomType_Flag) :: geomtype
 #endif
 character(len=8) :: restart_mode = 'alarms'
 
@@ -354,6 +356,25 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
   write(logmsg,*) use_coldstart
   call ESMF_LogWrite('MOM_cap:use_coldstart = '//trim(logmsg), ESMF_LOGMSG_INFO)
 
+  use_mommesh = .true.
+  call NUOPC_CompAttributeGet(gcomp, name="use_mommesh", value=value, &
+       isPresent=isPresent, isSet=isSet, rc=rc)
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
+  if (isPresent .and. isSet) use_mommesh=(trim(value)=="true")
+  write(logmsg,*) use_mommesh
+  call ESMF_LogWrite('MOM_cap:use_mommesh = '//trim(logmsg), ESMF_LOGMSG_INFO)
+
+  if(use_mommesh)then
+    geomtype = ESMF_GEOMTYPE_MESH
+    call NUOPC_CompAttributeGet(gcomp, name='mesh_ocn', isPresent=isPresent, isSet=isSet, rc=rc)
+      if (.not. isPresent .and. .not. isSet) then
+        call ESMF_LogWrite('geomtype set to mesh but mesh_ocn is not specified', ESMF_LOGMSG_INFO)
+        call ESMF_Finalize(endflag=ESMF_END_ABORT)
+     endif
+  else
+    geomtype = ESMF_GEOMTYPE_GRID
+  endif
+
 end subroutine
 
 !> Called by NUOPC to advertise import and export fields.  "Advertise"
@@ -398,8 +419,10 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   character(len=512)                     :: diro
   character(len=512)                     :: logfile
   character(ESMF_MAXSTR)                 :: cvalue
+  character(len=64)                      :: logmsg
   logical                                :: isPresent, isPresentDiro, isPresentLogfile, isSet
   logical                                :: existflag
+  logical                                :: use_waves  ! If true, the wave modules are active.
   integer                                :: userRc
   integer                                :: localPet
   integer                                :: localPeCount
@@ -444,22 +467,22 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   !---------------------------------
 
   call ESMF_VMGet(vm, pet=localPet, peCount=localPeCount, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-    line=__LINE__, &
-    file=__FILE__)) &
-    return  ! bail out
-
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   if(localPeCount == 1) then
-     call NUOPC_CompAttributeGet(gcomp, "nthreads", value=cvalue, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-          line=__LINE__, &
-          file=__FILE__)) &
-          return  ! bail out
-     read(cvalue,*) nthrds
+     call NUOPC_CompAttributeGet(gcomp, name="nthreads", value=cvalue, &
+          isPresent=isPresent, isSet=isSet, rc=rc)
+     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+     if (isPresent .and. isSet) then
+       read(cvalue,*) nthrds
+     else
+       nthrds = localPeCount
+     endif
   else
      nthrds = localPeCount
   endif
+  write(logmsg,*) nthrds
+  call ESMF_LogWrite(trim(subname)//': nthreads = '//trim(logmsg), ESMF_LOGMSG_INFO)
 
 !$  call omp_set_num_threads(nthrds)
 
@@ -628,6 +651,10 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   ocean_public%is_ocean_pe = .true.
   call ocean_model_init(ocean_public, ocean_state, time0, time_start, input_restart_file=trim(restartfiles))
 
+  ! GMM, this call is not needed for NCAR. Check with EMC.
+  ! If this can be deleted, perhaps we should also delete ocean_model_flux_init
+  call ocean_model_flux_init(ocean_state)
+
   call ocean_model_init_sfc(ocean_state, ocean_public)
 
   call mpp_get_compute_domain(ocean_public%domain, isc, iec, jsc, jec)
@@ -647,6 +674,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% seaice_melt_heat (isc:iec,jsc:jec),&
              Ice_ocean_boundary% seaice_melt (isc:iec,jsc:jec),     &
              Ice_ocean_boundary% mi (isc:iec,jsc:jec),              &
+             Ice_ocean_boundary% ice_fraction (isc:iec,jsc:jec),    &
+             Ice_ocean_boundary% u10_sqr (isc:iec,jsc:jec),         &
              Ice_ocean_boundary% p (isc:iec,jsc:jec),               &
              Ice_ocean_boundary% lrunoff_hflx (isc:iec,jsc:jec),    &
              Ice_ocean_boundary% frunoff_hflx (isc:iec,jsc:jec),    &
@@ -668,14 +697,17 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   Ice_ocean_boundary%seaice_melt     = 0.0
   Ice_ocean_boundary%seaice_melt_heat= 0.0
   Ice_ocean_boundary%mi              = 0.0
+  Ice_ocean_boundary%ice_fraction    = 0.0
+  Ice_ocean_boundary%u10_sqr         = 0.0
   Ice_ocean_boundary%p               = 0.0
   Ice_ocean_boundary%lrunoff_hflx    = 0.0
   Ice_ocean_boundary%frunoff_hflx    = 0.0
   Ice_ocean_boundary%lrunoff         = 0.0
   Ice_ocean_boundary%frunoff         = 0.0
 
-  if (ocean_state%use_waves) then
-    Ice_ocean_boundary%num_stk_bands=ocean_state%Waves%NumBands
+  call query_ocean_state(ocean_state, use_waves=use_waves)
+  if (use_waves) then
+    call query_ocean_state(ocean_state, NumWaveBands=Ice_ocean_boundary%num_stk_bands)
     allocate ( Ice_ocean_boundary% ustk0 (isc:iec,jsc:jec),         &
                Ice_ocean_boundary% vstk0 (isc:iec,jsc:jec),         &
                Ice_ocean_boundary% ustkb (isc:iec,jsc:jec,Ice_ocean_boundary%num_stk_bands), &
@@ -683,10 +715,12 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
                Ice_ocean_boundary%stk_wavenumbers (Ice_ocean_boundary%num_stk_bands))
     Ice_ocean_boundary%ustk0           = 0.0
     Ice_ocean_boundary%vstk0           = 0.0
-    Ice_ocean_boundary%stk_wavenumbers = ocean_state%Waves%WaveNum_Cen
+    call query_ocean_state(ocean_state, WaveNumbers=Ice_ocean_boundary%stk_wavenumbers, unscale=.true.)
     Ice_ocean_boundary%ustkb           = 0.0
     Ice_ocean_boundary%vstkb           = 0.0
   endif
+  ! Consider adding this:
+  ! if (.not.use_waves) Ice_ocean_boundary%num_stk_bands = 0
 
   call marbl_iob_allocate(isc, iec, jsc, jec, Ice_ocean_boundary%MARBL_IOB)
 
@@ -728,6 +762,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "inst_pres_height_surface"   , "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_rofl"                  , "will provide") !-> liquid runoff
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_rofi"                  , "will provide") !-> ice runoff
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac"                   , "will provide") !-> ice fraction
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "So_duu10n"                  , "will provide") !-> wind^2 at 10m
   call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_fresh_water_to_ocean_rate", "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "net_heat_flx_to_ocn"        , "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac"                   , "will provide") !-> ice runoff
@@ -736,7 +772,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   !These are not currently used and changing requires a nuopc dictionary change
   !call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_runoff_heat_flx"        , "will provide")
   !call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_calving_heat_flx"       , "will provide")
-  if (ocean_state%use_waves) then
+  if (use_waves) then
     if (Ice_ocean_boundary%num_stk_bands > 3) then
       call MOM_error(FATAL, "Number of Stokes Bands > 3, NUOPC cap not set up for this")
     endif
@@ -814,6 +850,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
   integer                                    :: lbnd3,ubnd3,lbnd4,ubnd4
   integer                                    :: nblocks_tot
   logical                                    :: found
+  logical                                    :: isPresent, isSet
   integer(ESMF_KIND_I4), pointer             :: dataPtr_mask(:,:)
   real(ESMF_KIND_R8), pointer                :: dataPtr_area(:,:)
   real(ESMF_KIND_R8), pointer                :: dataPtr_xcen(:,:)
@@ -885,19 +922,17 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
   !---------------------------------
 
   call ESMF_VMGet(vm, pet=localPet, peCount=localPeCount, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-    line=__LINE__, &
-    file=__FILE__)) &
-    return  ! bail out
-
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   if(localPeCount == 1) then
-     call NUOPC_CompAttributeGet(gcomp, "nthreads", value=cvalue, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-          line=__LINE__, &
-          file=__FILE__)) &
-          return  ! bail out
-     read(cvalue,*) nthrds
+     call NUOPC_CompAttributeGet(gcomp, name="nthreads", value=cvalue, &
+          isPresent=isPresent, isSet=isSet, rc=rc)
+     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+     if (isPresent .and. isSet) then
+       read(cvalue,*) nthrds
+     else
+       nthrds = localPeCount
+     endif
   else
      nthrds = localPeCount
   endif
@@ -1060,7 +1095,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
 
      ! Determine mesh areas for regridding
      call ESMF_MeshGet(Emesh, numOwnedElements=numOwnedElements, spatialDim=spatialDim, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
      allocate (mod2med_areacor(numOwnedElements))
      allocate (med2mod_areacor(numOwnedElements))
@@ -1070,11 +1105,11 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
 #ifdef CESMCOUPLED
      ! Determine model areas and flux correction factors (module variables in mom_)
      call ESMF_StateGet(exportState, itemName=trim(fldsFrOcn(2)%stdname), field=lfield, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+     if (ChkErr(rc,__LINE__,u_FILE_u)) return
      call ESMF_FieldRegridGetArea(lfield, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+     if (ChkErr(rc,__LINE__,u_FILE_u)) return
      call ESMF_FieldGet(lfield, farrayPtr=dataPtr_mesh_areas, rc=rc)
-     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
      allocate(mesh_areas(numOwnedElements))
      allocate(model_areas(numOwnedElements))

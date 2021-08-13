@@ -42,6 +42,8 @@ type, public :: surface
     SST, &         !< The sea surface temperature [degC].
     SSS, &         !< The sea surface salinity [ppt ~> psu or gSalt/kg].
     sfc_density, & !< The mixed layer density [R ~> kg m-3].
+    sfc_cfc11,   & !< Sea surface concentration of CFC11 [mol kg-1].
+    sfc_cfc12,   & !< Sea surface concentration of CFC12 [mol kg-1].
     Hml, &         !< The mixed layer depth [Z ~> m].
     u, &           !< The mixed layer zonal velocity [L T-1 ~> m s-1].
     v, &           !< The mixed layer meridional velocity [L T-1 ~> m s-1].
@@ -188,6 +190,9 @@ type, public :: accel_diag_ptrs
 
   real, pointer :: diag_hfrac_u(:,:,:) => NULL() !< Fractional layer thickness at u points
   real, pointer :: diag_hfrac_v(:,:,:) => NULL() !< Fractional layer thickness at v points
+  real, pointer :: diag_hu(:,:,:) => NULL() !< layer thickness at u points
+  real, pointer :: diag_hv(:,:,:) => NULL() !< layer thickness at v points
+
 end type accel_diag_ptrs
 
 !> Pointers to arrays with transports, which can later be used for derived diagnostics, like energy balances.
@@ -201,7 +206,7 @@ type, public :: cont_diag_ptrs
     vhGM => NULL()    !< Isopycnal height diffusion induced meridional volume fluxes [H L2 T-1 ~> m3 s-1 or kg s-1]
 
 ! Each of the following fields is found at nz+1 interfaces.
-  real, pointer :: diapyc_vel(:,:,:) => NULL() !< The net diapycnal velocity [H s-1 ~> m s-1 or kg m-2 s-1]
+  real, pointer :: diapyc_vel(:,:,:) => NULL() !< The net diapycnal velocity [H T-1 ~> m s-1 or kg m-2 s-1]
 
 end type cont_diag_ptrs
 
@@ -297,7 +302,8 @@ contains
 !> Allocates the fields for the surface (return) properties of
 !! the ocean model. Unused fields are unallocated.
 subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
-                                  gas_fields_ocn, use_meltpot, use_iceshelves, omit_frazil)
+                                  gas_fields_ocn, use_meltpot, use_iceshelves, &
+                                  omit_frazil, use_cfcs)
   type(ocean_grid_type), intent(in)    :: G                !< ocean grid structure
   type(surface),         intent(inout) :: sfc_state        !< ocean surface state type to be allocated.
   logical,     optional, intent(in)    :: use_temperature  !< If true, allocate the space for thermodynamic variables.
@@ -310,13 +316,14 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
                                               !! tracer fluxes, and can be used to spawn related
                                               !! internal variables in the ice model.
   logical,     optional, intent(in)    :: use_meltpot      !< If true, allocate the space for melt potential
+  logical,     optional, intent(in)    :: use_cfcs         !< If true, allocate the space for cfcs
   logical,     optional, intent(in)    :: use_iceshelves   !< If true, allocate the space for the stresses
                                                            !! under ice shelves.
   logical,     optional, intent(in)    :: omit_frazil      !< If present and false, do not allocate the space to
                                                            !! pass frazil fluxes to the coupler
 
   ! local variables
-  logical :: use_temp, alloc_integ, use_melt_potential, alloc_iceshelves, alloc_frazil
+  logical :: use_temp, alloc_integ, use_melt_potential, alloc_iceshelves, alloc_frazil, alloc_cfcs
   integer :: is, ie, js, je, isd, ied, jsd, jed
   integer :: isdB, iedB, jsdB, jedB
 
@@ -327,6 +334,7 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
   use_temp = .true. ; if (present(use_temperature)) use_temp = use_temperature
   alloc_integ = .true. ; if (present(do_integrals)) alloc_integ = do_integrals
   use_melt_potential = .false. ; if (present(use_meltpot)) use_melt_potential = use_meltpot
+  alloc_cfcs = .false. ; if (present(use_cfcs)) alloc_cfcs = use_cfcs
   alloc_iceshelves = .false. ; if (present(use_iceshelves)) alloc_iceshelves = use_iceshelves
   alloc_frazil = .true. ; if (present(omit_frazil)) alloc_frazil = .not.omit_frazil
 
@@ -348,6 +356,11 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
 
   if (use_melt_potential) then
     allocate(sfc_state%melt_potential(isd:ied,jsd:jed)) ; sfc_state%melt_potential(:,:) = 0.0
+  endif
+
+  if (alloc_cfcs) then
+    allocate(sfc_state%sfc_cfc11(isd:ied,jsd:jed)) ; sfc_state%sfc_cfc11(:,:) = 0.0
+    allocate(sfc_state%sfc_cfc12(isd:ied,jsd:jed)) ; sfc_state%sfc_cfc12(:,:) = 0.0
   endif
 
   if (alloc_integ) then
@@ -393,7 +406,8 @@ subroutine deallocate_surface_state(sfc_state)
   if (allocated(sfc_state%ocean_heat)) deallocate(sfc_state%ocean_heat)
   if (allocated(sfc_state%ocean_salt)) deallocate(sfc_state%ocean_salt)
   if (allocated(sfc_state%salt_deficit)) deallocate(sfc_state%salt_deficit)
-
+  if (allocated(sfc_state%sfc_cfc11)) deallocate(sfc_state%sfc_cfc11)
+  if (allocated(sfc_state%sfc_cfc12)) deallocate(sfc_state%sfc_cfc12)
   call coupler_type_destructor(sfc_state%tr_fields)
 
   sfc_state%arrays_allocated = .false.
