@@ -27,6 +27,7 @@ module marbl_interface
         type(marbl_diagnostics_type) :: surface_flux_diags  !< dummy diagnostics
         real, allocatable :: tracers(:,:)  !< dummy tracer array
         real, allocatable :: tracers_at_surface(:,:)  !< dummy tracer surface array
+        real, allocatable :: bot_flux_to_tend(:)      !< dummy array for bot flux to tendency wgts
         real, allocatable :: surface_fluxes(:,:)  !< dummy fluxes
         real, allocatable :: interior_tendencies(:,:)  !< dummy tendencies
        contains
