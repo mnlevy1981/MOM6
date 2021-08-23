@@ -111,6 +111,9 @@ type, public :: MARBL_tracers_CS ; private
   real :: atm_alt_co2_const  !< alternate atmospheric CO2 for _ALT_CO2 tracers (if specifying a constant value)
   real :: ndep_scale_factor  !< scale factor to apply to nitrogen deposition
 
+  real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
+                                 !! bottom layer of prescribed thickness
+
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:)  !< collect surface flux diagnostics from all columns
                                                                !! before posting
   type(temp_MARBL_diag), allocatable :: interior_tendency_diags(:)  !< collect tendency diagnostics from all columns
@@ -204,11 +207,16 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
                  "The name of a file from which to read the run-time "//&
                  "settings for MARBL.", default="marbl_in")
   call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
-                 "Value to send to MARBL as xco2", default=284.317)
+                 "Value to send to MARBL as xco2", &
+                 default=284.317, units="ppm")
   call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
-                 "Value to send to MARBL as xco2_alt_co2", default=284.317)
+                 "Value to send to MARBL as xco2_alt_co2", &
+                 default=284.317, units="ppm")
   call get_param(param_file, mdl, "NDEP_SCALE_FACTOR", CS%ndep_scale_factor, &
                  "Scale factor applied to nitrogen deposition terms", default=1e5)
+  call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
+                 "Bottom fluxes are uniformly mixed over layer of this thickness", &
+                 default=5., units="m")
 
   ! (2) Read marbl settings file and call put_setting()
 
@@ -842,7 +850,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   character(len=256) :: log_message
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: bot_flux_to_tend
-  real, dimension(SZI_(G),SZJ_(G)) :: dummy_bot_flux
   real :: sfc_val  ! The surface value for the tracers.
   real :: Isecs_per_year  ! The number of seconds in a year.
   real :: year            ! The time in years.
@@ -987,13 +994,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   end do
 
   ! (3) Apply surface fluxes via vertical diffusion
-  !     Also, prepare for populating bot_flux_to_tend
-  ! bot_flux_to_tend is needed by MARBL to help redistribute sinking particulate
-  ! matter that hits the sea floor and are remineralized. These fluxes are added
-  ! to tendency terms, so bot_flux_to_tend provides the conversion between
-  ! bottom flux and tendency across the whole column.
-  bot_flux_to_tend(:,:,:) = 0.
-  dummy_bot_flux(:,:) = -GV%Rho0 * G%mask2dT(:,:)
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,CS%ntr
       do k=1,nz ;do j=js,je ; do i=is,ie
@@ -1003,37 +1003,44 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           evap_CFL_limit, minimum_forcing_depth)
       call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=GV%Rho0 * CS%STF(:,:,m))
     enddo
-    call tracer_vertdiff(h_work, ea, eb, dt, bot_flux_to_tend, G, GV, btm_flux=dummy_bot_flux)
   else
     do m=1,CS%ntr
       call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=GV%Rho0 * CS%STF(:,:,m))
     enddo
-    call tracer_vertdiff(h_old, ea, eb, dt, bot_flux_to_tend, G, GV, btm_flux=dummy_bot_flux)
   endif
-  ! sum(dz(:) * bot_flux_to_tend(i, j, :)/dt) = -100
-  ! m_per_cm (applied when copying into MARBL) gets us to -1
-  ! need to figure out why minus sign - maybe we are getting sign of btm_flux wrong in tracer_vertdiff?
-  bot_flux_to_tend(:, :, :) = -(1. / dt) * bot_flux_to_tend(:, :, :)
-  if (CS%bot_flux_to_tend_id > 0) &
-    call post_data(CS%bot_flux_to_tend_id, bot_flux_to_tend(:, :, :), CS%diag)
 
   ! (4) Compute interior tendencies
+  bot_flux_to_tend(:, :, :) = 0.
   do i=is,ie
     do j=js,je
       ! i. only want ocean points in this loop
       if (G%mask2dT(i,j) == 0) cycle
 
-      ! ii. Set up vertical domain
+      ! ii. Set up vertical domain and bot_flux_to_tend
       MARBL_instances%domain%kmt = GV%ke
       ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
+      MARBL_instances%bot_flux_to_tend(:) = 0.
       do k = GV%ke, 1, -1
         ! TODO: if we move this above vertical mixing, use h_old
         dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
         zc(k) = zi(k) - 0.5 * dz(k)
         zi(k-1) = zi(k) - dz(k)
+        if (G%bathyT(i,j) - zi(k-1) <= CS%bot_flux_mix_thickness) then
+          MARBL_instances%bot_flux_to_tend(k) = 1. / CS%bot_flux_mix_thickness
+        elseif (G%bathyT(i,j) - zi(k) < CS%bot_flux_mix_thickness) then
+          MARBL_instances%bot_flux_to_tend(k) = (1. - (G%bathyT(i,j) - zi(k)) / &
+                                                CS%bot_flux_mix_thickness) / dz(k)
+        end if
       enddo
+      if (G%bathyT(i,j) - zi(0) < CS%bot_flux_mix_thickness) &
+        MARBL_instances%bot_flux_to_tend(:) = MARBL_instances%bot_flux_to_tend(:) * &
+                                              CS%bot_flux_mix_thickness / (G%bathyT(i,j) - zi(0))
+      if (CS%bot_flux_to_tend_id > 0) &
+        bot_flux_to_tend(i, j, :) = MARBL_instances%bot_flux_to_tend(:)
+      ! When MARBL is mks, we can drop the m_per_cm conversion
+      MARBL_instances%bot_flux_to_tend(:) = MARBL_instances%bot_flux_to_tend(:) * m_per_cm
 
       ! mks -> cgs
       ! zw(1:nz) is bottom cell depth so no element of zw = 0, it is assumed to be top layer depth
@@ -1101,10 +1108,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1) = &
             CS%interior_tendency_saved_state(m)%field_3d(i,j,:)
       end do
-
-      !     * conversion for bottom flux -> tendency
-      ! When MARBL is mks, we can drop the m_per_cm conversion
-      MARBL_instances%bot_flux_to_tend(:) = m_per_cm * bot_flux_to_tend(i, j, :)
 
       ! iv. Compute interior tendencies in MARBL
       call MARBL_instances%interior_tendency_compute()
@@ -1174,6 +1177,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   ! (5) Post diagnostics from our buffer
   !     i. Interior tendency diagnostics (mix of 2D and 3D)
   !     ii. Interior tendencies themselves
+  if (CS%bot_flux_to_tend_id > 0) &
+    call post_data(CS%bot_flux_to_tend_id, bot_flux_to_tend(:, :, :), CS%diag)
+
   do m=1,size(CS%interior_tendency_diags)
     if (CS%interior_tendency_diags(m)%id > 0) then
       if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
