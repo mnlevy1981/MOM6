@@ -113,6 +113,7 @@ type, public :: MARBL_tracers_CS ; private
 
   real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
                                  !! bottom layer of prescribed thickness
+  real :: bfmt_r                 !< Reciprocal of above
 
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:)  !< collect surface flux diagnostics from all columns
                                                                !! before posting
@@ -217,6 +218,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
                  default=5., units="m")
+  CS%bfmt_r = 1. / CS%bot_flux_mix_thickness
 
   ! (2) Read marbl settings file and call put_setting()
 
@@ -850,6 +852,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   character(len=256) :: log_message
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: bot_flux_to_tend
+  real :: cum_bftt_dz     ! sum of bot_flux_to_tend * dz from the bottom layer to current layer
   real :: sfc_val  ! The surface value for the tracers.
   real :: Isecs_per_year  ! The number of seconds in a year.
   real :: year            ! The time in years.
@@ -1022,16 +1025,18 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
       MARBL_instances%bot_flux_to_tend(:) = 0.
+      cum_bftt_dz = 0.
       do k = GV%ke, 1, -1
         ! TODO: if we move this above vertical mixing, use h_old
         dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
         zc(k) = zi(k) - 0.5 * dz(k)
         zi(k-1) = zi(k) - dz(k)
         if (G%bathyT(i,j) - zi(k-1) <= CS%bot_flux_mix_thickness) then
-          MARBL_instances%bot_flux_to_tend(k) = 1. / CS%bot_flux_mix_thickness
+          MARBL_instances%bot_flux_to_tend(k) = CS%bfmt_r
+          cum_bftt_dz = cum_bftt_dz + MARBL_instances%bot_flux_to_tend(k) * dz(k)
         elseif (G%bathyT(i,j) - zi(k) < CS%bot_flux_mix_thickness) then
-          MARBL_instances%bot_flux_to_tend(k) = (1. - (G%bathyT(i,j) - zi(k)) / &
-                                                CS%bot_flux_mix_thickness) / dz(k)
+          ! MARBL_instances%bot_flux_to_tend(k) = (1. - (G%bathyT(i,j) - zi(k)) * CS%bfmt_r) / dz(k)
+          MARBL_instances%bot_flux_to_tend(k) = (1. - cum_bftt_dz) / dz(k)
         end if
       enddo
       if (G%bathyT(i,j) - zi(0) < CS%bot_flux_mix_thickness) &
