@@ -217,7 +217,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
                  "Scale factor applied to nitrogen deposition terms", default=1e5)
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
-                 default=5., units="m")
+                 default=1., units="m")
   CS%bfmt_r = 1. / CS%bot_flux_mix_thickness
 
   ! (2) Read marbl settings file and call put_setting()
