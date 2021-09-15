@@ -610,44 +610,49 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   CS%tracer_inds%alk_alt_co2_ind = 0
   CS%tracer_inds%dic_ind = 0
   CS%tracer_inds%dic_alt_co2_ind = 0
-  if (.not.restart) then
-    do m= 1, CS%ntr
-      write(name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%short_name)
-      if (trim(name) == "NO3") then
-        CS%tracer_inds%no3_ind = m
-      elseif (trim(name) == "PO4") then
-         CS%tracer_inds%po4_ind = m
-      elseif (trim(name) == "DON") then
-         CS%tracer_inds%don_ind = m
-      elseif (trim(name) == "DONr") then
-         CS%tracer_inds%donr_ind = m
-      elseif (trim(name) == "DOP") then
-         CS%tracer_inds%dop_ind = m
-      elseif (trim(name) == "DOPr") then
-         CS%tracer_inds%dopr_ind = m
-      elseif (trim(name) == "SiO3") then
-         CS%tracer_inds%sio3_ind = m
-        elseif (trim(name) == "Fe") then
-          CS%tracer_inds%fe_ind = m
-       elseif (trim(name) == "DOC") then
-          CS%tracer_inds%doc_ind = m
-       elseif (trim(name) == "DOCr") then
-          CS%tracer_inds%docr_ind = m
-       elseif (trim(name) == "ALK") then
-          CS%tracer_inds%alk_ind = m
-       elseif (trim(name) == "ALK_ALT_CO2") then
-          CS%tracer_inds%alk_alt_co2_ind = m
-       elseif (trim(name) == "DIC") then
-          CS%tracer_inds%dic_ind = m
-       elseif (trim(name) == "DIC_ALT_CO2") then
-          CS%tracer_inds%dic_alt_co2_ind = m
-       end if
+  do m=1,CS%ntr
+    name = MARBL_instances%tracer_metadata(m)%short_name
+    if (trim(name) == "NO3") then
+      CS%tracer_inds%no3_ind = m
+    elseif (trim(name) == "PO4") then
+       CS%tracer_inds%po4_ind = m
+    elseif (trim(name) == "DON") then
+       CS%tracer_inds%don_ind = m
+    elseif (trim(name) == "DONr") then
+       CS%tracer_inds%donr_ind = m
+    elseif (trim(name) == "DOP") then
+       CS%tracer_inds%dop_ind = m
+    elseif (trim(name) == "DOPr") then
+       CS%tracer_inds%dopr_ind = m
+    elseif (trim(name) == "SiO3") then
+       CS%tracer_inds%sio3_ind = m
+    elseif (trim(name) == "Fe") then
+       CS%tracer_inds%fe_ind = m
+    elseif (trim(name) == "DOC") then
+       CS%tracer_inds%doc_ind = m
+    elseif (trim(name) == "DOCr") then
+       CS%tracer_inds%docr_ind = m
+    elseif (trim(name) == "ALK") then
+       CS%tracer_inds%alk_ind = m
+    elseif (trim(name) == "ALK_ALT_CO2") then
+       CS%tracer_inds%alk_alt_co2_ind = m
+    elseif (trim(name) == "DIC") then
+       CS%tracer_inds%dic_ind = m
+    elseif (trim(name) == "DIC_ALT_CO2") then
+       CS%tracer_inds%dic_alt_co2_ind = m
+    end if
+  end do
+  do m=1,CS%ntr
+    if ((.not. restart) .or. &
+        (CS%tracers_may_reinit .and. &
+         .not. query_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp))) then
+      name = MARBL_instances%tracer_metadata(m)%short_name
       OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, GV, US, -1e34)
       if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")
-    end do
-  end if
+    end if
+  end do
 
   ! Log indices for each tracer to ensure we set them all correctly
   write(log_message, "(A,I0)") "NO3 index: ", CS%tracer_inds%no3_ind
