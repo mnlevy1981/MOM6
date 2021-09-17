@@ -477,7 +477,10 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
+
+  call set_riv_flux_tracer_inds(CS)
   register_MARBL_tracers = .true.
+
 end function register_MARBL_tracers
 
 !> This subroutine initializes the CS%ntr tracer fields in tr(:,:,:,:)
@@ -594,95 +597,17 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                                                "Conversion Factor for Bottom Flux -> Tend", &
                                                "1/m")
 
-  ! Initialize tracers from file (unless they were initialized by restart file)
-  ! Also save indices of tracers that have river fluxes
-  CS%tracer_inds%no3_ind = 0
-  CS%tracer_inds%po4_ind = 0
-  CS%tracer_inds%don_ind = 0
-  CS%tracer_inds%donr_ind = 0
-  CS%tracer_inds%dop_ind = 0
-  CS%tracer_inds%dopr_ind = 0
-  CS%tracer_inds%sio3_ind = 0
-  CS%tracer_inds%fe_ind = 0
-  CS%tracer_inds%doc_ind = 0
-  CS%tracer_inds%docr_ind = 0
-  CS%tracer_inds%alk_ind = 0
-  CS%tracer_inds%alk_alt_co2_ind = 0
-  CS%tracer_inds%dic_ind = 0
-  CS%tracer_inds%dic_alt_co2_ind = 0
   do m=1,CS%ntr
-    name = MARBL_instances%tracer_metadata(m)%short_name
-    if (trim(name) == "NO3") then
-      CS%tracer_inds%no3_ind = m
-    elseif (trim(name) == "PO4") then
-       CS%tracer_inds%po4_ind = m
-    elseif (trim(name) == "DON") then
-       CS%tracer_inds%don_ind = m
-    elseif (trim(name) == "DONr") then
-       CS%tracer_inds%donr_ind = m
-    elseif (trim(name) == "DOP") then
-       CS%tracer_inds%dop_ind = m
-    elseif (trim(name) == "DOPr") then
-       CS%tracer_inds%dopr_ind = m
-    elseif (trim(name) == "SiO3") then
-       CS%tracer_inds%sio3_ind = m
-    elseif (trim(name) == "Fe") then
-       CS%tracer_inds%fe_ind = m
-    elseif (trim(name) == "DOC") then
-       CS%tracer_inds%doc_ind = m
-    elseif (trim(name) == "DOCr") then
-       CS%tracer_inds%docr_ind = m
-    elseif (trim(name) == "ALK") then
-       CS%tracer_inds%alk_ind = m
-    elseif (trim(name) == "ALK_ALT_CO2") then
-       CS%tracer_inds%alk_alt_co2_ind = m
-    elseif (trim(name) == "DIC") then
-       CS%tracer_inds%dic_ind = m
-    elseif (trim(name) == "DIC_ALT_CO2") then
-       CS%tracer_inds%dic_alt_co2_ind = m
-    end if
-  end do
-  do m=1,CS%ntr
+    call query_vardesc(CS%tr_desc(m), name=name, caller="initialize_MARBL_tracers")
     if ((.not. restart) .or. &
         (CS%tracers_may_reinit .and. &
          .not. query_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp))) then
-      name = MARBL_instances%tracer_metadata(m)%short_name
       OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, GV, US, -1e34)
       if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")
     end if
   end do
-
-  ! Log indices for each tracer to ensure we set them all correctly
-  write(log_message, "(A,I0)") "NO3 index: ", CS%tracer_inds%no3_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "PO4 index: ", CS%tracer_inds%po4_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DON index: ", CS%tracer_inds%don_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DONr index: ", CS%tracer_inds%donr_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DOP index: ", CS%tracer_inds%dop_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DOPr index: ", CS%tracer_inds%dopr_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "SiO3 index: ", CS%tracer_inds%sio3_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "Fe index: ", CS%tracer_inds%fe_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DOC index: ", CS%tracer_inds%doc_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DOCr index: ", CS%tracer_inds%docr_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "ALK index: ", CS%tracer_inds%alk_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "ALK_ALT_CO2 index: ", CS%tracer_inds%alk_alt_co2_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DIC index: ", CS%tracer_inds%dic_ind
-  call MOM_error(NOTE, log_message)
-  write(log_message, "(A,I0)") "DIC_ALT_CO2 index: ", CS%tracer_inds%dic_alt_co2_ind
-  call MOM_error(NOTE, log_message)
 
   ! Read initial fesedflux and feventflux fields
   ! (1) get vertical dimension
@@ -1300,6 +1225,7 @@ end subroutine MARBL_tracers_surface_state
 subroutine MARBL_tracers_end(CS)
   type(MARBL_tracers_CS), pointer, intent(inout) :: CS !< The control structure returned by a previous
                                                        !! call to register_MARBL_tracers.
+
   integer :: m
 
   call print_marbl_log(MARBL_instances%StatusLog)
@@ -1312,6 +1238,95 @@ subroutine MARBL_tracers_end(CS)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end
+
+subroutine set_riv_flux_tracer_inds(CS)
+
+  type(MARBL_tracers_CS), pointer, intent(inout) :: CS   !< The MARBL tracers control structure
+
+  character(len=256) :: log_message
+  character(len=48) :: name       ! A variable's name in a NetCDF file.
+  integer :: m
+
+  ! Initialize tracers from file (unless they were initialized by restart file)
+  ! Also save indices of tracers that have river fluxes
+  CS%tracer_inds%no3_ind = 0
+  CS%tracer_inds%po4_ind = 0
+  CS%tracer_inds%don_ind = 0
+  CS%tracer_inds%donr_ind = 0
+  CS%tracer_inds%dop_ind = 0
+  CS%tracer_inds%dopr_ind = 0
+  CS%tracer_inds%sio3_ind = 0
+  CS%tracer_inds%fe_ind = 0
+  CS%tracer_inds%doc_ind = 0
+  CS%tracer_inds%docr_ind = 0
+  CS%tracer_inds%alk_ind = 0
+  CS%tracer_inds%alk_alt_co2_ind = 0
+  CS%tracer_inds%dic_ind = 0
+  CS%tracer_inds%dic_alt_co2_ind = 0
+  do m=1,CS%ntr
+    name = MARBL_instances%tracer_metadata(m)%short_name
+    if (trim(name) == "NO3") then
+      CS%tracer_inds%no3_ind = m
+    elseif (trim(name) == "PO4") then
+       CS%tracer_inds%po4_ind = m
+    elseif (trim(name) == "DON") then
+       CS%tracer_inds%don_ind = m
+    elseif (trim(name) == "DONr") then
+       CS%tracer_inds%donr_ind = m
+    elseif (trim(name) == "DOP") then
+       CS%tracer_inds%dop_ind = m
+    elseif (trim(name) == "DOPr") then
+       CS%tracer_inds%dopr_ind = m
+    elseif (trim(name) == "SiO3") then
+       CS%tracer_inds%sio3_ind = m
+    elseif (trim(name) == "Fe") then
+       CS%tracer_inds%fe_ind = m
+    elseif (trim(name) == "DOC") then
+       CS%tracer_inds%doc_ind = m
+    elseif (trim(name) == "DOCr") then
+       CS%tracer_inds%docr_ind = m
+    elseif (trim(name) == "ALK") then
+       CS%tracer_inds%alk_ind = m
+    elseif (trim(name) == "ALK_ALT_CO2") then
+       CS%tracer_inds%alk_alt_co2_ind = m
+    elseif (trim(name) == "DIC") then
+       CS%tracer_inds%dic_ind = m
+    elseif (trim(name) == "DIC_ALT_CO2") then
+       CS%tracer_inds%dic_alt_co2_ind = m
+    end if
+  end do
+
+  ! Log indices for each tracer to ensure we set them all correctly
+  write(log_message, "(A,I0)") "NO3 index: ", CS%tracer_inds%no3_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "PO4 index: ", CS%tracer_inds%po4_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DON index: ", CS%tracer_inds%don_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DONr index: ", CS%tracer_inds%donr_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOP index: ", CS%tracer_inds%dop_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOPr index: ", CS%tracer_inds%dopr_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "SiO3 index: ", CS%tracer_inds%sio3_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "Fe index: ", CS%tracer_inds%fe_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOC index: ", CS%tracer_inds%doc_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DOCr index: ", CS%tracer_inds%docr_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "ALK index: ", CS%tracer_inds%alk_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "ALK_ALT_CO2 index: ", CS%tracer_inds%alk_alt_co2_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DIC index: ", CS%tracer_inds%dic_ind
+  call MOM_error(NOTE, log_message)
+  write(log_message, "(A,I0)") "DIC_ALT_CO2 index: ", CS%tracer_inds%dic_alt_co2_ind
+  call MOM_error(NOTE, log_message)
+
+end subroutine set_riv_flux_tracer_inds
 
 ! TODO: some log messages come from a specific grid point, and this routine
 !       needs to include the location in the preamble
