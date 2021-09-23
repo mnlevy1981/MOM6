@@ -1026,7 +1026,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
                                 MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:))
       end if
 
-      !        TODO: and ability to read these fields from file
+      !        TODO: add ability to read these fields from file
       !              also, add constant values to CS
       if (CS%o2_scalef_ind > 0) MARBL_instances%interior_tendency_forcings(CS%o2_scalef_ind)%field_1d(1,:) = 1
       if (CS%remin_scalef_ind > 0) MARBL_instances%interior_tendency_forcings(CS%remin_scalef_ind)%field_1d(1,:) = 1

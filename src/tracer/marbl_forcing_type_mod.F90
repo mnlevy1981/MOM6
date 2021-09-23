@@ -188,7 +188,6 @@ contains
         "If true, use nitrogen deposition supplied from "//&
         "an input file", default=.true.)
     if (CS%read_ndep) then
-      ! TODO: we only want to read this variable in when running with MARBL
       call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
             "The file in which the nitrogen deposition is found in "//&
             "variables NOy_deposition and NHx_deposition.", &
