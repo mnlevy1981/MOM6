@@ -1068,8 +1068,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * diagnostics
       do m=1,size(MARBL_instances%interior_tendency_diags%diags)
         if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
-          CS%interior_tendency_diags(m)%field_2d(i,j) = &
-              real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
+          ! If column is shallower than ref_depth, use fill value!
+          if (G%bathyT(i,j) > real(MARBL_instances%interior_tendency_diags%diags(m)%ref_depth)) then
+            CS%interior_tendency_diags(m)%field_2d(i,j) = &
+                real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
+          else
+            CS%interior_tendency_diags(m)%field_2d(i,j) = CS%diag%missing_value
+          end if
         else
           CS%interior_tendency_diags(m)%field_3d(i,j,:) = &
               real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
