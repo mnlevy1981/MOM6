@@ -607,6 +607,14 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")
     end if
+    do k=1,GV%ke
+      do j=G%jsc, G%jec
+        do i=G%isc, G%iec
+          ! Set negative tracer concentrations to 0
+          if (CS%tr(i,j,k,m) < 0) CS%tr(i,j,k,m) = 0.
+        end do
+      end do
+    end do
   end do
 
   ! Read initial fesedflux and feventflux fields
@@ -802,8 +810,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   ! (1) Compute surface fluxes
   ! FIXME: MARBL can handle computing surface fluxes for all columns simultaneously
   !        I was just thinking going column-by-column at first might be easier
-  do i=is,ie
-    do j=js,je
+  do j=js,je
+    do i=is,ie
       ! i. only want ocean points in this loop
       if (G%mask2dT(i,j) == 0) cycle
 
@@ -944,8 +952,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
   ! (4) Compute interior tendencies
   bot_flux_to_tend(:, :, :) = 0.
-  do i=is,ie
-    do j=js,je
+  do j=js,je
+    do i=is,ie
       ! i. only want ocean points in this loop
       if (G%mask2dT(i,j) == 0) cycle
 
