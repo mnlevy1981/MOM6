@@ -17,6 +17,7 @@ use MOM_io,                   only : slasher
 use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
 use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
 use tracer_forcing_utils_mod, only : map_model_time_to_forcing_time
+use marbl_constants_mod,      only : molw_Fe
 
 implicit none ; private
 
@@ -81,6 +82,7 @@ type, public :: marbl_forcing_CS
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                              !! regulate the timing of diagnostic output.
 
+  real    :: dust_ratio_thres               !< TODO: Add description
   real    :: dust_ratio_to_fe_bioavail_frac !< TODO: Add description
   real    :: fe_bioavail_frac_offset        !< TODO: Add description
   real    :: atm_fe_to_bc_ratio             !< TODO: Add description
@@ -165,6 +167,8 @@ contains
     ! TODO: just use DIN_LOC_ROOT
     call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir2, default="/glade/work/mlevy/cesm_inputdata")
 
+    call get_param(param_file, mdl, "DUST_RATIO_THRES", CS%dust_ratio_thres, &
+    "TODO: Add description", default=60.)
     call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
     "TODO: Add description", default=1./170.)
     call get_param(param_file, mdl, "FE_BIOAVAIL_FRAC_OFFSET", CS%fe_bioavail_frac_offset, &
@@ -204,7 +208,7 @@ contains
     ! ** River fluxes
     call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
                    "The file in which the river fluxes can be found", &
-                   default="riv_nut.gnews_gnm.rx1_to_tx0.66v1_nnsm_e1000r300_190315.20210405.nc")
+                   default="riv_nut.gnews_gnm.JRA025m_to_tx0.66v1_nnsm_e333r100_190910.20210405.nc")
     ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
     if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
       ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
@@ -464,6 +468,9 @@ contains
     real, dimension(SZI_(G),SZJ_(G)) :: time_varying_data  !< The field read in from forcing file with time dimension
     type(time_type) :: Time_riv_flux  !< For reading river flux fields, we use a modified version of Time
     integer :: i, j, is, ie, js, je
+    real :: atm_fe_bioavail_frac     !< TODO: define this (local) term
+    real :: seaice_fe_bioavail_frac  !< TODO: define this (local) term
+    real :: iron_flux_conversion     !< TODO: define this (local) term
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
                                      !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
     real :: kg_m2_s_conversion       !< A combination of unit conversion factors for rescaling
@@ -474,6 +481,7 @@ contains
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
     ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
     kg_m2_s_conversion = US%kg_m2s_to_RZ_T
+    iron_flux_conversion = kg_m2_s_conversion * 1.e8 / molw_Fe ! kg / m^2 / s -> nmol / cm^2 / s
 
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
@@ -505,21 +513,33 @@ contains
       end if
 
       if (associated(MARBL_IOB%atm_bc_flux)) then
+        ! TODO: abort if atm_fine_dust_flux and atm_coarse_dust_flux are not associated?
         ! Contribution of atmospheric dust to iron flux
-        MARBL_forcing%iron_flux(i,j) = (CS%fe_bioavail_frac_offset * &
+        if (MARBL_IOB%atm_coarse_dust_flux(i,j) < CS%dust_ratio_thres * MARBL_IOB%atm_fine_dust_flux(i,j)) then
+          atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset + CS%dust_ratio_to_fe_bioavail_frac * &
+            (CS%dust_ratio_thres - MARBL_IOB%atm_coarse_dust_flux(i,j) / MARBL_IOB%atm_fine_dust_flux(i,j))
+        else
+          atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset
+        end if
+        ! Contribution of atmospheric dust to iron flux
+        MARBL_forcing%iron_flux(i,j) = (atm_fe_bioavail_frac * &
                                  (CS%iron_frac_in_atm_fine_dust * MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
                                   CS%iron_frac_in_atm_coarse_dust * MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0)))
         ! Contribution of atmospheric black carbon to iron flux
         MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
                                  (CS%atm_fe_to_bc_ratio * MARBL_IOB%atm_bc_flux(i-i0,j-j0)))
+
+        seaice_fe_bioavail_frac = atm_fe_bioavail_frac
         ! Contribution of seaice dust to iron flux
-        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%fe_bioavail_frac_offset * &
+        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (seaice_fe_bioavail_frac * &
                                  (CS%iron_frac_in_seaice_dust * MARBL_IOB%seaice_dust_flux(i-i0,j-j0)))
         ! Contribution of seaice black carbon to iron flux
         MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
                                  (CS%seaice_fe_to_bc_ratio * MARBL_IOB%seaice_bc_flux(i-i0,j-j0)))
-        ! Unit conversion
-        MARBL_forcing%iron_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * MARBL_forcing%iron_flux(i,j)
+
+        ! Unit conversion (kg / m^2 / s -> nmol / cm^2 / s)
+        MARBL_forcing%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * MARBL_forcing%iron_flux(i,j)
+
       end if
 
       if (associated(MARBL_IOB%ice_fraction)) then
