@@ -799,6 +799,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
 ! Local variables
   character(len=256) :: log_message
+  real, dimension(SZI_(G),SZJ_(G)) :: ref_mask ! Mask for 2D MARBL diags using ref_depth
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: bot_flux_to_tend
   real :: cum_bftt_dz     ! sum of bot_flux_to_tend * dz from the bottom layer to current layer
@@ -1084,12 +1085,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * diagnostics
       do m=1,size(MARBL_instances%interior_tendency_diags%diags)
         if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
-          ! If column is shallower than ref_depth, use fill value!
+          ! Only copy values if ref_depth < bathyT
           if (G%bathyT(i,j) > real(MARBL_instances%interior_tendency_diags%diags(m)%ref_depth)) then
             CS%interior_tendency_diags(m)%field_2d(i,j) = &
                 real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
-          else
-            CS%interior_tendency_diags(m)%field_2d(i,j) = CS%diag%missing_value
           end if
         else
           CS%interior_tendency_diags(m)%field_3d(i,j,:) = &
@@ -1139,7 +1138,17 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   do m=1,size(CS%interior_tendency_diags)
     if (CS%interior_tendency_diags(m)%id > 0) then
       if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
-        call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_2d(:,:), CS%diag)
+        if (real(MARBL_instances%interior_tendency_diags%diags(m)%ref_depth) == 0.) then
+          call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_2d(:,:), CS%diag)
+        else ! non-zero ref-depth
+          ref_mask(:, :) = 0.
+          do j=js,je ; do i=is,ie
+            if (G%bathyT(i,j) > real(MARBL_instances%interior_tendency_diags%diags(m)%ref_depth)) &
+              ref_mask(i,j) = 1.
+          end do ; end do
+          call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_2d(:,:), &
+                         CS%diag, mask=ref_mask(:,:))
+        end if
       else if (allocated(CS%interior_tendency_diags(m)%field_3d)) then
         call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_3d(:,:,:), CS%diag)
       else
