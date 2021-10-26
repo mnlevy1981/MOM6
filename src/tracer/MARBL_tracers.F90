@@ -606,15 +606,15 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
       if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")
-    end if
-    do k=1,GV%ke
-      do j=G%jsc, G%jec
-        do i=G%isc, G%iec
-          ! Set negative tracer concentrations to 0
-          if (CS%tr(i,j,k,m) < 0) CS%tr(i,j,k,m) = 0.
+      do k=1,GV%ke
+        do j=G%jsc, G%jec
+          do i=G%isc, G%iec
+            ! Set negative tracer concentrations to 0
+            if (CS%tr(i,j,k,m) < 0) CS%tr(i,j,k,m) = 0.
+          end do
         end do
       end do
-    end do
+    end if
   end do
 
   ! Read initial fesedflux and feventflux fields
