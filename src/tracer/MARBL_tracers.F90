@@ -172,7 +172,7 @@ type, public :: MARBL_tracers_CS ; private
   real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into
   real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into
   real, allocatable, dimension(:) :: &
-    fesedflux_z  !< The depths of the cell interfaces in the input data [Z ~> m]
+    fesedflux_z_edges  !< The depths of the cell interfaces in the input data [Z ~> m]
   ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
   real, allocatable, dimension(:,:,:) :: &
     fesedflux_dz  !< The thickness of the cell layers in the input data [Z ~> m]
@@ -411,7 +411,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** Tracer initial conditions
   call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
                  "The file in which the MARBL tracers initial values can be found.", &
-                 default="ecosys_jan_IC_omip_MOM_tx0.66v1_c190925.nc")
+                 default="ecosys_jan_IC_omip_MOM_tx0.66v1_c211008.nc")
   if (scan(CS%IC_file,'/') == 0) then
     ! Add the directory if CS%IC_file is not already a complete path.
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
@@ -420,7 +420,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** FESEDFLUX
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
                  "The file in which the iron sediment flux forcing field can be found.", &
-                 default="fesedflux_total_reduce_oxic_tx0.66v1.c201204.nc")
+                 default="fesedflux_total_reduce_oxic_tx0.66v1.c211020.nc")
   if (scan(CS%fesedflux_file,'/') == 0) then
     ! Add the directory if CS%fesedflux_file is not already a complete path.
     CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
@@ -429,7 +429,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** FEVENTFLUX
   call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
                  "The file in which the iron vent flux forcing field can be found.", &
-                 default="feventflux_5gmol_tx0.66v1.c201204.nc")
+                 default="feventflux_5gmol_tx0.66v1.c211020.nc")
   if (scan(CS%feventflux_file,'/') == 0) then
     ! Add the directory if CS%feventflux_file is not already a complete path.
     CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
@@ -623,14 +623,14 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   !        (maybe these fields should be combined?)
   !     -- note: read_Z_edges treats depth as positive UP => 0 at surface, negative at depth
   fesedflux_use_missing = .false.
-  call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z, CS%fesedflux_nz, &
+  call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z_edges, CS%fesedflux_nz, &
                     fesedflux_has_edges, fesedflux_use_missing, fesedflux_missing, &
                     scale=US%m_to_Z)
 
   ! (2) Allocate memory for fesedflux and feventflux
   allocate(CS%fesedflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
   allocate(CS%feventflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
-  allocate(CS%fesedflux_dz(SZI_(G), SZJ_(G), CS%fesedflux_nz-1))
+  allocate(CS%fesedflux_dz(SZI_(G), SZJ_(G), CS%fesedflux_nz))
 
   ! (3) Read data
   !     TODO: Add US term to scale
@@ -640,24 +640,32 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
                      scale=CS%fesedflux_scale_factor)
 
   ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
-  !     Remember, fesedflux_z = 0 at surface and is < 0 below surface
-  do k=CS%fesedflux_nz-1, 1, -1
+  !     Remember, fesedflux_z_edges = 0 at surface and is < 0 below surface
+
+  do k=CS%fesedflux_nz, 1, -1
     kbot = k + 1 ! level k is between z(k) and z(k+1)
     do j=G%jsc, G%jec
       do i=G%isc, G%iec
+        if (G%mask2dT(i,j) == 0) cycle
+        if (G%bathyT(i,j) + CS%fesedflux_z_edges(1) < 1e-8) then
+          write(log_message, *) "Current implementation of fesedflux assumes G%bathyT >= first edge;", &
+                                "first edge =", -CS%fesedflux_z_edges(1), &
+                                "bathyT =", G%bathyT(i,j)
+          call MOM_error(FATAL, log_message)
+        end if
         ! Also figure out layer thickness while we're here
-        CS%fesedflux_dz(i,j,k) = CS%fesedflux_z(k) - CS%fesedflux_z(kbot)
-        ! If top interface is below ocean bottom, bring flux from bottom layer up
-        ! and set thickness of level below to 0
-        if (-CS%fesedflux_z(k) > G%bathyT(i,j)) then
-          CS%fesedflux_in(i,j,k) = CS%fesedflux_in(i,j,k) + CS%fesedflux_in(i,j,kbot)
-          CS%fesedflux_in(i,j,kbot) = 0.
-          CS%feventflux_in(i,j,k) = CS%feventflux_in(i,j,k) + CS%feventflux_in(i,j,kbot)
-          CS%feventflux_in(i,j,kbot) = 0.
+        CS%fesedflux_dz(i,j,k) = CS%fesedflux_z_edges(k) - CS%fesedflux_z_edges(kbot)
+        ! If top interface is at or below ocean bottom, move flux in current layer up one
+        ! and set thickness of current level to 0
+        if (G%bathyT(i,j) + CS%fesedflux_z_edges(k) < 1e-8) then
+          CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
+          CS%fesedflux_in(i,j,k) = 0.
+          CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
+          CS%feventflux_in(i,j,k) = 0.
           CS%fesedflux_dz(i,j,k) = 0.
-        else if (-CS%fesedflux_z(kbot) > G%bathyT(i,j)) then
+        else if (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8) then
           ! Otherwise, if lower interface is below bathymetry move interface to ocean bottom
-          CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z(k)
+          CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z_edges(k)
         end if
       end do
     end do
@@ -694,12 +702,15 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
       allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)))
       id_diags(m)%field_2d(:,:) = 0.
     else ! 3D field
+      ! TODO: MARBL should provide v_extensive through MARBL_diags
+      !       (for now, FESEDFLUX is the only one that should be true)
       id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
         diag%axesTL, & ! T=> tracer grid? L => layer center
         day, &
         trim(MARBL_diags%diags(m)%long_name), &
-        trim(MARBL_diags%diags(m)%units))
+        trim(MARBL_diags%diags(m)%units), &
+        v_extensive=(trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX"))
       allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
       id_diags(m)%field_3d(:,:,:) = 0.
     end if
@@ -798,10 +809,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
   integer :: i, j, k, is, ie, js, je, nz, m
-  real :: kg_m2_s_conversion, ndep_conversion
+  real :: ndep_conversion
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  kg_m2_s_conversion = US%RZ_T_to_kg_m2s
   ndep_conversion = (US%m_to_L)**2 * US%s_to_T
 
   if (.not.associated(CS)) return
@@ -841,12 +851,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j) * &
-                                                                             (kg_m2_s_conversion * g_per_kg * &
-                                                                              m_per_cm**2)
+        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j)
+
       if (CS%fe_dep_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j) * &
-                                                                           (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j)
 
       !       These are read from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc
       if (CS%nox_flux_ind > 0) &
@@ -1001,7 +1009,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       (Same as dust_dep_ind for surface_flux_forcings)
       if (CS%dustflux_ind > 0) &
         MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = &
-            fluxes%MARBL_forcing%dust_flux(i,j) * (kg_m2_s_conversion * g_per_kg * m_per_cm**2)
+            fluxes%MARBL_forcing%dust_flux(i,j)
 
       !        TODO: Support PAR (currently just using single subcolumn)
       !              (Look for Pen_sw_bnd?)
@@ -1026,7 +1034,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%fesedflux_ind > 0) then
         MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0.
         call reintegrate_column(CS%fesedflux_nz, &
-                                CS%fesedflux_dz(i,j,:) * sum(dz(:)) / (G%bathyT(i,j)), &
+                                CS%fesedflux_dz(i,j,:) * (sum(dz(:)) / G%bathyT(i,j)), &
                                 CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), &
                                 GV%ke, &
                                 dz(:), &

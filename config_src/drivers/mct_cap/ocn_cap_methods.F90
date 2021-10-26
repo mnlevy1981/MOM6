@@ -108,10 +108,7 @@ subroutine ocn_import(x2o, ind, grid, ice_ocean_boundary, ocean_public, logunit,
 
       ! MARBL-specific forcing fields
       ! Dust and iron fluxes (Do I need the GRID%mask2dT terms? I have them in convert_IOB_to_fluxes())
-      ! TODO: these are in units kg/m^2/s, want g/cm^2/s => multiply by 0.1 somewhere
-      !       currently the conversion is done in MARBL_tracers:MARBL_tracers_column_physics when copying
-      !       into surface_flux_forcings but maybe we should convert somewhere else because we want to
-      ! register these IOB fields as diagnostics (in g/cm^2/s for now)
+      ! These are in units kg/m^2/s
       ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(i,j) = (x2o(ind%x2o_Faxa_dstwet1,k) + &
                                                               x2o(ind%x2o_Faxa_dstdry1,k)) * &
                                                              GRID%mask2dT(i,j)
