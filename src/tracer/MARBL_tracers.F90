@@ -1397,9 +1397,11 @@ subroutine print_marbl_log(log_to_print, G, i, j)
       if ((present(G)) .and. (tmp%ElementInd .ne. elem_old)) then
         if (tmp%ElementInd .gt. 0) then
           if (present(i) .and. present(j)) then
-            write(message_location, "(A,F8.3,A,F7.3,A,I0)") &
+            write(message_location, "(A,F8.3,A,F7.3,A,I0,A,I0,A,I0)") &
                  'Message from (lon, lat) (', G%geoLonT(i,j), ', ', &
-                 G%geoLatT(i,j), '). Level: ', tmp%ElementInd
+                 G%geoLatT(i,j), '), which is global (i,j) (', &
+                 i + G%HI%idg_offset, ', ', j + G%HI%jdg_offset, &
+                 '). Level: ', tmp%ElementInd
           else
             write(message_location, "(A)") "Grid cell responsible for message is unknown"
           !   i_loc = marbl_col_to_pop_i(tmp%ElementInd, iblock)
