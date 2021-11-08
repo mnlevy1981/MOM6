@@ -699,8 +699,10 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         day, &
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
-      allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)))
-      id_diags(m)%field_2d(:,:) = 0.
+      if (id_diags(m)%id > 0) then
+        allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)))
+        id_diags(m)%field_2d(:,:) = 0.
+      end if
     else ! 3D field
       ! TODO: MARBL should provide v_extensive through MARBL_diags
       !       (for now, FESEDFLUX is the only one that should be true)
@@ -711,8 +713,10 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units), &
         v_extensive=(trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX"))
-      allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
-      id_diags(m)%field_3d(:,:,:) = 0.
+      if (id_diags(m)%id > 0) then
+        allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
+        id_diags(m)%field_3d(:,:,:) = 0.
+      end if
     end if
   end do
 
@@ -894,7 +898,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * diagnostics
       do m=1,size(MARBL_instances%surface_flux_diags%diags)
         ! All diags are 2D coming from surface
-        CS%surface_flux_diags(m)%field_2d(i,j) = real(MARBL_instances%surface_flux_diags%diags(m)%field_2d(1))
+        if (CS%surface_flux_diags(m)%id > 0) &
+          CS%surface_flux_diags(m)%field_2d(i,j) = real(MARBL_instances%surface_flux_diags%diags(m)%field_2d(1))
       end do
 
       !     * Surface tracer flux
@@ -1084,15 +1089,17 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !     * diagnostics
       do m=1,size(MARBL_instances%interior_tendency_diags%diags)
-        if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
-          ! Only copy values if ref_depth < bathyT
-          if (G%bathyT(i,j) > real(MARBL_instances%interior_tendency_diags%diags(m)%ref_depth)) then
-            CS%interior_tendency_diags(m)%field_2d(i,j) = &
-                real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
+        if (CS%interior_tendency_diags(m)%id > 0) then
+          if (allocated(CS%interior_tendency_diags(m)%field_2d)) then
+            ! Only copy values if ref_depth < bathyT
+            if (G%bathyT(i,j) > real(MARBL_instances%interior_tendency_diags%diags(m)%ref_depth)) then
+              CS%interior_tendency_diags(m)%field_2d(i,j) = &
+                  real(MARBL_instances%interior_tendency_diags%diags(m)%field_2d(1))
+            end if
+          else ! not a 2D diagnostic
+            CS%interior_tendency_diags(m)%field_3d(i,j,:) = &
+                real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
           end if
-        else
-          CS%interior_tendency_diags(m)%field_3d(i,j,:) = &
-              real(MARBL_instances%interior_tendency_diags%diags(m)%field_3d(:,1))
         end if
       end do
       !     * tendency values themselves (and vertical integrals of them)
