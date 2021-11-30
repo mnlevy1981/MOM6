@@ -1531,7 +1531,7 @@ subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, n
   endif
 
   dtracer(:,:,:) = 0.0
-  !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux)
+  !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux, scale_factor_loc)
   do k = 1, GV%ke
     do j = G%jsc, G%jec
       do i = G%isc, G%iec
