@@ -362,7 +362,8 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
   type(verticalGrid_type),                    intent(in)    :: GV      !< Ocean vertical grid
   type(unit_scale_type),                      intent(in)    :: US      !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h       !< Layer/level thickness [H ~> m or kg m-2]
-  type(forcing),                              intent(in)    :: fluxes  !< A structure containing pointers to thermodynamic
+  type(forcing),                              intent(in)    :: fluxes  !< A structure containing pointers to
+                                                                       !! thermodynamic
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real,                                       intent(in)    :: dt      !< Time-step [s]
   type(CFC_cap_CS),                           pointer       :: CS      !< A pointer that is set to point to the control

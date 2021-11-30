@@ -1504,9 +1504,11 @@ end subroutine KPP_NonLocalTransport_saln
 
 !> Apply KPP non-local transport of surface fluxes for tracers
 !> other than temperature and salinity
-subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, dt, scalar, scale_factor)
+subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
+                                                 dt, scalar, scale_factor)
 
-  logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed term to scalar
+  logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed
+                                                                                  !! term to scalar
   type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
   type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
@@ -1515,7 +1517,8 @@ subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, n
                                                                         !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
   real,                                       intent(in)    :: dt            !< Time-step [s]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
-  real, optional,                             intent(in)    :: scale_factor  !< Scale factor to get surfFlux into proper units
+  real, optional,                             intent(in)    :: scale_factor  !< Scale factor to get surfFlux
+                                                                             !! into proper units
 
   integer :: i, j, k
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
