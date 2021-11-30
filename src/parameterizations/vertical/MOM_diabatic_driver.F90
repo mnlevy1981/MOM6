@@ -60,7 +60,7 @@ use MOM_set_diffusivity,     only : set_diffusivity_CS
 use MOM_sponge,              only : apply_sponge, sponge_CS
 use MOM_ALE_sponge,          only : apply_ALE_sponge, ALE_sponge_CS
 use MOM_time_manager,        only : time_type, real_to_time, operator(-), operator(<=)
-use MOM_tracer_flow_control, only : call_tracer_column_fns, tracer_flow_control_CS
+use MOM_tracer_flow_control, only : call_tracer_column_fns, call_tracer_KPP_NonLocalTransport, tracer_flow_control_CS
 use MOM_tracer_diabatic,     only : tracer_vertdiff, tracer_vertdiff_Eulerian
 use MOM_unit_scaling,        only : unit_scale_type
 use MOM_variables,           only : thermo_var_ptrs, vertvisc_type, accel_diag_ptrs
@@ -1504,6 +1504,10 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
                               G, GV, US, tv, CS%optics, CS%tracer_flow_CSp, CS%debug, &
                               evap_CFL_limit=CS%evap_CFL_limit, &
                               minimum_forcing_depth=CS%minimum_forcing_depth)
+  if (CS%useKPP) then
+    ! Still need to apply nonlocal terms to passive tracers
+    call call_tracer_KPP_NonLocalTransport(G, GV, US, h, fluxes, CS%KPP_NLTscalar, US%T_to_s*dt, CS%tracer_flow_CSp)
+  endif
 
   call cpu_clock_end(id_clock_tracers)
 

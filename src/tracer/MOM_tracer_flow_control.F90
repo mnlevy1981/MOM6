@@ -44,6 +44,7 @@ use MOM_OCMIP2_CFC, only : OCMIP2_CFC_column_physics, OCMIP2_CFC_surface_state
 use MOM_OCMIP2_CFC, only : OCMIP2_CFC_stock, OCMIP2_CFC_end, OCMIP2_CFC_CS
 use MOM_CFC_cap, only : register_CFC_cap, initialize_CFC_cap
 use MOM_CFC_cap, only : CFC_cap_column_physics, CFC_cap_surface_state
+use MOM_CFC_cap, only : CFC_cap_KPP_NonLocalTransport
 use MOM_CFC_cap, only : CFC_cap_stock, CFC_cap_end, CFC_cap_CS
 use oil_tracer, only : register_oil_tracer, initialize_oil_tracer
 use oil_tracer, only : oil_tracer_column_physics, oil_tracer_surface_state
@@ -71,7 +72,7 @@ use nw2_tracers, only : initialize_nw2_tracers, nw2_tracers_end
 implicit none ; private
 
 public call_tracer_register, tracer_flow_control_init, call_tracer_set_forcing
-public call_tracer_column_fns, call_tracer_surface_state, call_tracer_stocks
+public call_tracer_column_fns, call_tracer_surface_state, call_tracer_stocks, call_tracer_KPP_NonLocalTransport
 public call_tracer_flux_init, get_chl_from_model, tracer_flow_control_end
 
 !> The control structure for orchestrating the calling of tracer packages
@@ -702,6 +703,27 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, CS, stock_names, stock_uni
   if (present(num_stocks)) num_stocks = ns_tot
 
 end subroutine call_tracer_stocks
+
+
+!> This routine calls all registered tracer KPP non-local transport subroutines.
+subroutine call_tracer_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS)
+
+  type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
+  type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
+  type(unit_scale_type),                      intent(in)    :: US            !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
+  type(forcing),                              intent(in)    :: fluxes !< A structure containing pointers to
+                                                                      !! any possible forcing fields.
+                                                                      !! Unused fields have NULL ptrs.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
+  real,                                       intent(in)    :: dt            !< Time-step [s]
+  type(tracer_flow_control_CS),               pointer       :: CS            !< The control structure returned by
+                                                                             !! a previous call to call_tracer_register
+
+    if (CS%use_CFC_cap) &
+      call CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS%CFC_cap_CSp)
+
+end subroutine call_tracer_KPP_NonLocalTransport
 
 !> This routine stores the stocks and does error handling for call_tracer_stocks.
 subroutine store_stocks(pkg_name, ns, names, units, values, index, stock_values, &

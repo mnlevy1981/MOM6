@@ -10,6 +10,7 @@ use MOM_file_parser,     only : get_param, log_param, log_version, param_file_ty
 use MOM_forcing_type,    only : forcing
 use MOM_hor_index,       only : hor_index_type
 use MOM_grid,            only : ocean_grid_type
+use MOM_CVMix_KPP,       only : KPP_NonLocalTransport_passive_tracers
 use MOM_io,              only : file_exists, MOM_read_data, slasher
 use MOM_io,              only : vardesc, var_desc, query_vardesc, stdout
 use MOM_open_boundary,   only : ocean_OBC_type
@@ -29,6 +30,7 @@ implicit none ; private
 
 public register_CFC_cap, initialize_CFC_cap, CFC_cap_unit_tests
 public CFC_cap_column_physics, CFC_cap_surface_state, CFC_cap_fluxes
+public CFC_cap_KPP_NonLocalTransport
 public CFC_cap_stock, CFC_cap_end
 
 integer, parameter :: NTR = 2 !< the number of tracers in this module.
@@ -38,6 +40,7 @@ type, public :: CFC_cap_CS ; private
   character(len=200) :: IC_file !< The file in which the CFC initial values can
                                 !! be found, or an empty string for internal initilaization.
   logical :: Z_IC_file !< If true, the IC_file is in Z-space.  The default is false.
+  logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM6 tracer registry
   real, pointer, dimension(:,:,:) :: &
@@ -111,6 +114,10 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
   endif
   call get_param(param_file, mdl, "CFC_IC_FILE_IS_Z", CS%Z_IC_file, &
                  "If true, CFC_IC_FILE is in depth space, not layer space", &
+                 default=.false.)
+  call get_param(param_file, mdl, "CFC_APPLY_NONLOCAL_TRANSPORT", CS%applyNonLocalTrans, &
+                 "If true, the IC_file is in Z-space.  The default is false.", &
+                 "If True, applies the non-local transport to CFC tracers", &
                  default=.false.)
   call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
                  "If true, tracers may go through the initialization code "//&
@@ -346,6 +353,35 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   if (CS%id_cfc12_cmor > 0) call post_data(CS%id_cfc12_cmor, (GV%Rho0*US%R_to_kg_m3)*CFC12, CS%diag)
 
 end subroutine CFC_cap_column_physics
+
+
+!>
+subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS)
+
+  type(ocean_grid_type),                      intent(in)    :: G       !< Ocean grid
+  type(verticalGrid_type),                    intent(in)    :: GV      !< Ocean vertical grid
+  type(unit_scale_type),                      intent(in)    :: US      !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h       !< Layer/level thickness [H ~> m or kg m-2]
+  type(forcing),                              intent(in)    :: fluxes  !< A structure containing pointers to thermodynamic
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
+  real,                                       intent(in)    :: dt      !< Time-step [s]
+  type(CFC_cap_CS),                           pointer       :: CS      !< A pointer that is set to point to the control
+
+  real :: scale_factor
+
+  scale_factor = 1.0 / (GV%rho0 * US%R_to_kg_m3)
+
+  call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
+                                             fluxes%cfc11_flux(:,:), dt, CS%CFC11(:,:,:), &
+                                             scale_factor = scale_factor)
+  call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
+                                             fluxes%cfc12_flux(:,:), dt, CS%CFC12(:,:,:), &
+                                             scale_factor = scale_factor)
+
+  ! TODO: add diagnostics!
+
+end subroutine CFC_cap_KPP_NonLocalTransport
+
 
 !> Calculates the mass-weighted integral of all tracer stocks,
 !! returning the number of stocks it has calculated.  If the stock_index
