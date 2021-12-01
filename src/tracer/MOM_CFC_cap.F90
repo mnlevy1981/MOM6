@@ -43,6 +43,7 @@ type, public :: CFC_cap_CS ; private
   logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM6 tracer registry
+  integer :: tracer_ind_11, tracer_ind_12 !< indicies in tr_Reg corresponding to module tracers
   real, pointer, dimension(:,:,:) :: &
     CFC11 => NULL(), &     !< The CFC11 concentration [mol kg-1].
     CFC12 => NULL()        !< The CFC12 concentration [mol kg-1].
@@ -175,6 +176,8 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
                        restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
 
   CS%tr_Reg => tr_Reg
+  CS%tracer_ind_11 = tr_Reg%ntr-1
+  CS%tracer_ind_12 = tr_Reg%ntr
   CS%restart_CSp => restart_CS
   register_CFC_cap = .true.
 
@@ -373,11 +376,15 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
   scale_factor = 1.0 / (GV%rho0 * US%R_to_kg_m3)
 
   call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                                             fluxes%cfc11_flux(:,:), dt, CS%CFC11(:,:,:), &
-                                             scale_factor = scale_factor)
+                                             fluxes%cfc11_flux(:,:), dt, CS%diag, &
+                                             CS%tr_Reg%Tr(CS%tracer_ind_11)%id_net_surfflux, &
+                                             CS%tr_Reg%Tr(CS%tracer_ind_11)%id_NLT_tendency, &
+                                             CS%CFC11(:,:,:), scale_factor = scale_factor)
   call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                                             fluxes%cfc12_flux(:,:), dt, CS%CFC12(:,:,:), &
-                                             scale_factor = scale_factor)
+                                             fluxes%cfc12_flux(:,:), dt, CS%diag, &
+                                             CS%tr_Reg%Tr(CS%tracer_ind_12)%id_net_surfflux, &
+                                             CS%tr_Reg%Tr(CS%tracer_ind_12)%id_NLT_tendency, &
+                                             CS%CFC12(:,:,:), scale_factor = scale_factor)
 
   ! TODO: add diagnostics!
 

@@ -135,6 +135,7 @@ type, public :: tracer_type
   integer :: id_remap_conc = -1, id_remap_cont = -1, id_remap_cont_2d = -1
   integer :: id_tendency = -1, id_trxh_tendency = -1, id_trxh_tendency_2d = -1
   integer :: id_tr_vardec = -1
+  integer :: id_net_surfflux = -1, id_NLT_tendency = -1
   !>@}
 end type tracer_type
 
@@ -662,6 +663,15 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
         Reg%ntr = Reg%ntr + 1
       endif
     endif
+
+    ! KPP nonlocal term diagnostics
+    Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(shortnm), diag%axesT1, Time, &
+        'Effective net surface flux of '//lowercase(longname)//', as used by [CVMix] KPP', &
+        trim(units)//' m/s')
+    Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
+        diag%axesTL, Time, &
+        lowercase(longname)//' tendency due to non-local transport, as calculated by [CVMix] KPP', &
+        trim(units)//'/s')
 
   endif ; enddo
 

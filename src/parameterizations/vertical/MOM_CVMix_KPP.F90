@@ -1505,7 +1505,8 @@ end subroutine KPP_NonLocalTransport_saln
 !> Apply KPP non-local transport of surface fluxes for tracers
 !> other than temperature and salinity
 subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                                                 dt, scalar, scale_factor)
+                                                 dt, diag, id_net_surfflux, id_NLT_tendency, scalar, &
+                                                 scale_factor)
 
   logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed
                                                                                   !! term to scalar
@@ -1516,6 +1517,9 @@ subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, n
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of scalar
                                                                         !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
   real,                                       intent(in)    :: dt            !< Time-step [s]
+  type(diag_ctrl), target,                    intent(in)    :: diag          !< Diagnostics
+  integer,                                    intent(in)    :: id_net_surfflux  !< Diagnostic id for surface flux
+  integer,                                    intent(in)    :: id_NLT_tendency  !< Diagnostic id for tendency term
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
   real, optional,                             intent(in)    :: scale_factor  !< Scale factor to get surfFlux
                                                                              !! into proper units
@@ -1552,6 +1556,9 @@ subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, n
       enddo
     enddo
   endif
+
+  if (id_net_surfflux > 0) call post_data(id_net_surfflux, surfFlux, diag)
+  if (id_NLT_tendency > 0) call post_data(id_NLT_tendency, dtracer,  diag)
 
 end subroutine KPP_NonLocalTransport_passive_tracers
 
