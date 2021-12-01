@@ -43,7 +43,8 @@ type, public :: CFC_cap_CS ; private
   logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM6 tracer registry
-  integer :: tracer_ind_11, tracer_ind_12 !< indicies in tr_Reg corresponding to module tracers
+  integer :: tracer_ind_11 !< index in tr_Reg corresponding to CFC_11 tracer
+  integer :: tracer_ind_12 !< index in tr_Reg corresponding to CFC_12 tracer
   real, pointer, dimension(:,:,:) :: &
     CFC11 => NULL(), &     !< The CFC11 concentration [mol kg-1].
     CFC12 => NULL()        !< The CFC12 concentration [mol kg-1].
