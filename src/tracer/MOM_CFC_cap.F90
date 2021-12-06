@@ -13,6 +13,7 @@ use MOM_grid,            only : ocean_grid_type
 use MOM_CVMix_KPP,       only : KPP_NonLocalTransport_passive_tracers
 use MOM_io,              only : file_exists, MOM_read_data, slasher
 use MOM_io,              only : vardesc, var_desc, query_vardesc, stdout
+use MOM_tracer_registry, only : tracer_type, tracer_name_lookup
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_restart,         only : query_initialized, MOM_restart_CS
 use MOM_time_manager,    only : time_type
@@ -35,6 +36,18 @@ public CFC_cap_stock, CFC_cap_end
 
 integer, parameter :: NTR = 2 !< the number of tracers in this module.
 
+!> Contains per-tracer metadata and a pointer to Tr in Tr_reg
+type, private :: CFC_tracer_metadata
+  ! The following vardesc types contain a package of metadata about each tracer.
+  type(vardesc) :: desc !< A set of metadata for the tracer
+  real :: IC_val = 0.0    !< The initial value assigned to the tracer [mol kg-1].
+  real :: land_val = -1.0 !< The value of the tracer used where land is masked out [mol kg-1].
+  character(len=32) :: name !< Tracer variable name
+  integer :: id_cmor  !< Diagnostic ID
+  real, pointer, dimension(:,:,:) :: conc  !< The tracer concentration [mol kg-1].
+  type(tracer_type), pointer :: tr_ptr !< pointer to tracer inside Tr_reg
+  end type CFC_tracer_metadata
+
 !> The control structure for the CFC_cap tracer package
 type, public :: CFC_cap_CS ; private
   character(len=200) :: IC_file !< The file in which the CFC initial values can
@@ -43,30 +56,13 @@ type, public :: CFC_cap_CS ; private
   logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM6 tracer registry
-  integer :: tracer_ind_11 !< index in tr_Reg corresponding to CFC_11 tracer
-  integer :: tracer_ind_12 !< index in tr_Reg corresponding to CFC_12 tracer
-  real, pointer, dimension(:,:,:) :: &
-    CFC11 => NULL(), &     !< The CFC11 concentration [mol kg-1].
-    CFC12 => NULL()        !< The CFC12 concentration [mol kg-1].
-  ! In the following variables a suffix of _11 refers to CFC11 and _12 to CFC12.
-  real :: CFC11_IC_val = 0.0    !< The initial value assigned to CFC11 [mol kg-1].
-  real :: CFC12_IC_val = 0.0    !< The initial value assigned to CFC12 [mol kg-1].
-  real :: CFC11_land_val = -1.0 !< The value of CFC11 used where land is masked out [mol kg-1].
-  real :: CFC12_land_val = -1.0 !< The value of CFC12 used where land is masked out [mol kg-1].
   logical :: tracers_may_reinit !< If true, tracers may be reset via the initialization code
                                 !! if they are not found in the restart files.
-  character(len=16) :: CFC11_name !< CFC11 variable name
-  character(len=16) :: CFC12_name !< CFC12 variable name
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate
                                              !! the timing of diagnostic output.
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< Model restart control structure
 
-  ! The following vardesc types contain a package of metadata about each tracer.
-  type(vardesc) :: CFC11_desc !< A set of metadata for the CFC11 tracer
-  type(vardesc) :: CFC12_desc !< A set of metadata for the CFC12 tracer
-  !>@{ Diagnostic IDs
-  integer :: id_cfc11_cmor = -1, id_cfc12_cmor = -1
-  !>@}
+  type(CFC_tracer_metadata), dimension(2) :: CFC_metadata !< per-tracer parameters / metadata
 end type CFC_cap_CS
 
 contains
@@ -118,7 +114,6 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
                  "If true, CFC_IC_FILE is in depth space, not layer space", &
                  default=.false.)
   call get_param(param_file, mdl, "CFC_APPLY_NONLOCAL_TRANSPORT", CS%applyNonLocalTrans, &
-                 "If true, the IC_file is in Z-space.  The default is false.", &
                  "If True, applies the non-local transport to CFC tracers", &
                  default=.false.)
   call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
@@ -126,10 +121,10 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
                  "if they are not found in the restart files.  Otherwise "//&
                  "it is a fatal error if tracers are not found in the "//&
                  "restart files of a restarted run.", default=.false.)
-  call get_param(param_file, mdl, "CFC11_IC_VAL", CS%CFC11_IC_val, &
+  call get_param(param_file, mdl, "CFC11_IC_VAL", CS%CFC_metadata(1)%IC_val, &
                  "Value that CFC_11 is set to when it is not read from a file.", &
                  units="mol kg-1", default=0.0)
-  call get_param(param_file, mdl, "CFC12_IC_VAL", CS%CFC12_IC_val, &
+  call get_param(param_file, mdl, "CFC12_IC_VAL", CS%CFC_metadata(2)%IC_val, &
                  "Value that CFC_12 is set to when it is not read from a file.", &
                  units="mol kg-1", default=0.0)
 
@@ -156,29 +151,36 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
 
   ! The following vardesc types contain a package of metadata about each tracer,
   ! including, the name; units; longname; and grid information.
-  CS%CFC11_name = "CFC_11" ; CS%CFC12_name = "CFC_12"
-  CS%CFC11_desc = var_desc(CS%CFC11_name,"mol kg-1","Moles Per Unit Mass of CFC-11 in sea water", caller=mdl)
-  CS%CFC12_desc = var_desc(CS%CFC12_name,"mol kg-1","Moles Per Unit Mass of CFC-12 in sea water", caller=mdl)
+  CS%CFC_metadata(1)%name = "CFC_11" ; CS%CFC_metadata(2)%name = "CFC_12"
+  CS%CFC_metadata(1)%desc = var_desc(CS%CFC_metadata(1)%name, &
+                                     "mol kg-1", &
+                                     "Moles Per Unit Mass of CFC-11 in sea water", &
+                                     caller=mdl)
+  CS%CFC_metadata(2)%desc = var_desc(CS%CFC_metadata(2)%name, &
+                                     "mol kg-1", &
+                                     "Moles Per Unit Mass of CFC-12 in sea water", &
+                                     caller=mdl)
 
-  allocate(CS%CFC11(isd:ied,jsd:jed,nz), source=0.0)
-  allocate(CS%CFC12(isd:ied,jsd:jed,nz), source=0.0)
+  allocate(CS%CFC_metadata(1)%conc(isd:ied,jsd:jed,nz), source=0.0)
+  allocate(CS%CFC_metadata(2)%conc(isd:ied,jsd:jed,nz), source=0.0)
 
   ! This pointer assignment is needed to force the compiler not to do a copy in
   ! the registration calls.  Curses on the designers and implementers of F90.
-  tr_ptr => CS%CFC11
+  tr_ptr => CS%CFC_metadata(1)%conc
   ! Register CFC11 for horizontal advection, diffusion, and restarts.
   call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, &
-                       tr_desc=CS%CFC11_desc, registry_diags=.true., &
+                       tr_desc=CS%CFC_metadata(1)%desc, registry_diags=.true., &
                        restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
   ! Do the same for CFC12
-  tr_ptr => CS%CFC12
+  tr_ptr => CS%CFC_metadata(2)%conc
   call register_tracer(tr_ptr, Tr_Reg, param_file, HI, GV, &
-                       tr_desc=CS%CFC12_desc, registry_diags=.true., &
+                       tr_desc=CS%CFC_metadata(2)%desc, registry_diags=.true., &
                        restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
 
   CS%tr_Reg => tr_Reg
-  CS%tracer_ind_11 = tr_Reg%ntr-1
-  CS%tracer_ind_12 = tr_Reg%ntr
+  do m=1,2
+    call tracer_name_lookup(tr_Reg, CS%CFC_metadata(m)%tr_ptr, CS%CFC_metadata(m)%name)
+  end do
   CS%restart_CSp => restart_CS
   register_CFC_cap = .true.
 
@@ -211,22 +213,22 @@ subroutine initialize_CFC_cap(restart, day, G, GV, US, h, diag, OBC, CS)
   CS%diag => diag
 
   if (.not.restart .or. (CS%tracers_may_reinit .and. &
-      .not.query_initialized(CS%CFC11, CS%CFC11_name, CS%restart_CSp))) &
-    call init_tracer_CFC(h, CS%CFC11, CS%CFC11_name, CS%CFC11_land_val, &
-                         CS%CFC11_IC_val, G, GV, US, CS)
+      .not.query_initialized(CS%CFC_metadata(1)%conc, CS%CFC_metadata(1)%name, CS%restart_CSp))) &
+    call init_tracer_CFC(h, CS%CFC_metadata(1)%conc, CS%CFC_metadata(1)%name, CS%CFC_metadata(1)%land_val, &
+                         CS%CFC_metadata(1)%IC_val, G, GV, US, CS)
 
   if (.not.restart .or. (CS%tracers_may_reinit .and. &
-      .not.query_initialized(CS%CFC12, CS%CFC12_name, CS%restart_CSp))) &
-    call init_tracer_CFC(h, CS%CFC12, CS%CFC12_name, CS%CFC12_land_val, &
-                         CS%CFC12_IC_val, G, GV, US, CS)
+      .not.query_initialized(CS%CFC_metadata(2)%conc, CS%CFC_metadata(2)%name, CS%restart_CSp))) &
+    call init_tracer_CFC(h, CS%CFC_metadata(2)%conc, CS%CFC_metadata(2)%name, CS%CFC_metadata(2)%land_val, &
+                         CS%CFC_metadata(2)%IC_val, G, GV, US, CS)
 
 
   ! cmor diagnostics
   ! CFC11 cmor conventions: http://clipc-services.ceda.ac.uk/dreq/u/42625c97b8fe75124a345962c4430982.html
-  CS%id_cfc11_cmor = register_diag_field('ocean_model', 'cfc11', diag%axesTL, day,   &
+  CS%CFC_metadata(1)%id_cmor = register_diag_field('ocean_model', 'cfc11', diag%axesTL, day,   &
     'Mole Concentration of CFC11 in Sea Water', 'mol m-3')
   ! CFC12 cmor conventions: http://clipc-services.ceda.ac.uk/dreq/u/3ab8e10027d7014f18f9391890369235.html
-  CS%id_cfc12_cmor = register_diag_field('ocean_model', 'cfc12', diag%axesTL, day,   &
+  CS%CFC_metadata(2)%id_cmor = register_diag_field('ocean_model', 'cfc12', diag%axesTL, day,   &
     'Mole Concentration of CFC12 in Sea Water', 'mol m-3')
 
   if (associated(OBC)) then
@@ -329,7 +331,7 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   ! tracer_vertdiff argument sfc_flux units are CU kg m-2 T-1
   scale_factor = US%Z_to_m
 
-  CFC11 => CS%CFC11 ; CFC12 => CS%CFC12
+  CFC11 => CS%CFC_metadata(1)%conc ; CFC12 => CS%CFC_metadata(2)%conc
 
   ! Use a tridiagonal solver to determine the concentrations after the
   ! surface source is applied and diapycnal advection and diffusion occurs.
@@ -353,8 +355,8 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   endif
 
   ! If needed, write out any desired diagnostics from tracer sources & sinks here.
-  if (CS%id_cfc11_cmor > 0) call post_data(CS%id_cfc11_cmor, (GV%Rho0*US%R_to_kg_m3)*CFC11, CS%diag)
-  if (CS%id_cfc12_cmor > 0) call post_data(CS%id_cfc12_cmor, (GV%Rho0*US%R_to_kg_m3)*CFC12, CS%diag)
+  if (CS%CFC_metadata(1)%id_cmor > 0) call post_data(CS%CFC_metadata(1)%id_cmor, (GV%Rho0*US%R_to_kg_m3)*CFC11, CS%diag)
+  if (CS%CFC_metadata(2)%id_cmor > 0) call post_data(CS%CFC_metadata(2)%id_cmor, (GV%Rho0*US%R_to_kg_m3)*CFC12, CS%diag)
 
 end subroutine CFC_cap_column_physics
 
@@ -378,14 +380,14 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
 
   call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
                                              fluxes%cfc11_flux(:,:), dt, CS%diag, &
-                                             CS%tr_Reg%Tr(CS%tracer_ind_11)%id_net_surfflux, &
-                                             CS%tr_Reg%Tr(CS%tracer_ind_11)%id_NLT_tendency, &
-                                             CS%CFC11(:,:,:), scale_factor = scale_factor)
+                                             CS%CFC_metadata(1)%tr_ptr%id_net_surfflux, &
+                                             CS%CFC_metadata(1)%tr_ptr%id_NLT_tendency, &
+                                             CS%CFC_metadata(1)%conc(:,:,:), scale_factor = scale_factor)
   call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
                                              fluxes%cfc12_flux(:,:), dt, CS%diag, &
-                                             CS%tr_Reg%Tr(CS%tracer_ind_12)%id_net_surfflux, &
-                                             CS%tr_Reg%Tr(CS%tracer_ind_12)%id_NLT_tendency, &
-                                             CS%CFC12(:,:,:), scale_factor = scale_factor)
+                                             CS%CFC_metadata(2)%tr_ptr%id_net_surfflux, &
+                                             CS%CFC_metadata(2)%tr_ptr%id_NLT_tendency, &
+                                             CS%CFC_metadata(2)%conc(:,:,:), scale_factor = scale_factor)
 
   ! TODO: add diagnostics!
 
@@ -426,16 +428,16 @@ function CFC_cap_stock(h, stocks, G, GV, CS, names, units, stock_index)
     return
   endif ; endif
 
-  call query_vardesc(CS%CFC11_desc, name=names(1), units=units(1), caller="CFC_cap_stock")
-  call query_vardesc(CS%CFC12_desc, name=names(2), units=units(2), caller="CFC_cap_stock")
+  call query_vardesc(CS%CFC_metadata(1)%desc, name=names(1), units=units(1), caller="CFC_cap_stock")
+  call query_vardesc(CS%CFC_metadata(2)%desc, name=names(2), units=units(2), caller="CFC_cap_stock")
   units(1) = trim(units(1))//" kg" ; units(2) = trim(units(2))//" kg"
 
   stock_scale = G%US%L_to_m**2 * GV%H_to_kg_m2
   stocks(1) = 0.0 ; stocks(2) = 0.0
   do k=1,nz ; do j=js,je ; do i=is,ie
     mass = G%mask2dT(i,j) * G%areaT(i,j) * h(i,j,k)
-    stocks(1) = stocks(1) + CS%CFC11(i,j,k) * mass
-    stocks(2) = stocks(2) + CS%CFC12(i,j,k) * mass
+    stocks(1) = stocks(1) + CS%CFC_metadata(1)%conc(i,j,k) * mass
+    stocks(2) = stocks(2) + CS%CFC_metadata(2)%conc(i,j,k) * mass
   enddo ; enddo ; enddo
   stocks(1) = stock_scale * stocks(1)
   stocks(2) = stock_scale * stocks(2)
@@ -460,8 +462,8 @@ subroutine CFC_cap_surface_state(sfc_state, G, CS)
   if (.not.associated(CS)) return
 
   do j=js,je ; do i=is,ie
-    sfc_state%sfc_cfc11(i,j) = CS%CFC11(i,j,1)
-    sfc_state%sfc_cfc12(i,j) = CS%CFC12(i,j,1)
+    sfc_state%sfc_cfc11(i,j) = CS%CFC_metadata(1)%conc(i,j,1)
+    sfc_state%sfc_cfc12(i,j) = CS%CFC_metadata(2)%conc(i,j,1)
   enddo ; enddo
 
 end subroutine CFC_cap_surface_state
@@ -647,8 +649,8 @@ subroutine CFC_cap_end(CS)
   integer :: m
 
   if (associated(CS)) then
-    if (associated(CS%CFC11)) deallocate(CS%CFC11)
-    if (associated(CS%CFC12)) deallocate(CS%CFC12)
+    if (associated(CS%CFC_metadata(1)%conc)) deallocate(CS%CFC_metadata(1)%conc)
+    if (associated(CS%CFC_metadata(2)%conc)) deallocate(CS%CFC_metadata(2)%conc)
 
     deallocate(CS)
   endif
