@@ -2863,7 +2863,7 @@ end subroutine adiabatic_driver_init
 !> This routine initializes the diabatic driver module.
 subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, diag, &
                                 ADp, CDp, CS, tracer_flow_CSp, sponge_CSp, &
-                                ALE_sponge_CSp, oda_incupd_CSp)
+                                ALE_sponge_CSp, oda_incupd_CSp, useKPP)
   type(time_type), target                :: Time             !< model time
   type(ocean_grid_type),   intent(inout) :: G                !< model grid structure
   type(verticalGrid_type), intent(in)    :: GV               !< model vertical grid structure
@@ -2880,6 +2880,7 @@ subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, di
   type(sponge_CS),         pointer       :: sponge_CSp       !< pointer to the sponge module control structure
   type(ALE_sponge_CS),     pointer       :: ALE_sponge_CSp   !< pointer to the ALE sponge module control structure
   type(oda_incupd_CS),     pointer       :: oda_incupd_CSp   !< pointer to the oda incupd module control structure
+  logical,                 intent(out)   :: useKPP           !< return CS%useKPP
 
   ! Local variables
   real    :: Kd  ! A diffusivity used in the default for other tracer diffusivities, in MKS units [m2 s-1]
@@ -3454,6 +3455,9 @@ subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, di
 
   ! Initialize the diagnostic grid storage
   call diag_grid_storage_init(CS%diag_grids_prev, G, GV, diag)
+
+  ! Set useKPP
+  useKPP = CS%useKPP
 
 end subroutine diabatic_driver_init
 

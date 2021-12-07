@@ -343,7 +343,7 @@ end subroutine lock_tracer_registry
 
 !> register_tracer_diagnostics does a set of register_diag_field calls for any previously
 !! registered in a tracer registry with a value of registry_diags set to .true.
-subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
+subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, use_KPP)
   type(ocean_grid_type),      intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),      intent(in) :: US   !< A dimensional unit scaling type
@@ -354,6 +354,8 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
   type(diag_ctrl),            intent(in) :: diag !< structure to regulate diagnostic output
   logical,                    intent(in) :: use_ALE !< If true active diagnostics that only
                                                  !! apply to ALE configurations
+  logical,                    intent(in) :: use_KPP !< If true active diagnostics that only
+                                                 !! apply to CVMix KPP mixings
 
   character(len=24) :: name     ! A variable's name in a NetCDF file.
   character(len=24) :: shortnm  ! A shortened version of a variable's name for
@@ -665,31 +667,33 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
     endif
 
     ! KPP nonlocal term diagnostics
-    if (trim(shortnm) .eq. "T") then
-      ! TODO: use query function to get ids for KPP_QminusSW and KPP_NLT_dTdt
-      !       it may be the case that these get registered before the KPP versions?
-      Tr%id_net_surfflux = -1
-      Tr%id_NLT_tendency = -1
-      Tr%id_NLT_budget = -1
-    elseif (trim(shortnm) .eq. "S") then
-      ! TODO: use query function to get ids for KPP_netSalt and KPP_NLT_dSdt
-      !       it may be the case that these get registered before the KPP versions?
-      Tr%id_net_surfflux = -1
-      Tr%id_NLT_tendency = -1
-      Tr%id_NLT_budget = -1
-    else
-      Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(shortnm), diag%axesT1, Time, &
-          'Effective net surface flux of '//lowercase(longname)//', as used by [CVMix] KPP', &
-          trim(units)//' m/s')
-      Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
-          diag%axesTL, Time, &
-          lowercase(longname)//' tendency due to non-local transport, as calculated by [CVMix] KPP', &
-          trim(units)//'/s')
-      Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_"//trim(shortnm)//"_budget', &
-          diag%axesTL, Time, &
-          lowercase(longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
-          'TODO set right')
-    end if
+    if (use_KPP) then
+      if (trim(shortnm) .eq. "T") then
+        ! TODO: use query function to get ids for KPP_QminusSW and KPP_NLT_dTdt
+        !       it may be the case that these get registered before the KPP versions?
+        Tr%id_net_surfflux = -1
+        Tr%id_NLT_tendency = -1
+        Tr%id_NLT_budget = -1
+      elseif (trim(shortnm) .eq. "S") then
+        ! TODO: use query function to get ids for KPP_netSalt and KPP_NLT_dSdt
+        !       it may be the case that these get registered before the KPP versions?
+        Tr%id_net_surfflux = -1
+        Tr%id_NLT_tendency = -1
+        Tr%id_NLT_budget = -1
+      else
+        Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(shortnm), diag%axesT1, Time, &
+            'Effective net surface flux of '//lowercase(longname)//', as used by [CVMix] KPP', &
+            trim(units)//' m/s')
+        Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
+            diag%axesTL, Time, &
+            lowercase(longname)//' tendency due to non-local transport, as calculated by [CVMix] KPP', &
+            trim(units)//'/s')
+        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_"//trim(shortnm)//"_budget', &
+            diag%axesTL, Time, &
+            lowercase(longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
+            'TODO set right')
+      endif
+    endif
 
   endif ; enddo
 
