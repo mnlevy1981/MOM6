@@ -1455,7 +1455,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
 
   if (id_NLT_budget > 0) then
     dtracer(:,:,:) = 0.0
-    !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux)
+    !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux, budget_scale_loc)
     do k = 1, GV%ke
       do j = G%jsc, G%jec
         do i = G%isc, G%iec
