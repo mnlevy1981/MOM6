@@ -374,20 +374,22 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
   real,                                       intent(in)    :: dt      !< Time-step [s]
   type(CFC_cap_CS),                           pointer       :: CS      !< A pointer that is set to point to the control
 
-  real :: scale_factor
+  real :: flux_scale
 
-  scale_factor = 1.0 / (GV%rho0 * US%R_to_kg_m3)
+  flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
 
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
                              fluxes%cfc11_flux(:,:), dt, CS%diag, &
                              CS%CFC_metadata(1)%tr_ptr%id_net_surfflux, &
                              CS%CFC_metadata(1)%tr_ptr%id_NLT_tendency, &
-                             CS%CFC_metadata(1)%conc(:,:,:), scale_factor = scale_factor)
+                             CS%CFC_metadata(1)%tr_ptr%id_NLT_budget, &
+                             CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
                              fluxes%cfc12_flux(:,:), dt, CS%diag, &
                              CS%CFC_metadata(2)%tr_ptr%id_net_surfflux, &
                              CS%CFC_metadata(2)%tr_ptr%id_NLT_tendency, &
-                             CS%CFC_metadata(2)%conc(:,:,:), scale_factor = scale_factor)
+                             CS%CFC_metadata(2)%tr_ptr%id_NLT_budget, &
+                             CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
 
   ! TODO: add diagnostics!
 

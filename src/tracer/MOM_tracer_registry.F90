@@ -135,7 +135,7 @@ type, public :: tracer_type
   integer :: id_remap_conc = -1, id_remap_cont = -1, id_remap_cont_2d = -1
   integer :: id_tendency = -1, id_trxh_tendency = -1, id_trxh_tendency_2d = -1
   integer :: id_tr_vardec = -1
-  integer :: id_net_surfflux = -1, id_NLT_tendency = -1
+  integer :: id_net_surfflux = -1, id_NLT_tendency = -1, id_NLT_budget = -1
   !>@}
 end type tracer_type
 
@@ -670,11 +670,13 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
       !       it may be the case that these get registered before the KPP versions?
       Tr%id_net_surfflux = -1
       Tr%id_NLT_tendency = -1
+      Tr%id_NLT_budget = -1
     elseif (trim(shortnm) .eq. "S") then
       ! TODO: use query function to get ids for KPP_netSalt and KPP_NLT_dSdt
       !       it may be the case that these get registered before the KPP versions?
       Tr%id_net_surfflux = -1
       Tr%id_NLT_tendency = -1
+      Tr%id_NLT_budget = -1
     else
       Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(shortnm), diag%axesT1, Time, &
           'Effective net surface flux of '//lowercase(longname)//', as used by [CVMix] KPP', &
@@ -683,6 +685,10 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
           diag%axesTL, Time, &
           lowercase(longname)//' tendency due to non-local transport, as calculated by [CVMix] KPP', &
           trim(units)//'/s')
+      Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_"//trim(shortnm)//"_budget', &
+          diag%axesTL, Time, &
+          lowercase(longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
+          'TODO set right')
     end if
 
   endif ; enddo
