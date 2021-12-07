@@ -10,7 +10,7 @@ use MOM_file_parser,     only : get_param, log_param, log_version, param_file_ty
 use MOM_forcing_type,    only : forcing
 use MOM_hor_index,       only : hor_index_type
 use MOM_grid,            only : ocean_grid_type
-use MOM_CVMix_KPP,       only : KPP_NonLocalTransport_passive_tracers
+use MOM_CVMix_KPP,       only : KPP_NonLocalTransport
 use MOM_io,              only : file_exists, MOM_read_data, slasher
 use MOM_io,              only : vardesc, var_desc, query_vardesc, stdout
 use MOM_tracer_registry, only : tracer_type, tracer_name_lookup
@@ -378,16 +378,16 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
 
   scale_factor = 1.0 / (GV%rho0 * US%R_to_kg_m3)
 
-  call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                                             fluxes%cfc11_flux(:,:), dt, CS%diag, &
-                                             CS%CFC_metadata(1)%tr_ptr%id_net_surfflux, &
-                                             CS%CFC_metadata(1)%tr_ptr%id_NLT_tendency, &
-                                             CS%CFC_metadata(1)%conc(:,:,:), scale_factor = scale_factor)
-  call KPP_NonLocalTransport_passive_tracers(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                                             fluxes%cfc12_flux(:,:), dt, CS%diag, &
-                                             CS%CFC_metadata(2)%tr_ptr%id_net_surfflux, &
-                                             CS%CFC_metadata(2)%tr_ptr%id_NLT_tendency, &
-                                             CS%CFC_metadata(2)%conc(:,:,:), scale_factor = scale_factor)
+  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
+                             fluxes%cfc11_flux(:,:), dt, CS%diag, &
+                             CS%CFC_metadata(1)%tr_ptr%id_net_surfflux, &
+                             CS%CFC_metadata(1)%tr_ptr%id_NLT_tendency, &
+                             CS%CFC_metadata(1)%conc(:,:,:), scale_factor = scale_factor)
+  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
+                             fluxes%cfc12_flux(:,:), dt, CS%diag, &
+                             CS%CFC_metadata(2)%tr_ptr%id_net_surfflux, &
+                             CS%CFC_metadata(2)%tr_ptr%id_NLT_tendency, &
+                             CS%CFC_metadata(2)%conc(:,:,:), scale_factor = scale_factor)
 
   ! TODO: add diagnostics!
 

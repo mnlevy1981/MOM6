@@ -39,7 +39,7 @@ public :: KPP_calculate
 public :: KPP_end
 public :: KPP_NonLocalTransport_temp
 public :: KPP_NonLocalTransport_saln
-public :: KPP_NonLocalTransport_passive_tracers
+public :: KPP_NonLocalTransport
 public :: KPP_get_BLD
 
 ! Enumerated constants
@@ -1379,9 +1379,74 @@ subroutine KPP_get_BLD(CS, BLD, G, US, m_to_BLD_units)
 
 end subroutine KPP_get_BLD
 
+!> Apply KPP non-local transport of surface fluxes for a given tracer
+subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
+                                 dt, diag, id_net_surfflux, id_NLT_tendency, scalar, &
+                                 scale_factor)
+
+  logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed
+                                    !! term to scalar
+  type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
+  type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
+  real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of scalar
+                          !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
+  real,                                       intent(in)    :: dt            !< Time-step [s]
+  type(diag_ctrl), target,                    intent(in)    :: diag          !< Diagnostics
+  integer,                                    intent(in)    :: id_net_surfflux  !< Diagnostic id for surface flux
+  integer,                                    intent(in)    :: id_NLT_tendency  !< Diagnostic id for tendency term
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
+  real, optional,                             intent(in)    :: scale_factor  !< Scale factor to get surfFlux
+                                !! into proper units
+
+  integer :: i, j, k
+  real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
+  real :: scale_factor_loc
+
+  if (present(scale_factor)) then
+    scale_factor_loc = scale_factor
+  else
+    scale_factor_loc = 1.0
+  endif
+
+  ! Post surface flux diagnostic
+  if (id_net_surfflux > 0) call post_data(id_net_surfflux, surfFlux * scale_factor_loc, diag)
+
+  ! Only continue if we are applying the nonlocal tendency
+  ! or the nonlocal tendency diagnostic has been requested
+  if ((id_NLT_tendency < 0) .and. (.not.applyNonLocalTrans)) return
+
+  dtracer(:,:,:) = 0.0
+  !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux, scale_factor_loc)
+  do k = 1, GV%ke
+    do j = G%jsc, G%jec
+      do i = G%isc, G%iec
+        dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
+                         ( h(i,j,k) + GV%H_subroundoff ) * surfFlux(i,j) * scale_factor_loc
+      enddo
+    enddo
+  enddo
+
+  !  Update tracer due to non-local redistribution of surface flux
+  if (applyNonLocalTrans) then
+    !$OMP parallel do default(none) shared(G, GV, dt, scalar, dtracer)
+    do k = 1, GV%ke
+      do j = G%jsc, G%jec
+        do i = G%isc, G%iec
+          scalar(i,j,k) = scalar(i,j,k) + dt * dtracer(i,j,k)
+        enddo
+      enddo
+    enddo
+  endif
+
+  if (id_NLT_tendency > 0) call post_data(id_NLT_tendency, dtracer,  diag)
+
+end subroutine KPP_NonLocalTransport
+
+
 !> Apply KPP non-local transport of surface fluxes for temperature.
-subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, &
-                                      dt, scalar, C_p)
+subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt, scalar, C_p)
 
   type(KPP_CS),                               intent(in)    :: CS     !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G      !< Ocean grid
@@ -1398,32 +1463,11 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, &
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
 
-  dtracer(:,:,:) = 0.0
-  !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux)
-  do k = 1, GV%ke
-    do j = G%jsc, G%jec
-      do i = G%isc, G%iec
-        dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
-                         ( h(i,j,k) + GV%H_subroundoff ) * surfFlux(i,j)
-      enddo
-    enddo
-  enddo
+  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
+                             dt, CS%diag, CS%id_QminusSW, CS%id_NLT_dTdt, scalar)
+  ! if (CS%id_QminusSW        > 0) call post_data(CS%id_QminusSW, surfFlux, CS%diag)
+  ! if (CS%id_NLT_dTdt        > 0) call post_data(CS%id_NLT_dTdt, dtracer,  CS%diag)
 
-  !  Update tracer due to non-local redistribution of surface flux
-  if (CS%applyNonLocalTrans) then
-    !$OMP parallel do default(none) shared(dt, scalar, dtracer, G, GV)
-    do k = 1, GV%ke
-      do j = G%jsc, G%jec
-        do i = G%isc, G%iec
-          scalar(i,j,k) = scalar(i,j,k) + dt * dtracer(i,j,k)
-        enddo
-      enddo
-    enddo
-  endif
-
-  ! Diagnostics
-  if (CS%id_QminusSW        > 0) call post_data(CS%id_QminusSW, surfFlux, CS%diag)
-  if (CS%id_NLT_dTdt        > 0) call post_data(CS%id_NLT_dTdt, dtracer,  CS%diag)
   if (CS%id_NLT_temp_budget > 0) then
     dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, surfFlux, C_p, G, GV)
@@ -1458,33 +1502,11 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   integer :: i, j, k
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
+  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
+                             dt, CS%diag, CS%id_netS, CS%id_NLT_dSdt, scalar)
 
-  dtracer(:,:,:) = 0.0
-  !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux)
-  do k = 1, GV%ke
-    do j = G%jsc, G%jec
-      do i = G%isc, G%iec
-        dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
-                         ( h(i,j,k) + GV%H_subroundoff ) * surfFlux(i,j)
-      enddo
-    enddo
-  enddo
-
-  !  Update tracer due to non-local redistribution of surface flux
-  if (CS%applyNonLocalTrans) then
-    !$OMP parallel do default(none) shared(G, GV, dt, scalar, dtracer)
-    do k = 1, GV%ke
-      do j = G%jsc, G%jec
-        do i = G%isc, G%iec
-          scalar(i,j,k) = scalar(i,j,k) + dt * dtracer(i,j,k)
-        enddo
-      enddo
-    enddo
-  endif
-
-  ! Diagnostics
-  if (CS%id_netS            > 0) call post_data(CS%id_netS,     surfFlux, CS%diag)
-  if (CS%id_NLT_dSdt        > 0) call post_data(CS%id_NLT_dSdt, dtracer,  CS%diag)
+  ! if (CS%id_netS            > 0) call post_data(CS%id_netS,     surfFlux, CS%diag)
+  ! if (CS%id_NLT_dSdt        > 0) call post_data(CS%id_NLT_dSdt, dtracer,  CS%diag)
   if (CS%id_NLT_saln_budget > 0) then
     dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux)
@@ -1500,67 +1522,6 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   endif
 
 end subroutine KPP_NonLocalTransport_saln
-
-
-!> Apply KPP non-local transport of surface fluxes for tracers
-!> other than temperature and salinity
-subroutine KPP_NonLocalTransport_passive_tracers(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                                                 dt, diag, id_net_surfflux, id_NLT_tendency, scalar, &
-                                                 scale_factor)
-
-  logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed
-                                                                                  !! term to scalar
-  type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
-  type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
-  real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of scalar
-                                                                        !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
-  real,                                       intent(in)    :: dt            !< Time-step [s]
-  type(diag_ctrl), target,                    intent(in)    :: diag          !< Diagnostics
-  integer,                                    intent(in)    :: id_net_surfflux  !< Diagnostic id for surface flux
-  integer,                                    intent(in)    :: id_NLT_tendency  !< Diagnostic id for tendency term
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
-  real, optional,                             intent(in)    :: scale_factor  !< Scale factor to get surfFlux
-                                                                             !! into proper units
-
-  integer :: i, j, k
-  real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
-  real :: scale_factor_loc
-
-  if (present(scale_factor)) then
-    scale_factor_loc = scale_factor
-  else
-    scale_factor_loc = 1.0
-  endif
-
-  dtracer(:,:,:) = 0.0
-  !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux, scale_factor_loc)
-  do k = 1, GV%ke
-    do j = G%jsc, G%jec
-      do i = G%isc, G%iec
-        dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
-                         ( h(i,j,k) + GV%H_subroundoff ) * surfFlux(i,j) * scale_factor_loc
-      enddo
-    enddo
-  enddo
-
-  !  Update tracer due to non-local redistribution of surface flux
-  if (applyNonLocalTrans) then
-    !$OMP parallel do default(none) shared(G, GV, dt, scalar, dtracer)
-    do k = 1, GV%ke
-      do j = G%jsc, G%jec
-        do i = G%isc, G%iec
-          scalar(i,j,k) = scalar(i,j,k) + dt * dtracer(i,j,k)
-        enddo
-      enddo
-    enddo
-  endif
-
-  if (id_net_surfflux > 0) call post_data(id_net_surfflux, surfFlux, diag)
-  if (id_NLT_tendency > 0) call post_data(id_NLT_tendency, dtracer,  diag)
-
-end subroutine KPP_NonLocalTransport_passive_tracers
 
 
 !> Clear pointers, deallocate memory
