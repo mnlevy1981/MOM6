@@ -380,15 +380,11 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
 
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
                              fluxes%cfc11_flux(:,:), dt, CS%diag, &
-                             CS%CFC_metadata(1)%tr_ptr%id_net_surfflux, &
-                             CS%CFC_metadata(1)%tr_ptr%id_NLT_tendency, &
-                             CS%CFC_metadata(1)%tr_ptr%id_NLT_budget, &
+                             CS%CFC_metadata(1)%tr_ptr, &
                              CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
                              fluxes%cfc12_flux(:,:), dt, CS%diag, &
-                             CS%CFC_metadata(2)%tr_ptr%id_net_surfflux, &
-                             CS%CFC_metadata(2)%tr_ptr%id_NLT_tendency, &
-                             CS%CFC_metadata(2)%tr_ptr%id_NLT_budget, &
+                             CS%CFC_metadata(2)%tr_ptr, &
                              CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
 
   ! TODO: add diagnostics!

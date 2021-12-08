@@ -19,6 +19,7 @@ use MOM_wave_interface, only : wave_parameters_CS, Get_Langmuir_Number, get_wave
 use MOM_domains,        only : pass_var
 use MOM_cpu_clock,      only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,      only : CLOCK_MODULE, CLOCK_ROUTINE
+use MOM_tracer_registry, only : tracer_type
 
 use CVMix_kpp, only : CVMix_init_kpp, CVMix_put_kpp, CVMix_get_kpp_real
 use CVMix_kpp, only : CVMix_coeffs_kpp
@@ -128,7 +129,6 @@ type, public :: KPP_CS ; private
   integer :: id_Ws       = -1, id_Vt2      = -1
   integer :: id_BulkUz2  = -1, id_BulkDrho = -1
   integer :: id_uStar    = -1, id_buoyFlux = -1
-  integer :: id_QminusSW = -1, id_netS     = -1
   integer :: id_sigma    = -1, id_Kv_KPP   = -1
   integer :: id_Kt_KPP   = -1, id_Ks_KPP   = -1
   integer :: id_Tsurf    = -1, id_Ssurf    = -1
@@ -136,10 +136,6 @@ type, public :: KPP_CS ; private
   integer :: id_Kd_in    = -1
   integer :: id_NLTt     = -1
   integer :: id_NLTs     = -1
-  integer :: id_NLT_dSdt = -1
-  integer :: id_NLT_dTdt = -1
-  integer :: id_NLT_temp_budget = -1
-  integer :: id_NLT_saln_budget = -1
   integer :: id_EnhK     = -1, id_EnhVt2   = -1
   integer :: id_EnhW     = -1
   integer :: id_La_SL    = -1
@@ -539,10 +535,6 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive, Waves)
       'Friction velocity, u*, as used by [CVMix] KPP', 'm/s', conversion=US%Z_to_m*US%s_to_T)
   CS%id_buoyFlux = register_diag_field('ocean_model', 'KPP_buoyFlux', diag%axesTi, Time, &
       'Surface (and penetrating) buoyancy flux, as used by [CVMix] KPP', 'm2/s3', conversion=US%L_to_m**2*US%s_to_T**3)
-  CS%id_QminusSW = register_diag_field('ocean_model', 'KPP_QminusSW', diag%axesT1, Time, &
-      'Net temperature flux ignoring short-wave, as used by [CVMix] KPP', 'K m/s')
-  CS%id_netS = register_diag_field('ocean_model', 'KPP_netSalt', diag%axesT1, Time, &
-      'Effective net surface salt flux, as used by [CVMix] KPP', 'ppt m/s')
   CS%id_Kt_KPP = register_diag_field('ocean_model', 'KPP_Kheat', diag%axesTi, Time, &
       'Heat diffusivity due to KPP, as calculated by [CVMix] KPP', 'm2/s')
   CS%id_Kd_in = register_diag_field('ocean_model', 'KPP_Kd_in', diag%axesTi, Time, &
@@ -555,14 +547,6 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive, Waves)
       'Non-local transport (Cs*G(sigma)) for heat, as calculated by [CVMix] KPP', 'nondim')
   CS%id_NLTs = register_diag_field('ocean_model', 'KPP_NLtransport_salt', diag%axesTi, Time, &
       'Non-local tranpsort (Cs*G(sigma)) for scalars, as calculated by [CVMix] KPP', 'nondim')
-  CS%id_NLT_dTdt = register_diag_field('ocean_model', 'KPP_NLT_dTdt', diag%axesTL, Time, &
-      'Temperature tendency due to non-local transport of heat, as calculated by [CVMix] KPP', 'K/s')
-  CS%id_NLT_dSdt = register_diag_field('ocean_model', 'KPP_NLT_dSdt', diag%axesTL, Time, &
-      'Salinity tendency due to non-local transport of salt, as calculated by [CVMix] KPP', 'ppt/s')
-  CS%id_NLT_temp_budget = register_diag_field('ocean_model', 'KPP_NLT_temp_budget', diag%axesTL, Time, &
-      'Heat content change due to non-local transport, as calculated by [CVMix] KPP', 'W/m^2')
-  CS%id_NLT_saln_budget = register_diag_field('ocean_model', 'KPP_NLT_saln_budget', diag%axesTL, Time, &
-      'Salt content change due to non-local transport, as calculated by [CVMix] KPP', 'kg/(sec*m^2)')
   CS%id_Tsurf = register_diag_field('ocean_model', 'KPP_Tsurf', diag%axesT1, Time, &
       'Temperature of surface layer (10% of OBL depth) as passed to [CVMix] KPP', 'C')
   CS%id_Ssurf = register_diag_field('ocean_model', 'KPP_Ssurf', diag%axesT1, Time, &
@@ -1381,8 +1365,7 @@ end subroutine KPP_get_BLD
 
 !> Apply KPP non-local transport of surface fluxes for a given tracer
 subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                                 dt, diag, id_net_surfflux, id_NLT_tendency, id_NLT_budget, &
-                                 scalar, flux_scale, budget_scale)
+                                 dt, diag, tr_ptr, scalar, flux_scale, budget_scale)
 
   logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed
                                     !! term to scalar
@@ -1394,9 +1377,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
                           !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
   real,                                       intent(in)    :: dt            !< Time-step [s]
   type(diag_ctrl), target,                    intent(in)    :: diag          !< Diagnostics
-  integer,                                    intent(in)    :: id_net_surfflux  !< Diagnostic id for surface flux
-  integer,                                    intent(in)    :: id_NLT_tendency  !< Diagnostic id for tendency term
-  integer,                                    intent(in)    :: id_NLT_budget    !< Diagnostic id for budget term
+  type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
   real, optional,                             intent(in)    :: flux_scale    !< Scale factor to get surfFlux
                                                                              !! into proper units
@@ -1407,7 +1388,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
   real :: flux_scale_loc, budget_scale_loc
 
   ! Post surface flux diagnostic
-  if (id_net_surfflux > 0) call post_data(id_net_surfflux, surfFlux * flux_scale_loc, diag)
+  if (tr_ptr%id_net_surfflux > 0) call post_data(tr_ptr%id_net_surfflux, surfFlux * flux_scale_loc, diag)
 
   ! term used to scale
   if (present(flux_scale)) then
@@ -1424,7 +1405,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
 
   ! Only continue if we are applying the nonlocal tendency
   ! or the nonlocal tendency diagnostic has been requested
-  if ((id_NLT_tendency > 0) .or. (applyNonLocalTrans)) then
+  if ((tr_ptr%id_NLT_tendency > 0) .or. (applyNonLocalTrans)) then
 
     dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux, flux_scale_loc)
@@ -1448,12 +1429,12 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
         enddo
       enddo
     endif
-    if (id_NLT_tendency > 0) call post_data(id_NLT_tendency, dtracer,  diag)
+    if (tr_ptr%id_NLT_tendency > 0) call post_data(tr_ptr%id_NLT_tendency, dtracer,  diag)
 
   endif
 
 
-  if (id_NLT_budget > 0) then
+  if (tr_ptr%id_NLT_budget > 0) then
     dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux, budget_scale_loc)
     do k = 1, GV%ke
@@ -1464,14 +1445,14 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
         enddo
       enddo
     enddo
-    call post_data(id_NLT_budget, dtracer, diag)
+    call post_data(tr_ptr%id_NLT_budget, dtracer, diag)
   endif
 
 end subroutine KPP_NonLocalTransport
 
 
 !> Apply KPP non-local transport of surface fluxes for temperature.
-subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt, scalar, C_p)
+subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt, tr_ptr, scalar, C_p)
 
   type(KPP_CS),                               intent(in)    :: CS     !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G      !< Ocean grid
@@ -1481,6 +1462,7 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux  !< Surface flux of scalar
                                                                       !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
   real,                                       intent(in)    :: dt     !< Time-step [s]
+  type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar !< temperature
   real,                                       intent(in)    :: C_p    !< Seawater specific heat capacity [J kg-1 degC-1]
 
@@ -1488,15 +1470,14 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                             dt, CS%diag, CS%id_QminusSW, CS%id_NLT_dTdt, CS%id_NLT_temp_budget, &
-                             scalar, budget_scale=C_p)
+                             dt, CS%diag, tr_ptr, scalar, budget_scale=C_p)
 
 end subroutine KPP_NonLocalTransport_temp
 
 
 !> Apply KPP non-local transport of surface fluxes for salinity.
 !> This routine is a useful prototype for other material tracers.
-subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt, scalar)
+subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt, tr_ptr, scalar)
 
   type(KPP_CS),                               intent(in)    :: CS            !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
@@ -1505,6 +1486,7 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of scalar
                                                                         !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
+  type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
   real,                                       intent(in)    :: dt            !< Time-step [s]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
 
@@ -1512,8 +1494,7 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                             dt, CS%diag, CS%id_netS, CS%id_NLT_dSdt, CS%id_NLT_saln_budget, &
-                             scalar)
+                             dt, CS%diag, tr_ptr, scalar)
 
 end subroutine KPP_NonLocalTransport_saln
 

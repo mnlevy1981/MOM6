@@ -153,6 +153,7 @@ end type tracer_registry_type
 contains
 
 !> This subroutine registers a tracer to be advected and laterally diffused.
+! MNL TODO: add optional arguments for KPP diag shortnames
 subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, units, &
                            cmor_name, cmor_units, cmor_longname, tr_desc, &
                            OBC_inflow, OBC_in_u, OBC_in_v, ad_x, ad_y, df_x, df_y, &
@@ -668,30 +669,36 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
 
     ! KPP nonlocal term diagnostics
     if (use_KPP) then
-      if (trim(shortnm) .eq. "T") then
+      if (trim(flux_longname) .eq. "Heat") then
         ! TODO: use query function to get ids for KPP_QminusSW and KPP_NLT_dTdt
         !       it may be the case that these get registered before the KPP versions?
-        Tr%id_net_surfflux = -1
-        Tr%id_NLT_tendency = -1
-        Tr%id_NLT_budget = -1
-      elseif (trim(shortnm) .eq. "S") then
+        Tr%id_net_surfflux = register_diag_field('ocean_model', 'KPP_QminusSW', diag%axesT1, Time, &
+        'Net temperature flux ignoring short-wave, as used by [CVMix] KPP', 'K m/s')
+        Tr%id_NLT_tendency = register_diag_field('ocean_model', 'KPP_NLT_dTdt', diag%axesTL, Time, &
+        'Temperature tendency due to non-local transport of heat, as calculated by [CVMix] KPP', 'K/s')
+        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_temp_budget', diag%axesTL, Time, &
+        'Heat content change due to non-local transport, as calculated by [CVMix] KPP', conv_units, v_extensive=.true.)
+      elseif (trim(flux_longname) .eq. "Salt") then
         ! TODO: use query function to get ids for KPP_netSalt and KPP_NLT_dSdt
         !       it may be the case that these get registered before the KPP versions?
-        Tr%id_net_surfflux = -1
-        Tr%id_NLT_tendency = -1
-        Tr%id_NLT_budget = -1
+        Tr%id_net_surfflux = register_diag_field('ocean_model', 'KPP_netSalt', diag%axesT1, Time, &
+        'Effective net surface salt flux, as used by [CVMix] KPP', 'ppt m/s')
+        Tr%id_NLT_tendency = register_diag_field('ocean_model', 'KPP_NLT_dSdt', diag%axesTL, Time, &
+        'Salinity tendency due to non-local transport of salt, as calculated by [CVMix] KPP', 'ppt/s')
+        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_saln_budget', diag%axesTL, Time, &
+        'Salt content change due to non-local transport, as calculated by [CVMix] KPP', conv_units, v_extensive=.true.)
       else
-        Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(shortnm), diag%axesT1, Time, &
+        Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(flux_longname), diag%axesT1, Time, &
             'Effective net surface flux of '//lowercase(longname)//', as used by [CVMix] KPP', &
-            trim(units)//' m/s')
+            trim(units)//' m s-1')
         Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
             diag%axesTL, Time, &
             lowercase(longname)//' tendency due to non-local transport, as calculated by [CVMix] KPP', &
-            trim(units)//'/s')
-        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_"//trim(shortnm)//"_budget', &
+            trim(units)//' s-1')
+        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_'//trim(shortnm)//'_budget', &
             diag%axesTL, Time, &
             lowercase(longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
-            'TODO set right')
+            Tr%conv_units, v_extensive=.true.)
       endif
     endif
 

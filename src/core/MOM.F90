@@ -37,7 +37,7 @@ use MOM_file_parser,          only : read_param, get_param, log_version, param_f
 use MOM_forcing_type,         only : forcing, mech_forcing
 use MOM_forcing_type,         only : MOM_forcing_chksum, MOM_mech_forcing_chksum
 use MOM_get_input,            only : Get_MOM_Input, directories
-use MOM_io,                   only : MOM_io_init, vardesc, var_desc
+use MOM_io,                   only : MOM_io_init, vardesc, var_desc, query_vardesc
 use MOM_io,                   only : slasher, file_exists, MOM_read_data
 use MOM_obsolete_params,      only : find_obsolete_params
 use MOM_restart,              only : register_restart_field, register_restart_pair
@@ -118,7 +118,7 @@ use MOM_tracer_registry,       only : tracer_registry_type, register_tracer, tra
 use MOM_tracer_registry,       only : register_tracer_diagnostics, post_tracer_diagnostics_at_sync
 use MOM_tracer_registry,       only : post_tracer_transport_diagnostics
 use MOM_tracer_registry,       only : preALE_tracer_diagnostics, postALE_tracer_diagnostics
-use MOM_tracer_registry,       only : lock_tracer_registry, tracer_registry_end
+use MOM_tracer_registry,       only : lock_tracer_registry, tracer_registry_end, tracer_name_lookup
 use MOM_tracer_flow_control,   only : call_tracer_register, tracer_flow_control_CS
 use MOM_tracer_flow_control,   only : tracer_flow_control_init, call_tracer_surface_state
 use MOM_tracer_flow_control,   only : tracer_flow_control_end
@@ -1689,6 +1689,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   type(diag_ctrl),        pointer :: diag => NULL()
   type(unit_scale_type),  pointer :: US => NULL()
   character(len=4), parameter :: vers_num = 'v2.0'
+  character(len=32) :: tr_name
   integer :: turns   ! Number of grid quarter-turns
 
   ! Initial state on the input index map
@@ -2256,6 +2257,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                            flux_units=S_flux_units, flux_longname='Salt', &
                            flux_scale=conv2salt, convergence_units='kg m-2 s-1', &
                            convergence_scale=0.001*GV%H_to_kg_m2, CMOR_tendprefix="osalt", diag_form=2)
+      ! TODO: we should just add an optional argument for tr_ptr to register_tracer()
+      !       (Then we won't need the next four lines of code)
+      call query_vardesc(vd_T, name=tr_name)
+      call tracer_name_lookup(CS%tracer_Reg, CS%tv%tr_T, tr_name)
+      call query_vardesc(vd_S, name=tr_name)
+      call tracer_name_lookup(CS%tracer_Reg, CS%tv%tr_S, tr_name)
     endif
   endif
 
