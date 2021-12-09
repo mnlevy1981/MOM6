@@ -19,7 +19,7 @@ use MOM_wave_interface, only : wave_parameters_CS, Get_Langmuir_Number, get_wave
 use MOM_domains,        only : pass_var
 use MOM_cpu_clock,      only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,      only : CLOCK_MODULE, CLOCK_ROUTINE
-use MOM_tracer_registry, only : tracer_type
+use MOM_tracer_types,   only : tracer_type
 
 use CVMix_kpp, only : CVMix_init_kpp, CVMix_put_kpp, CVMix_get_kpp_real
 use CVMix_kpp, only : CVMix_coeffs_kpp

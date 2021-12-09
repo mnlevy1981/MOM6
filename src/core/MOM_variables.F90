@@ -12,7 +12,7 @@ use MOM_EOS,           only : EOS_type
 use MOM_error_handler, only : MOM_error, FATAL
 use MOM_grid,          only : ocean_grid_type
 use MOM_verticalGrid,  only : verticalGrid_type
-use MOM_tracer_registry, only : tracer_type
+use MOM_tracer_types,  only : tracer_type
 
 implicit none ; private
 
@@ -124,8 +124,8 @@ type, public :: thermo_var_ptrs
   real, pointer :: varS(:,:,:) => NULL() !< SGS variance of salinity [ppt2].
   real, pointer :: covarTS(:,:,:) => NULL() !< SGS covariance of salinity and potential
                                   !! temperature [degC ppt].
-  type(tracer_type), pointer :: tr_T => NULL()
-  type(tracer_type), pointer :: tr_S => NULL()
+  type(tracer_type), pointer :: tr_T => NULL()  !< pointer to temp in tracer registry
+  type(tracer_type), pointer :: tr_S => NULL()  !< pointer to salinty in tracer registry
 end type thermo_var_ptrs
 
 !> Pointers to all of the prognostic variables allocated in MOM_variables.F90 and MOM.F90.
