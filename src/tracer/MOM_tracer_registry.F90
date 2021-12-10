@@ -45,7 +45,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                            ad_2d_x, ad_2d_y, df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
-                           restart_CS, mandatory)
+                           restart_CS, mandatory, Tr_out)
   type(hor_index_type),           intent(in)    :: HI           !< horizontal index type
   type(verticalGrid_type),        intent(in)    :: GV           !< ocean vertical grid structure
   type(tracer_registry_type),     pointer       :: Reg          !< pointer to the tracer registry
@@ -109,6 +109,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
                                                                 !! restarts if this argument is present
   logical,              optional, intent(in)    :: mandatory    !< If true, this tracer must be read
                                                                 !! from a restart file.
+  type(tracer_type),    optional, pointer       :: Tr_out       !< If present, returns pointer into registry
 
   logical :: mand
   type(tracer_type), pointer :: Tr=>NULL()
@@ -124,6 +125,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   Reg%ntr = Reg%ntr + 1
 
   Tr => Reg%Tr(Reg%ntr)
+  if (present(Tr_out)) Tr_out => Reg%Tr(Reg%ntr)
 
   if (present(name)) then
     Tr%name = name

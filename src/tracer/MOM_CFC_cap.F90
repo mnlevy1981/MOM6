@@ -13,7 +13,7 @@ use MOM_grid,            only : ocean_grid_type
 use MOM_CVMix_KPP,       only : KPP_NonLocalTransport
 use MOM_io,              only : file_exists, MOM_read_data, slasher
 use MOM_io,              only : vardesc, var_desc, query_vardesc, stdout
-use MOM_tracer_registry, only : tracer_type, tracer_name_lookup
+use MOM_tracer_registry, only : tracer_type
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_restart,         only : query_initialized, MOM_restart_CS
 use MOM_time_manager,    only : time_type
@@ -170,17 +170,16 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
   ! Register CFC11 for horizontal advection, diffusion, and restarts.
   call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, &
                        tr_desc=CS%CFC_metadata(1)%desc, registry_diags=.true., &
-                       restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+                       restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit, &
+                       Tr_out=CS%CFC_metadata(1)%tr_ptr)
   ! Do the same for CFC12
   tr_ptr => CS%CFC_metadata(2)%conc
   call register_tracer(tr_ptr, Tr_Reg, param_file, HI, GV, &
                        tr_desc=CS%CFC_metadata(2)%desc, registry_diags=.true., &
-                       restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+                       restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit, &
+                       Tr_out=CS%CFC_metadata(2)%tr_ptr)
 
   CS%tr_Reg => tr_Reg
-  do m=1,2
-    call tracer_name_lookup(tr_Reg, CS%CFC_metadata(m)%tr_ptr, CS%CFC_metadata(m)%name)
-  end do
   CS%restart_CSp => restart_CS
   register_CFC_cap = .true.
 
