@@ -1689,7 +1689,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   type(diag_ctrl),        pointer :: diag => NULL()
   type(unit_scale_type),  pointer :: US => NULL()
   character(len=4), parameter :: vers_num = 'v2.0'
-  character(len=32) :: tr_name
   integer :: turns   ! Number of grid quarter-turns
 
   ! Initial state on the input index map
