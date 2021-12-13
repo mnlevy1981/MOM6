@@ -10,13 +10,14 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser, only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type, only : forcing
 use MOM_grid, only : ocean_grid_type
+use MOM_CVMix_KPP, only : KPP_NonLocalTransport
 use MOM_hor_index, only : hor_index_type
 use MOM_io, only : vardesc, var_desc, query_vardesc
 use MOM_open_boundary, only : ocean_OBC_type
 use MOM_restart, only : query_initialized, MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, sponge_CS
 use MOM_time_manager, only : time_type
-use MOM_tracer_registry, only : register_tracer, tracer_registry_type
+use MOM_tracer_registry, only : register_tracer, tracer_registry_type, tracer_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_Z_init, only : tracer_Z_init
 use MOM_unit_scaling, only : unit_scale_type
@@ -29,10 +30,13 @@ implicit none ; private
 
 public register_pseudo_salt_tracer, initialize_pseudo_salt_tracer
 public pseudo_salt_tracer_column_physics, pseudo_salt_tracer_surface_state
+public pseudo_salt_KPP_NonLocalTransport
 public pseudo_salt_stock, pseudo_salt_tracer_end
 
 !> The control structure for the pseudo-salt tracer
 type, public :: pseudo_salt_tracer_CS ; private
+  logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
+  type(tracer_type), pointer :: tr_ptr !< pointer to tracer inside Tr_reg
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM tracer registry
   real, pointer :: ps(:,:,:) => NULL()   !< The array of pseudo-salt tracer used in this
@@ -88,6 +92,10 @@ function register_pseudo_salt_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
 
+  call get_param(param_file, mdl, "PSEUDOSALT_APPLY_NONLOCAL_TRANSPORT", CS%applyNonLocalTrans, &
+                 "If True, applies the non-local transport to pseudo-salt tracer", &
+                 default=.false.)
+
   allocate(CS%ps(isd:ied,jsd:jed,nz), source=0.0)
   allocate(CS%diff(isd:ied,jsd:jed,nz), source=0.0)
 
@@ -100,7 +108,7 @@ function register_pseudo_salt_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, name="pseudo_salt", &
                        longname="Pseudo salt passive tracer", units="psu", &
                        registry_diags=.true., restart_CS=restart_CS, &
-                       mandatory=.not.CS%pseudo_salt_may_reinit)
+                       mandatory=.not.CS%pseudo_salt_may_reinit, Tr_out=CS%tr_ptr)
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
@@ -243,6 +251,30 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
 
 end subroutine pseudo_salt_tracer_column_physics
 
+
+!>
+subroutine pseudo_salt_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS)
+
+  type(ocean_grid_type),                      intent(in)    :: G       !< Ocean grid
+  type(verticalGrid_type),                    intent(in)    :: GV      !< Ocean vertical grid
+  type(unit_scale_type),                      intent(in)    :: US      !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h       !< Layer/level thickness [H ~> m or kg m-2]
+  type(forcing),                              intent(in)    :: fluxes  !< A structure containing pointers to
+                                                                       !! thermodynamic
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
+  real,                                       intent(in)    :: dt      !< Time-step [s]
+  type(pseudo_salt_tracer_CS),                pointer       :: CS      !< A pointer that is set to point to the control
+
+  ! real :: flux_scale
+
+  ! flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
+
+  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
+                             fluxes%netSalt(:,:), dt, CS%diag, &
+                             CS%tr_ptr, &
+                             CS%ps(:,:,:))!, flux_scale = flux_scale)
+
+end subroutine pseudo_salt_KPP_NonLocalTransport
 
 !> Calculates the mass-weighted integral of all tracer stocks, returning the number of stocks it has
 !! calculated.  If the stock_index is present, only the stock corresponding to that coded index is returned.

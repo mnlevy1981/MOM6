@@ -386,8 +386,6 @@ subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt
                              CS%CFC_metadata(2)%tr_ptr, &
                              CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
 
-  ! TODO: add diagnostics!
-
 end subroutine CFC_cap_KPP_NonLocalTransport
 
 

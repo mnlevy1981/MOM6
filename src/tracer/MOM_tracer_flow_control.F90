@@ -61,6 +61,7 @@ use MOM_generic_tracer, only : end_MOM_generic_tracer, MOM_generic_tracer_get, M
 use MOM_generic_tracer, only : MOM_generic_tracer_stock, MOM_generic_tracer_min_max, MOM_generic_tracer_CS
 use pseudo_salt_tracer, only : register_pseudo_salt_tracer, initialize_pseudo_salt_tracer
 use pseudo_salt_tracer, only : pseudo_salt_tracer_column_physics, pseudo_salt_tracer_surface_state
+use pseudo_salt_tracer, only : pseudo_salt_KPP_NonLocalTransport
 use pseudo_salt_tracer, only : pseudo_salt_stock, pseudo_salt_tracer_end, pseudo_salt_tracer_CS
 use boundary_impulse_tracer, only : register_boundary_impulse_tracer, initialize_boundary_impulse_tracer
 use boundary_impulse_tracer, only : boundary_impulse_tracer_column_physics, boundary_impulse_tracer_surface_state
@@ -722,6 +723,8 @@ subroutine call_tracer_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans
 
     if (CS%use_CFC_cap) &
       call CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS%CFC_cap_CSp)
+    if (CS%use_pseudo_salt_tracer) &
+      call pseudo_salt_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS%pseudo_salt_tracer_CSp)
 
 end subroutine call_tracer_KPP_NonLocalTransport
 
