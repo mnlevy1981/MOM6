@@ -30,7 +30,6 @@ implicit none ; private
 
 public register_pseudo_salt_tracer, initialize_pseudo_salt_tracer
 public pseudo_salt_tracer_column_physics, pseudo_salt_tracer_surface_state
-public pseudo_salt_KPP_NonLocalTransport
 public pseudo_salt_stock, pseudo_salt_tracer_end
 
 !> The control structure for the pseudo-salt tracer
@@ -175,8 +174,8 @@ subroutine initialize_pseudo_salt_tracer(restart, day, G, GV, h, diag, OBC, CS, 
 end subroutine initialize_pseudo_salt_tracer
 
 !> Apply sources, sinks and diapycnal diffusion to the tracers in this package.
-subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, debug, &
-              evap_CFL_limit, minimum_forcing_depth)
+subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, use_KPP, &
+              debug, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -198,7 +197,9 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   type(pseudo_salt_tracer_CS), pointer :: CS  !< The control structure returned by a previous
                                               !! call to register_pseudo_salt_tracer.
   type(thermo_var_ptrs),   intent(in) :: tv   !< A structure pointing to various thermodynamic variables
+  logical,                 intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
   logical,                 intent(in) :: debug !< If true calculate checksums
+  real,          optional, intent(in)   :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                               !! be fluxed out of the top layer in a timestep [nondim]
   real,          optional, intent(in) :: minimum_forcing_depth !< The smallest depth over which
@@ -226,6 +227,14 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
     call hchksum(CS%ps,"pseudo_salt pre pseudo-salt vertdiff", G%HI)
   endif
 
+  ! Compute KPP nonlocal term if necessary
+  if (use_KPP.and.present(nonLocalTrans)) then
+    call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
+    fluxes%netSalt(:,:), dt, CS%diag, &
+    CS%tr_ptr, &
+    CS%ps(:,:,:))
+  endif
+
   ! This uses applyTracerBoundaryFluxesInOut, usually in ALE mode
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do k=1,nz ; do j=js,je ; do i=is,ie
@@ -251,30 +260,6 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
 
 end subroutine pseudo_salt_tracer_column_physics
 
-
-!>
-subroutine pseudo_salt_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS)
-
-  type(ocean_grid_type),                      intent(in)    :: G       !< Ocean grid
-  type(verticalGrid_type),                    intent(in)    :: GV      !< Ocean vertical grid
-  type(unit_scale_type),                      intent(in)    :: US      !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h       !< Layer/level thickness [H ~> m or kg m-2]
-  type(forcing),                              intent(in)    :: fluxes  !< A structure containing pointers to
-                                                                       !! thermodynamic
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
-  real,                                       intent(in)    :: dt      !< Time-step [s]
-  type(pseudo_salt_tracer_CS),                pointer       :: CS      !< A pointer that is set to point to the control
-
-  ! real :: flux_scale
-
-  ! flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
-
-  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                             fluxes%netSalt(:,:), dt, CS%diag, &
-                             CS%tr_ptr, &
-                             CS%ps(:,:,:))!, flux_scale = flux_scale)
-
-end subroutine pseudo_salt_KPP_NonLocalTransport
 
 !> Calculates the mass-weighted integral of all tracer stocks, returning the number of stocks it has
 !! calculated.  If the stock_index is present, only the stock corresponding to that coded index is returned.

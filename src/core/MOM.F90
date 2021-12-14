@@ -2728,7 +2728,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   new_sim = is_new_run(restart_CSp)
   call tracer_flow_control_init(.not.new_sim, Time, G, GV, US, CS%h, param_file, &
              CS%diag, CS%OBC, CS%tracer_flow_CSp, CS%sponge_CSp, &
-             CS%ALE_sponge_CSp, CS%tv)
+             CS%ALE_sponge_CSp, CS%tv, CS%use_KPP)
   if (present(tracer_flow_CSp)) tracer_flow_CSp => CS%tracer_flow_CSp
 
   ! If running in offline tracer mode, initialize the necessary control structure and

@@ -44,7 +44,6 @@ use MOM_OCMIP2_CFC, only : OCMIP2_CFC_column_physics, OCMIP2_CFC_surface_state
 use MOM_OCMIP2_CFC, only : OCMIP2_CFC_stock, OCMIP2_CFC_end, OCMIP2_CFC_CS
 use MOM_CFC_cap, only : register_CFC_cap, initialize_CFC_cap
 use MOM_CFC_cap, only : CFC_cap_column_physics, CFC_cap_surface_state
-use MOM_CFC_cap, only : CFC_cap_KPP_NonLocalTransport
 use MOM_CFC_cap, only : CFC_cap_stock, CFC_cap_end, CFC_cap_CS
 use oil_tracer, only : register_oil_tracer, initialize_oil_tracer
 use oil_tracer, only : oil_tracer_column_physics, oil_tracer_surface_state
@@ -61,7 +60,6 @@ use MOM_generic_tracer, only : end_MOM_generic_tracer, MOM_generic_tracer_get, M
 use MOM_generic_tracer, only : MOM_generic_tracer_stock, MOM_generic_tracer_min_max, MOM_generic_tracer_CS
 use pseudo_salt_tracer, only : register_pseudo_salt_tracer, initialize_pseudo_salt_tracer
 use pseudo_salt_tracer, only : pseudo_salt_tracer_column_physics, pseudo_salt_tracer_surface_state
-use pseudo_salt_tracer, only : pseudo_salt_KPP_NonLocalTransport
 use pseudo_salt_tracer, only : pseudo_salt_stock, pseudo_salt_tracer_end, pseudo_salt_tracer_CS
 use boundary_impulse_tracer, only : register_boundary_impulse_tracer, initialize_boundary_impulse_tracer
 use boundary_impulse_tracer, only : boundary_impulse_tracer_column_physics, boundary_impulse_tracer_surface_state
@@ -73,7 +71,7 @@ use nw2_tracers, only : initialize_nw2_tracers, nw2_tracers_end
 implicit none ; private
 
 public call_tracer_register, tracer_flow_control_init, call_tracer_set_forcing
-public call_tracer_column_fns, call_tracer_surface_state, call_tracer_stocks, call_tracer_KPP_NonLocalTransport
+public call_tracer_column_fns, call_tracer_surface_state, call_tracer_stocks
 public call_tracer_flux_init, get_chl_from_model, tracer_flow_control_end
 
 !> The control structure for orchestrating the calling of tracer packages
@@ -93,6 +91,7 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_boundary_impulse_tracer = .false. !< If true, use the boundary impulse tracer package
   logical :: use_dyed_obc_tracer = .false.         !< If true, use the dyed OBC tracer package
   logical :: use_nw2_tracers = .false.             !< If true, use the NW2 tracer package
+  logical :: use_KPP = .false.                     !< MOM uses CVMix/KPP diffusivities and non-local transport
   !>@{ Pointers to the control strucures for the tracer packages
   type(USER_tracer_example_CS), pointer :: USER_tracer_example_CSp => NULL()
   type(DOME_tracer_CS), pointer :: DOME_tracer_CSp => NULL()
@@ -277,7 +276,7 @@ end subroutine call_tracer_register
 !> This subroutine calls all registered tracer initialization
 !! subroutines.
 subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag, OBC, &
-                                    CS, sponge_CSp, ALE_sponge_CSp, tv)
+                                    CS, sponge_CSp, ALE_sponge_CSp, tv, use_KPP)
   logical,                               intent(in)    :: restart !< 1 if the fields have already
                                                                   !! been read from a restart file.
   type(time_type), target,               intent(in)    :: day     !< Time of the start of the run.
@@ -306,9 +305,12 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
                                                !! Otherwise this may be unassociated.
   type(thermo_var_ptrs),                 intent(in)    :: tv      !< A structure pointing to various
                                                                   !! thermodynamic variables
+  logical,                               intent(in)    :: use_KPP !< 1 if CVMix KPP routine is being used
 
   if (.not. associated(CS)) call MOM_error(FATAL, "tracer_flow_control_init: "// &
          "Module must be initialized via call_tracer_register before it is used.")
+  ! Set use_KPP in the control structure
+  CS%use_KPP = use_KPP
 
 !  Add other user-provided calls here.
   if (CS%use_USER_tracer_example) &
@@ -404,7 +406,7 @@ end subroutine call_tracer_set_forcing
 
 !> This subroutine calls all registered tracer column physics subroutines.
 subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, US, tv, optics, CS, &
-                                  debug, evap_CFL_limit, minimum_forcing_depth)
+                                  debug, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),                 intent(in) :: G      !< The ocean's grid structure.
   type(verticalGrid_type),               intent(in) :: GV     !< The ocean's vertical grid structure.
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_old !< Layer thickness before entrainment
@@ -432,6 +434,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                                               !! a previous call to
                                                               !! call_tracer_register.
   logical,                               intent(in) :: debug  !< If true calculate checksums
+  real,                        optional, intent(in)   :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,                        optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of
                                                               !! the water that can be fluxed out
                                                               !! of the top layer in a timestep [nondim]
@@ -490,7 +493,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                      minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_CFC_cap) &
       call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%CFC_cap_CSp, &
+                                     G, GV, US, CS%CFC_cap_CSp, CS%use_KPP, &
+                                     nonLocalTrans=nonLocalTrans, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_MOM_generic_tracer) then
@@ -504,7 +508,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     endif
     if (CS%use_pseudo_salt_tracer) &
       call pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%pseudo_salt_tracer_CSp, tv, debug, &
+                                     G, GV, US, CS%pseudo_salt_tracer_CSp, tv, &
+                                     CS%use_KPP, debug, &
+                                     nonLocalTrans=nonLocalTrans, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_boundary_impulse_tracer) &
@@ -552,7 +558,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                      G, GV, US, CS%OCMIP2_CFC_CSp)
     if (CS%use_CFC_cap) &
       call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%CFC_cap_CSp)
+                                     G, GV, US, CS%CFC_cap_CSp, CS%use_KPP, &
+                                     nonLocalTrans=nonLocalTrans)
     if (CS%use_MOM_generic_tracer) then
       if (US%QRZ_T_to_W_m2 /= 1.0) call MOM_error(FATAL, "MOM_generic_tracer_column_physics "//&
             "has not been written to permit dimensionsal rescaling.  Set all 4 of the "//&
@@ -562,7 +569,9 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     endif
     if (CS%use_pseudo_salt_tracer) &
       call pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%pseudo_salt_tracer_CSp, tv, debug)
+                                     G, GV, US, CS%pseudo_salt_tracer_CSp, &
+                                     tv, CS%use_KPP, debug, &
+                                     nonLocalTrans=nonLocalTrans)
     if (CS%use_boundary_impulse_tracer) &
       call boundary_impulse_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%boundary_impulse_tracer_CSp, tv, debug)
@@ -705,28 +714,6 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, CS, stock_names, stock_uni
 
 end subroutine call_tracer_stocks
 
-
-!> This routine calls all registered tracer KPP non-local transport subroutines.
-subroutine call_tracer_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS)
-
-  type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
-  type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
-  type(unit_scale_type),                      intent(in)    :: US            !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
-  type(forcing),                              intent(in)    :: fluxes !< A structure containing pointers to
-                                                                      !! any possible forcing fields.
-                                                                      !! Unused fields have NULL ptrs.
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
-  real,                                       intent(in)    :: dt            !< Time-step [s]
-  type(tracer_flow_control_CS),               pointer       :: CS            !< The control structure returned by
-                                                                             !! a previous call to call_tracer_register
-
-    if (CS%use_CFC_cap) &
-      call CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS%CFC_cap_CSp)
-    if (CS%use_pseudo_salt_tracer) &
-      call pseudo_salt_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS%pseudo_salt_tracer_CSp)
-
-end subroutine call_tracer_KPP_NonLocalTransport
 
 !> This routine stores the stocks and does error handling for call_tracer_stocks.
 subroutine store_stocks(pkg_name, ns, names, units, values, index, stock_values, &

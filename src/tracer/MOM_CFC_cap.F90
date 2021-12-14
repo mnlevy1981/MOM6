@@ -31,7 +31,6 @@ implicit none ; private
 
 public register_CFC_cap, initialize_CFC_cap, CFC_cap_unit_tests
 public CFC_cap_column_physics, CFC_cap_surface_state, CFC_cap_fluxes
-public CFC_cap_KPP_NonLocalTransport
 public CFC_cap_stock, CFC_cap_end
 
 integer, parameter :: NTR = 2 !< the number of tracers in this module.
@@ -286,7 +285,7 @@ end subroutine init_tracer_CFC
 !! tracer physics to the CFC cap tracers. CFCs are relatively simple,
 !! as they are passive tracers with only a surface flux as a source.
 subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, &
-              evap_CFL_limit, minimum_forcing_depth)
+              use_KPP, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G     !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV    !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -307,6 +306,8 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   type(unit_scale_type),   intent(in) :: US    !< A dimensional unit scaling type
   type(CFC_cap_CS),        pointer    :: CS    !< The control structure returned by a
                                                !! previous call to register_CFC_cap.
+  logical,                 intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
+  real,          optional, intent(in) :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                                !! be fluxed out of the top layer in a timestep [nondim]
   real,          optional, intent(in) :: minimum_forcing_depth !< The smallest depth over which
@@ -319,6 +320,7 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   real, pointer, dimension(:,:,:) :: CFC11 => NULL(), CFC12 => NULL()
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: h_work ! Used so that h can be modified [H ~> m or kg m-2]
   real :: scale_factor ! convert from cfc1[12]_flux to units of sfc_flux in tracer_vertdiff
+  real :: flux_scale
   integer :: i, j, k, m, is, ie, js, je, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -331,6 +333,20 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   scale_factor = US%Z_to_m
 
   CFC11 => CS%CFC_metadata(1)%conc ; CFC12 => CS%CFC_metadata(2)%conc
+
+  ! Compute KPP nonlocal term if necessary
+  if (use_KPP.and.present(nonLocalTrans)) then
+    flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
+
+    call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
+                               fluxes%cfc11_flux(:,:), dt, CS%diag, &
+                               CS%CFC_metadata(1)%tr_ptr, &
+                               CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
+    call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
+                               fluxes%cfc12_flux(:,:), dt, CS%diag, &
+                               CS%CFC_metadata(2)%tr_ptr, &
+                               CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
+  endif
 
   ! Use a tridiagonal solver to determine the concentrations after the
   ! surface source is applied and diapycnal advection and diffusion occurs.
@@ -358,35 +374,6 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   if (CS%CFC_metadata(2)%id_cmor > 0) call post_data(CS%CFC_metadata(2)%id_cmor, (GV%Rho0*US%R_to_kg_m3)*CFC12, CS%diag)
 
 end subroutine CFC_cap_column_physics
-
-
-!>
-subroutine CFC_cap_KPP_NonLocalTransport(G, GV, US, h, fluxes, nonLocalTrans, dt, CS)
-
-  type(ocean_grid_type),                      intent(in)    :: G       !< Ocean grid
-  type(verticalGrid_type),                    intent(in)    :: GV      !< Ocean vertical grid
-  type(unit_scale_type),                      intent(in)    :: US      !< A dimensional unit scaling type
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h       !< Layer/level thickness [H ~> m or kg m-2]
-  type(forcing),                              intent(in)    :: fluxes  !< A structure containing pointers to
-                                                                       !! thermodynamic
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
-  real,                                       intent(in)    :: dt      !< Time-step [s]
-  type(CFC_cap_CS),                           pointer       :: CS      !< A pointer that is set to point to the control
-
-  real :: flux_scale
-
-  flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
-
-  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                             fluxes%cfc11_flux(:,:), dt, CS%diag, &
-                             CS%CFC_metadata(1)%tr_ptr, &
-                             CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
-  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, &
-                             fluxes%cfc12_flux(:,:), dt, CS%diag, &
-                             CS%CFC_metadata(2)%tr_ptr, &
-                             CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
-
-end subroutine CFC_cap_KPP_NonLocalTransport
 
 
 !> Calculates the mass-weighted integral of all tracer stocks,
