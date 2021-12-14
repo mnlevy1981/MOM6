@@ -246,7 +246,7 @@ type, public:: diabatic_CS; private
   real, allocatable, dimension(:,:,:) :: KPP_NLTscalar  !< KPP non-local transport for scalars [m s-1]
   real, allocatable, dimension(:,:,:) :: KPP_buoy_flux  !< KPP forcing buoyancy flux [L2 T-3 ~> m2 s-3]
   real, allocatable, dimension(:,:)   :: KPP_temp_flux  !< KPP effective temperature flux [degC m s-1]
-  real, allocatable, dimension(:,:)   :: KPP_salt_flux  !< KPP effective salt flux [ppt m s-1]
+  real, pointer,     dimension(:,:) :: KPP_salt_flux => NULL() !< KPP effective salt flux [ppt m s-1]
 
   type(time_type), pointer :: Time !< Pointer to model time (needed for sponges)
 end type diabatic_CS
@@ -690,6 +690,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
       call MOM_forcing_chksum("after KPP_applyNLT ", fluxes, G, US, haloshift=0)
       call MOM_thermovar_chksum("after KPP_applyNLT ", tv, G)
     endif
+    if (.not.associated(fluxes%KPP_salt_flux)) fluxes%KPP_salt_flux => CS%KPP_salt_flux
   endif ! endif for KPP
 
   ! This is the "old" method for applying differential diffusion.
@@ -1265,6 +1266,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
       call MOM_forcing_chksum("after KPP_applyNLT ", fluxes, G, US, haloshift=0)
       call MOM_thermovar_chksum("after KPP_applyNLT ", tv, G)
     endif
+    if (.not.associated(fluxes%KPP_salt_flux)) fluxes%KPP_salt_flux => CS%KPP_salt_flux
   endif ! endif for KPP
 
   ! Calculate vertical mixing due to convection (computed via CVMix)
@@ -1856,7 +1858,7 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
       call hchksum(Kd_lay, "after KPP Kd_lay", G%HI, haloshift=0, scale=US%Z2_T_to_m2_s)
       call hchksum(Kd_Int, "after KPP Kd_Int", G%HI, haloshift=0, scale=US%Z2_T_to_m2_s)
     endif
-
+    if (.not.associated(fluxes%KPP_salt_flux)) fluxes%KPP_salt_flux => CS%KPP_salt_flux
   endif  ! endif for KPP
 
   ! Add vertical diff./visc. due to convection (computed via CVMix)
