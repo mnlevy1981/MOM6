@@ -1387,9 +1387,6 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
   real :: flux_scale_loc, budget_scale_loc
 
-  ! Post surface flux diagnostic
-  if (tr_ptr%id_net_surfflux > 0) call post_data(tr_ptr%id_net_surfflux, surfFlux * flux_scale_loc, diag)
-
   ! term used to scale
   if (present(flux_scale)) then
     flux_scale_loc = flux_scale
@@ -1402,6 +1399,9 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
   else
     budget_scale_loc = flux_scale_loc
   endif
+
+  ! Post surface flux diagnostic
+  if (tr_ptr%id_net_surfflux > 0) call post_data(tr_ptr%id_net_surfflux, surfFlux * flux_scale_loc, diag)
 
   ! Only continue if we are applying the nonlocal tendency
   ! or the nonlocal tendency diagnostic has been requested

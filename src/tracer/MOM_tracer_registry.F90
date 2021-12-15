@@ -557,8 +557,6 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
     ! KPP nonlocal term diagnostics
     if (use_KPP) then
       if (trim(flux_longname) .eq. "Heat") then
-        ! TODO: use query function to get ids for KPP_QminusSW and KPP_NLT_dTdt
-        !       it may be the case that these get registered before the KPP versions?
         Tr%id_net_surfflux = register_diag_field('ocean_model', 'KPP_QminusSW', diag%axesT1, Time, &
         'Net temperature flux ignoring short-wave, as used by [CVMix] KPP', 'K m/s')
         Tr%id_NLT_tendency = register_diag_field('ocean_model', 'KPP_NLT_dTdt', diag%axesTL, Time, &
@@ -566,8 +564,6 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
         Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_temp_budget', diag%axesTL, Time, &
         'Heat content change due to non-local transport, as calculated by [CVMix] KPP', conv_units, v_extensive=.true.)
       elseif (trim(flux_longname) .eq. "Salt") then
-        ! TODO: use query function to get ids for KPP_netSalt and KPP_NLT_dSdt
-        !       it may be the case that these get registered before the KPP versions?
         Tr%id_net_surfflux = register_diag_field('ocean_model', 'KPP_netSalt', diag%axesT1, Time, &
         'Effective net surface salt flux, as used by [CVMix] KPP', 'ppt m/s')
         Tr%id_NLT_tendency = register_diag_field('ocean_model', 'KPP_NLT_dSdt', diag%axesTL, Time, &
