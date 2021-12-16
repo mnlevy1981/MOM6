@@ -2250,6 +2250,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                            tr_desc=vd_T, registry_diags=.true., flux_nameroot='T', &
                            flux_units='W', flux_longname='Heat', &
                            net_surfflux_name = 'KPP_QminusSW', NLT_budget_name = 'KPP_NLT_temp_budget', &
+                           net_surfflux_longname = 'Net temperature flux ignoring short-wave, as used by [CVMix] KPP', &
                            flux_scale=conv2watt, convergence_units='W m-2', &
                            convergence_scale=conv2watt, CMOR_tendprefix="opottemp", diag_form=2, &
                            Tr_out = CS%tv%tr_T)
