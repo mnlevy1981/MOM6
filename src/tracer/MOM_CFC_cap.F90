@@ -306,7 +306,7 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   type(unit_scale_type),   intent(in) :: US    !< A dimensional unit scaling type
   type(CFC_cap_CS),        pointer    :: CS    !< The control structure returned by a
                                                !! previous call to register_CFC_cap.
-  logical,                 intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
+  logical,       optional, intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
   real,          optional, intent(in) :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                                !! be fluxed out of the top layer in a timestep [nondim]
@@ -335,17 +335,19 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   CFC11 => CS%CFC_metadata(1)%conc ; CFC12 => CS%CFC_metadata(2)%conc
 
   ! Compute KPP nonlocal term if necessary
-  if (use_KPP.and.present(nonLocalTrans)) then
-    flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
+  if (present(use_KPP) .and. present(nonLocalTrans)) then
+    if (use_KPP) then
+      flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
 
-    call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
-                               fluxes%cfc11_flux(:,:), dt, CS%diag, &
-                               CS%CFC_metadata(1)%tr_ptr, &
-                               CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
-    call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
-                               fluxes%cfc12_flux(:,:), dt, CS%diag, &
-                               CS%CFC_metadata(2)%tr_ptr, &
-                               CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
+      call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
+                                fluxes%cfc11_flux(:,:), dt, CS%diag, &
+                                CS%CFC_metadata(1)%tr_ptr, &
+                                CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
+      call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
+                                fluxes%cfc12_flux(:,:), dt, CS%diag, &
+                                CS%CFC_metadata(2)%tr_ptr, &
+                                CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
+    endif
   endif
 
   ! Use a tridiagonal solver to determine the concentrations after the

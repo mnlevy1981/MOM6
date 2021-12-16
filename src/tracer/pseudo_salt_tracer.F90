@@ -174,8 +174,8 @@ subroutine initialize_pseudo_salt_tracer(restart, day, G, GV, h, diag, OBC, CS, 
 end subroutine initialize_pseudo_salt_tracer
 
 !> Apply sources, sinks and diapycnal diffusion to the tracers in this package.
-subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, use_KPP, &
-              debug, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
+subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, debug, &
+              use_KPP, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -197,8 +197,8 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   type(pseudo_salt_tracer_CS), pointer :: CS  !< The control structure returned by a previous
                                               !! call to register_pseudo_salt_tracer.
   type(thermo_var_ptrs),   intent(in) :: tv   !< A structure pointing to various thermodynamic variables
-  logical,                 intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
   logical,                 intent(in) :: debug !< If true calculate checksums
+  logical,       optional, intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
   real,          optional, intent(in)   :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                               !! be fluxed out of the top layer in a timestep [nondim]
@@ -228,10 +228,11 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   endif
 
   ! Compute KPP nonlocal term if necessary
-  if (use_KPP.and.present(nonLocalTrans)) then
-    call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
-                               fluxes%KPP_salt_flux(:,:), dt, CS%diag, &
-                               CS%tr_ptr, CS%ps(:,:,:))
+  if (present(use_KPP) .and. present(nonLocalTrans)) then
+    if (use_KPP) &
+      call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
+                                 fluxes%KPP_salt_flux(:,:), dt, CS%diag, &
+                                 CS%tr_ptr, CS%ps(:,:,:))
   endif
 
   ! This uses applyTracerBoundaryFluxesInOut, usually in ALE mode

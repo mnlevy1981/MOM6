@@ -91,7 +91,6 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_boundary_impulse_tracer = .false. !< If true, use the boundary impulse tracer package
   logical :: use_dyed_obc_tracer = .false.         !< If true, use the dyed OBC tracer package
   logical :: use_nw2_tracers = .false.             !< If true, use the NW2 tracer package
-  logical :: use_KPP = .false.                     !< MOM uses CVMix/KPP diffusivities and non-local transport
   !>@{ Pointers to the control strucures for the tracer packages
   type(USER_tracer_example_CS), pointer :: USER_tracer_example_CSp => NULL()
   type(DOME_tracer_CS), pointer :: DOME_tracer_CSp => NULL()
@@ -276,7 +275,7 @@ end subroutine call_tracer_register
 !> This subroutine calls all registered tracer initialization
 !! subroutines.
 subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag, OBC, &
-                                    CS, sponge_CSp, ALE_sponge_CSp, tv, use_KPP)
+                                    CS, sponge_CSp, ALE_sponge_CSp, tv)
   logical,                               intent(in)    :: restart !< 1 if the fields have already
                                                                   !! been read from a restart file.
   type(time_type), target,               intent(in)    :: day     !< Time of the start of the run.
@@ -305,12 +304,9 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
                                                !! Otherwise this may be unassociated.
   type(thermo_var_ptrs),                 intent(in)    :: tv      !< A structure pointing to various
                                                                   !! thermodynamic variables
-  logical,                               intent(in)    :: use_KPP !< 1 if CVMix KPP routine is being used
 
   if (.not. associated(CS)) call MOM_error(FATAL, "tracer_flow_control_init: "// &
          "Module must be initialized via call_tracer_register before it is used.")
-  ! Set use_KPP in the control structure
-  CS%use_KPP = use_KPP
 
 !  Add other user-provided calls here.
   if (CS%use_USER_tracer_example) &
@@ -406,7 +402,7 @@ end subroutine call_tracer_set_forcing
 
 !> This subroutine calls all registered tracer column physics subroutines.
 subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, US, tv, optics, CS, &
-                                  debug, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
+                                  debug, use_KPP, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),                 intent(in) :: G      !< The ocean's grid structure.
   type(verticalGrid_type),               intent(in) :: GV     !< The ocean's vertical grid structure.
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_old !< Layer thickness before entrainment
@@ -434,6 +430,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                                               !! a previous call to
                                                               !! call_tracer_register.
   logical,                               intent(in) :: debug  !< If true calculate checksums
+  logical,                     optional, intent(in)   :: use_KPP              !< If true, using KPP from CVMix
   real,                        optional, intent(in)   :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,                        optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of
                                                               !! the water that can be fluxed out
@@ -493,7 +490,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                      minimum_forcing_depth=minimum_forcing_depth)
     if (CS%use_CFC_cap) &
       call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%CFC_cap_CSp, CS%use_KPP, &
+                                     G, GV, US, CS%CFC_cap_CSp, &
+                                     use_KPP=use_KPP, &
                                      nonLocalTrans=nonLocalTrans, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
@@ -509,7 +507,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_pseudo_salt_tracer) &
       call pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%pseudo_salt_tracer_CSp, tv, &
-                                     CS%use_KPP, debug, &
+                                     debug, &
+                                     use_KPP=use_KPP, &
                                      nonLocalTrans=nonLocalTrans, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
@@ -558,7 +557,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                      G, GV, US, CS%OCMIP2_CFC_CSp)
     if (CS%use_CFC_cap) &
       call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                     G, GV, US, CS%CFC_cap_CSp, CS%use_KPP, &
+                                     G, GV, US, CS%CFC_cap_CSp, &
+                                     use_KPP=use_KPP, &
                                      nonLocalTrans=nonLocalTrans)
     if (CS%use_MOM_generic_tracer) then
       if (US%QRZ_T_to_W_m2 /= 1.0) call MOM_error(FATAL, "MOM_generic_tracer_column_physics "//&
@@ -570,7 +570,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_pseudo_salt_tracer) &
       call pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%pseudo_salt_tracer_CSp, &
-                                     tv, CS%use_KPP, debug, &
+                                     tv, debug, &
+                                     use_KPP=use_KPP, &
                                      nonLocalTrans=nonLocalTrans)
     if (CS%use_boundary_impulse_tracer) &
       call boundary_impulse_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
