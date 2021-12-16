@@ -87,6 +87,8 @@ type, public :: tracer_type
   character(len=48)               :: cmor_tendprefix = ""     !< The CMOR variable prefix for tendencies of this
                                                               !! tracer, required because CMOR does not follow any
                                                               !! discernable pattern for these names.
+  character(len=48)               :: net_surfflux_name = ""   !< Name to use for net_surfflux KPP diagnostic
+  character(len=48)               :: NLT_budget_name = ""     !< Name to use for NLT_budget KPP diagnostic
   integer :: ind_tr_squared = -1 !< The tracer registry index for the square of this tracer
 
   !### THESE CAPABILITIES HAVE NOT YET BEEN IMPLEMENTED.

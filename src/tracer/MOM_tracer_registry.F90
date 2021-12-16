@@ -40,8 +40,8 @@ contains
 !> This subroutine registers a tracer to be advected and laterally diffused.
 ! MNL TODO: add optional arguments for KPP diag shortnames
 subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, units, &
-                           cmor_name, cmor_units, cmor_longname, tr_desc, &
-                           OBC_inflow, OBC_in_u, OBC_in_v, ad_x, ad_y, df_x, df_y, &
+                           cmor_name, cmor_units, cmor_longname, net_surfflux_name, NLT_budget_name, &
+                           tr_desc, OBC_inflow, OBC_in_u, OBC_in_v, ad_x, ad_y, df_x, df_y, &
                            ad_2d_x, ad_2d_y, df_2d_x, df_2d_y, advection_xy, registry_diags, &
                            flux_nameroot, flux_longname, flux_units, flux_scale, &
                            convergence_units, convergence_scale, cmor_tendprefix, diag_form, &
@@ -58,6 +58,8 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   character(len=*),     optional, intent(in)    :: cmor_name    !< CMOR name
   character(len=*),     optional, intent(in)    :: cmor_units   !< CMOR physical dimensions of variable
   character(len=*),     optional, intent(in)    :: cmor_longname !< CMOR long name
+  character(len=*),     optional, intent(in)    :: net_surfflux_name !< Name for net_surfflux diag
+  character(len=*),     optional, intent(in)    :: NLT_budget_name   !< Name for NLT_budget diag
   type(vardesc),        optional, intent(in)    :: tr_desc      !< A structure with metadata about the tracer
 
   real,                 optional, intent(in)    :: OBC_inflow   !< the tracer for all inflows via OBC for which OBC_in_u
@@ -167,6 +169,16 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
     if (len_trim(flux_longname) > 0) Tr%flux_longname = flux_longname
   endif
 
+  Tr%net_surfflux_name = "KPP_net"//trim(Tr%flux_longname)
+  if (present(net_surfflux_name)) then
+    Tr%net_surfflux_name = net_surfflux_name
+  endif
+
+  Tr%NLT_budget_name = 'KPP_NLT_'//trim(Tr%flux_nameroot)//'_budget'
+  if (present(NLT_budget_name)) then
+    Tr%NLT_budget_name = NLT_budget_name
+  endif
+
   Tr%flux_units = ""
   if (present(flux_units)) Tr%flux_units = flux_units
 
@@ -245,17 +257,17 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
   logical,                    intent(in) :: use_KPP !< If true active diagnostics that only
                                                  !! apply to CVMix KPP mixings
 
-  character(len=24) :: name     ! A variable's name in a NetCDF file.
-  character(len=24) :: shortnm  ! A shortened version of a variable's name for
-                                ! creating additional diagnostics.
-  character(len=72) :: longname ! The long name of that tracer variable.
-  character(len=72) :: flux_longname ! The tracer name in the long names of fluxes.
-  character(len=48) :: units    ! The dimensions of the tracer.
-  character(len=48) :: flux_units ! The units for fluxes, either
-                                ! [units] m3 s-1 or [units] kg s-1.
-  character(len=48) :: conv_units ! The units for flux convergences, either
-                                ! [units] m2 s-1 or [units] kg s-1.
-  character(len=48) :: unit2    ! The dimensions of the tracer squared
+  character(len=24)  :: name     ! A variable's name in a NetCDF file.
+  character(len=24)  :: shortnm  ! A shortened version of a variable's name for
+                                 ! creating additional diagnostics.
+  character(len=72)  :: longname ! The long name of that tracer variable.
+  character(len=72)  :: flux_longname ! The tracer name in the long names of fluxes.
+  character(len=48)  :: units    ! The dimensions of the tracer.
+  character(len=48)  :: flux_units ! The units for fluxes, either
+                                 ! [units] m3 s-1 or [units] kg s-1.
+  character(len=48)  :: conv_units ! The units for flux convergences, either
+                                 ! [units] m2 s-1 or [units] kg s-1.
+  character(len=48)  :: unit2    ! The dimensions of the tracer squared
   character(len=72)  :: cmorname ! The CMOR name of this tracer.
   character(len=120) :: cmor_longname ! The CMOR long name of that variable.
   character(len=120) :: var_lname      ! A temporary longname for a diagnostic.
@@ -556,33 +568,17 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
 
     ! KPP nonlocal term diagnostics
     if (use_KPP) then
-      if (trim(flux_longname) .eq. "Heat") then
-        Tr%id_net_surfflux = register_diag_field('ocean_model', 'KPP_QminusSW', diag%axesT1, Time, &
-        'Net temperature flux ignoring short-wave, as used by [CVMix] KPP', 'K m/s')
-        Tr%id_NLT_tendency = register_diag_field('ocean_model', 'KPP_NLT_dTdt', diag%axesTL, Time, &
-        'Temperature tendency due to non-local transport of heat, as calculated by [CVMix] KPP', 'K/s')
-        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_temp_budget', diag%axesTL, Time, &
-        'Heat content change due to non-local transport, as calculated by [CVMix] KPP', conv_units, v_extensive=.true.)
-      elseif (trim(flux_longname) .eq. "Salt") then
-        Tr%id_net_surfflux = register_diag_field('ocean_model', 'KPP_netSalt', diag%axesT1, Time, &
-        'Effective net surface salt flux, as used by [CVMix] KPP', 'ppt m/s')
-        Tr%id_NLT_tendency = register_diag_field('ocean_model', 'KPP_NLT_dSdt', diag%axesTL, Time, &
-        'Salinity tendency due to non-local transport of salt, as calculated by [CVMix] KPP', 'ppt/s')
-        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_saln_budget', diag%axesTL, Time, &
-        'Salt content change due to non-local transport, as calculated by [CVMix] KPP', conv_units, v_extensive=.true.)
-      else
-        Tr%id_net_surfflux = register_diag_field('ocean_model', "KPP_net"//trim(flux_longname), diag%axesT1, Time, &
-            'Effective net surface flux of '//lowercase(longname)//', as used by [CVMix] KPP', &
-            trim(units)//' m s-1')
-        Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
-            diag%axesTL, Time, &
-            lowercase(longname)//' tendency due to non-local transport, as calculated by [CVMix] KPP', &
-            trim(units)//' s-1')
-        Tr%id_NLT_budget = register_diag_field('ocean_model', 'KPP_NLT_'//trim(shortnm)//'_budget', &
-            diag%axesTL, Time, &
-            lowercase(longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
-            Tr%conv_units, v_extensive=.true.)
-      endif
+      Tr%id_net_surfflux = register_diag_field('ocean_model', Tr%net_surfflux_name, diag%axesT1, Time, &
+          'Effective net surface flux of '//trim(lowercase(longname))//', as used by [CVMix] KPP', &
+          trim(units)//' m s-1')
+      Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
+          diag%axesTL, Time, &
+          trim(longname)//' tendency due to non-local transport of '//trim(lowercase(flux_longname))//&
+          ', as calculated by [CVMix] KPP', trim(units)//' s-1')
+      Tr%id_NLT_budget = register_diag_field('ocean_model', Tr%NLT_budget_name, &
+          diag%axesTL, Time, &
+          trim(flux_longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
+          conv_units, v_extensive=.true.)
     endif
 
   endif ; enddo
