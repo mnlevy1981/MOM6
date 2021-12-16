@@ -569,7 +569,7 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
     ! KPP nonlocal term diagnostics
     if (use_KPP) then
       Tr%id_net_surfflux = register_diag_field('ocean_model', Tr%net_surfflux_name, diag%axesT1, Time, &
-          'Effective net surface flux of '//trim(lowercase(longname))//', as used by [CVMix] KPP', &
+          'Effective net surface '//trim(lowercase(flux_longname))//' flux, as used by [CVMix] KPP', &
           trim(units)//' m s-1')
       Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
           diag%axesTL, Time, &
