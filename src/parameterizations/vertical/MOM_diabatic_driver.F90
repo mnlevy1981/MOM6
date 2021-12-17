@@ -2527,7 +2527,7 @@ end subroutine layered_diabatic
 !> Returns pointers or values of members within the diabatic_CS type. For extensibility,
 !! each returned argument is an optional argument
 subroutine extract_diabatic_member(CS, opacity_CSp, optics_CSp, evap_CFL_limit, minimum_forcing_depth, &
-                                   KPP_CSp, energetic_PBL_CSp, diabatic_aux_CSp, diabatic_halo)
+                                   KPP_CSp, energetic_PBL_CSp, diabatic_aux_CSp, diabatic_halo, use_KPP)
   type(diabatic_CS), intent(in   )           :: CS !< module control structure
   ! All output arguments are optional
   type(opacity_CS),  optional, pointer       :: opacity_CSp !< A pointer to be set to the opacity control structure
@@ -2542,6 +2542,7 @@ subroutine extract_diabatic_member(CS, opacity_CSp, optics_CSp, evap_CFL_limit, 
                                                             !! control structure
   integer,           optional, intent(  out) :: diabatic_halo !< The halo size where the diabatic algorithms
                                                             !! assume thermodynamics properties are valid.
+  logical,           optional, intent(  out) :: use_KPP       !< If true, diabatic is using KPP vertical mixing
 
   ! Pointers to control structures
   if (present(opacity_CSp))       opacity_CSp => CS%opacity_CSp
@@ -2553,6 +2554,7 @@ subroutine extract_diabatic_member(CS, opacity_CSp, optics_CSp, evap_CFL_limit, 
   if (present(evap_CFL_limit))        evap_CFL_limit = CS%evap_CFL_limit
   if (present(minimum_forcing_depth)) minimum_forcing_depth = CS%minimum_forcing_depth
   if (present(diabatic_halo)) diabatic_halo = CS%halo_TS_diff
+  if (present(use_KPP)) use_KPP = CS%use_KPP
 
 end subroutine extract_diabatic_member
 
@@ -2871,7 +2873,7 @@ end subroutine adiabatic_driver_init
 !> This routine initializes the diabatic driver module.
 subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, diag, &
                                 ADp, CDp, CS, tracer_flow_CSp, sponge_CSp, &
-                                ALE_sponge_CSp, oda_incupd_CSp, useKPP)
+                                ALE_sponge_CSp, oda_incupd_CSp)
   type(time_type), target                :: Time             !< model time
   type(ocean_grid_type),   intent(inout) :: G                !< model grid structure
   type(verticalGrid_type), intent(in)    :: GV               !< model vertical grid structure
@@ -2888,7 +2890,6 @@ subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, di
   type(sponge_CS),         pointer       :: sponge_CSp       !< pointer to the sponge module control structure
   type(ALE_sponge_CS),     pointer       :: ALE_sponge_CSp   !< pointer to the ALE sponge module control structure
   type(oda_incupd_CS),     pointer       :: oda_incupd_CSp   !< pointer to the oda incupd module control structure
-  logical,                 intent(out)   :: useKPP           !< return CS%useKPP
 
   ! Local variables
   real    :: Kd  ! A diffusivity used in the default for other tracer diffusivities, in MKS units [m2 s-1]
@@ -3463,9 +3464,6 @@ subroutine diabatic_driver_init(Time, G, GV, US, param_file, useALEalgorithm, di
 
   ! Initialize the diagnostic grid storage
   call diag_grid_storage_init(CS%diag_grids_prev, G, GV, diag)
-
-  ! Set useKPP
-  useKPP = CS%useKPP
 
 end subroutine diabatic_driver_init
 

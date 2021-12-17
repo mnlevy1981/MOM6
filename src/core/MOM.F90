@@ -270,7 +270,6 @@ type, public :: MOM_control_struct ; private
                                      !! in equation of state calculations.
   logical :: use_diabatic_time_bug   !< If true, uses the wrong calendar time for diabatic processes,
                                      !! as was done in MOM6 versions prior to February 2018.
-  logical :: use_KPP                 !< If true, diabatic driver is using CVMix's KPP mixing scheme
   real :: dtbt_reset_period          !< The time interval between dynamic recalculation of the
                                      !! barotropic time step [s]. If this is negative dtbt is never
                                      !! calculated, and if it is 0, dtbt is calculated every step.
@@ -1750,6 +1749,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
                                ! updated first in directionally split parts of the
                                ! calculation.  This can be altered during the course
                                ! of the run via calls to set_first_direction.
+  logical :: use_KPP           ! If true, diabatic is using KPP vertical mixing
   integer :: nkml, nkbl, verbosity, write_geom
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
@@ -2696,8 +2696,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   else
     call diabatic_driver_init(Time, G, GV, US, param_file, CS%use_ALE_algorithm, diag, &
                               CS%ADp, CS%CDp, CS%diabatic_CSp, CS%tracer_flow_CSp, &
-                              CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, &
-                              CS%use_KPP)
+                              CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp)
   endif
 
   if (associated(CS%sponge_CSp)) &
@@ -2721,8 +2720,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
   call register_surface_diags(Time, G, US, CS%sfc_IDs, CS%diag, CS%tv)
   call register_diags(Time, G, GV, US, CS%IDs, CS%diag)
   call register_transport_diags(Time, G, GV, US, CS%transport_IDs, CS%diag)
+  call extract_diabatic_member(CS%diabatic_CSp, use_KPP=use_KPP)
   call register_tracer_diagnostics(CS%tracer_Reg, CS%h, Time, diag, G, GV, US, &
-                                   CS%use_ALE_algorithm, CS%use_KPP)
+                                   CS%use_ALE_algorithm, use_KPP)
   if (CS%use_ALE_algorithm) then
     call ALE_register_diags(Time, G, GV, US, diag, CS%ALE_CSp)
   endif
