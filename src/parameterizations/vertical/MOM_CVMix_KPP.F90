@@ -1441,7 +1441,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
       do j = G%jsc, G%jec
         do i = G%isc, G%iec
           dtracer(i,j,k) = (nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1)) * &
-                           surfFlux(i,j) * budget_scale_loc * GV%H_to_kg_m2
+                           surfFlux(i,j) * budget_scale_loc
         enddo
       enddo
     enddo
@@ -1470,7 +1470,7 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                             dt, CS%diag, tr_ptr, scalar, budget_scale=C_p)
+                             dt, CS%diag, tr_ptr, scalar, budget_scale=C_p * GV%H_to_kg_m2)
 
 end subroutine KPP_NonLocalTransport_temp
 
@@ -1494,7 +1494,7 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                             dt, CS%diag, tr_ptr, scalar)
+                             dt, CS%diag, tr_ptr, scalar, budget_scale=GV%H_to_kg_m2)
 
 end subroutine KPP_NonLocalTransport_saln
 

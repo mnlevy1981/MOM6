@@ -2257,7 +2257,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, restart_CSp, &
       call register_tracer(CS%tv%S, CS%tracer_Reg, param_file, dG%HI, GV, &
                            tr_desc=vd_S, registry_diags=.true., flux_nameroot='S', &
                            flux_units=S_flux_units, flux_longname='Salt', &
-                           NLT_budget_name = 'KPP_NLT_saln_budget', &
+                           net_surfflux_name = 'KPP_netSalt', NLT_budget_name = 'KPP_NLT_saln_budget', &
                            flux_scale=conv2salt, convergence_units='kg m-2 s-1', &
                            convergence_scale=0.001*GV%H_to_kg_m2, CMOR_tendprefix="osalt", diag_form=2, &
                            Tr_out = CS%tv%tr_S)

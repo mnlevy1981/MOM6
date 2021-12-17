@@ -232,7 +232,7 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
     if (use_KPP) &
       call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
                                  fluxes%KPP_salt_flux(:,:), dt, CS%diag, &
-                                 CS%tr_ptr, CS%ps(:,:,:))
+                                 CS%tr_ptr, CS%ps(:,:,:), budget_scale=GV%H_to_kg_m2)
   endif
 
   ! This uses applyTracerBoundaryFluxesInOut, usually in ALE mode

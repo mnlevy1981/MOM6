@@ -170,7 +170,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
     if (len_trim(flux_longname) > 0) Tr%flux_longname = flux_longname
   endif
 
-  Tr%net_surfflux_name = "KPP_net"//trim(Tr%flux_longname)
+  Tr%net_surfflux_name = "KPP_net"//trim(Tr%name)
   if (present(net_surfflux_name)) then
     Tr%net_surfflux_name = net_surfflux_name
   endif
