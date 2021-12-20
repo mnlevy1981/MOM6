@@ -715,7 +715,6 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, CS, stock_names, stock_uni
 
 end subroutine call_tracer_stocks
 
-
 !> This routine stores the stocks and does error handling for call_tracer_stocks.
 subroutine store_stocks(pkg_name, ns, names, units, values, index, stock_values, &
                         set_pkg_name, max_ns, ns_tot, stock_names, stock_units)

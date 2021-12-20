@@ -93,9 +93,10 @@ type, public :: tracer_type
   integer :: ind_tr_squared = -1 !< The tracer registry index for the square of this tracer
 
   !### THESE CAPABILITIES HAVE NOT YET BEEN IMPLEMENTED.
-  ! logical :: advect_tr = .true.     !< If true, this tracer should be advected
-  ! logical :: hordiff_tr = .true.    !< If true, this tracer should experience epineutral diffusion
-  logical :: remap_tr = .true.      !< If true, this tracer should be vertically remapped
+  ! logical :: advect_tr = .true.       !< If true, this tracer should be advected
+  ! logical :: hordiff_tr = .true.      !< If true, this tracer should experience epineutral diffusion
+  ! logical :: kpp_nonlocal_tr = .true. !< if true, apply KPP nonlocal transport to this tracer before diffusion
+  logical :: remap_tr = .true.        !< If true, this tracer should be vertically remapped
 
   integer :: diag_form = 1  !< An integer indicating which template is to be used to label diagnostics.
   !>@{ Diagnostic IDs

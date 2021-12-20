@@ -17,7 +17,8 @@ use MOM_open_boundary, only : ocean_OBC_type
 use MOM_restart, only : query_initialized, MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, sponge_CS
 use MOM_time_manager, only : time_type
-use MOM_tracer_registry, only : register_tracer, tracer_registry_type, tracer_type
+use MOM_tracer_registry, only : register_tracer
+use MOM_tracer_types, only : tracer_registry_type, tracer_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_Z_init, only : tracer_Z_init
 use MOM_unit_scaling, only : unit_scale_type

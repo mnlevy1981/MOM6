@@ -33,12 +33,13 @@ public register_tracer_diagnostics, post_tracer_diagnostics_at_sync, post_tracer
 public preALE_tracer_diagnostics, postALE_tracer_diagnostics
 public tracer_registry_init, lock_tracer_registry, tracer_registry_end
 public tracer_name_lookup
+
+! These types come from MOM_tracer_types
 public tracer_type, tracer_registry_type
 
 contains
 
 !> This subroutine registers a tracer to be advected and laterally diffused.
-! MNL TODO: add optional arguments for KPP diag shortnames
 subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, units, &
                            cmor_name, cmor_units, cmor_longname, net_surfflux_name, NLT_budget_name, &
                            net_surfflux_longname, tr_desc, OBC_inflow, OBC_in_u, OBC_in_v, ad_x, ad_y, &
