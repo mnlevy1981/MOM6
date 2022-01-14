@@ -10,6 +10,7 @@ use MOM_forcing_type, only : forcing, optics_type
 use MOM_get_input, only : Get_MOM_input
 use MOM_grid, only : ocean_grid_type
 use MOM_hor_index, only : hor_index_type
+use MOM_CVMix_KPP, only : KPP_CS
 use MOM_open_boundary, only : ocean_OBC_type
 use MOM_restart, only : MOM_restart_CS
 use MOM_sponge, only : sponge_CS
@@ -402,7 +403,7 @@ end subroutine call_tracer_set_forcing
 
 !> This subroutine calls all registered tracer column physics subroutines.
 subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, US, tv, optics, CS, &
-                                  debug, use_KPP, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
+                                  debug, KPP_CSp, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),                 intent(in) :: G      !< The ocean's grid structure.
   type(verticalGrid_type),               intent(in) :: GV     !< The ocean's vertical grid structure.
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h_old !< Layer thickness before entrainment
@@ -430,8 +431,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
                                                               !! a previous call to
                                                               !! call_tracer_register.
   logical,                               intent(in) :: debug  !< If true calculate checksums
-  logical,                     optional, intent(in)   :: use_KPP              !< If true, using KPP from CVMix
-  real,                        optional, intent(in)   :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
+  type(KPP_CS),                optional, pointer    :: KPP_CSp  !< KPP control structure
+  real,                        optional, intent(in) :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,                        optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of
                                                               !! the water that can be fluxed out
                                                               !! of the top layer in a timestep [nondim]
@@ -491,7 +492,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_CFC_cap) &
       call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%CFC_cap_CSp, &
-                                     use_KPP=use_KPP, &
+                                     KPP_CSp=KPP_CSp, &
                                      nonLocalTrans=nonLocalTrans, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
@@ -508,7 +509,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
       call pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%pseudo_salt_tracer_CSp, tv, &
                                      debug, &
-                                     use_KPP=use_KPP, &
+                                     KPP_CSp=KPP_CSp, &
                                      nonLocalTrans=nonLocalTrans, &
                                      evap_CFL_limit=evap_CFL_limit, &
                                      minimum_forcing_depth=minimum_forcing_depth)
@@ -558,7 +559,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
     if (CS%use_CFC_cap) &
       call CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%CFC_cap_CSp, &
-                                     use_KPP=use_KPP, &
+                                     KPP_CSp=KPP_CSp, &
                                      nonLocalTrans=nonLocalTrans)
     if (CS%use_MOM_generic_tracer) then
       if (US%QRZ_T_to_W_m2 /= 1.0) call MOM_error(FATAL, "MOM_generic_tracer_column_physics "//&
@@ -571,7 +572,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, Hml, dt, G, GV, 
       call pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, CS%pseudo_salt_tracer_CSp, &
                                      tv, debug, &
-                                     use_KPP=use_KPP, &
+                                     KPP_CSp=KPP_CSp, &
                                      nonLocalTrans=nonLocalTrans)
     if (CS%use_boundary_impulse_tracer) &
       call boundary_impulse_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &

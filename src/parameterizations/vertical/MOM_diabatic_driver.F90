@@ -527,6 +527,7 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
 
   integer :: dir_flag     ! An integer encoding the directions in which to do halo updates.
   logical :: showCallTree ! If true, show the call tree
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, m
 
   integer :: ig, jg      ! global indices for testing testing itide point source (BDM)
@@ -998,9 +999,9 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Tim
   ! For passive tracers, the changes in thickness due to boundary fluxes has yet to be applied
   call call_tracer_column_fns(h_orig, h, ent_s(:,:,1:nz), ent_s(:,:,2:nz+1), fluxes, Hml, dt, &
                               G, GV, US, tv, CS%optics, CS%tracer_flow_CSp, CS%debug, &
-                              use_KPP = CS%use_KPP, &
-                              nonLocalTrans = CS%KPP_NLTscalar, &
-                              evap_CFL_limit = CS%evap_CFL_limit, &
+                              KPP_CSp=CS%KPP_CSp, &
+                              nonLocalTrans=CS%KPP_NLTscalar, &
+                              evap_CFL_limit=CS%evap_CFL_limit, &
                               minimum_forcing_depth=CS%minimum_forcing_depth)
 
   call cpu_clock_end(id_clock_tracers)
@@ -1112,6 +1113,7 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
 
   integer :: dir_flag     ! An integer encoding the directions in which to do halo updates.
   logical :: showCallTree ! If true, show the call tree
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, m
 
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -1506,8 +1508,8 @@ subroutine diabatic_ALE(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_end, 
   ! For passive tracers, the changes in thickness due to boundary fluxes has yet to be applied
   call call_tracer_column_fns(h_orig, h, ent_s(:,:,1:nz), ent_s(:,:,2:nz+1), fluxes, Hml, dt, &
                               G, GV, US, tv, CS%optics, CS%tracer_flow_CSp, CS%debug, &
-                              use_KPP = CS%use_KPP, &
-                              nonLocalTrans = CS%KPP_NLTscalar, &
+                              KPP_CSp=CS%KPP_CSp, &
+                              nonLocalTrans=CS%KPP_NLTscalar, &
                               evap_CFL_limit=CS%evap_CFL_limit, &
                               minimum_forcing_depth=CS%minimum_forcing_depth)
 
@@ -1657,6 +1659,7 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
   integer :: dir_flag     ! An integer encoding the directions in which to do halo updates.
   logical :: showCallTree ! If true, show the call tree
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb, m, halo
 
   is   = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
@@ -2275,8 +2278,8 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
 
     call call_tracer_column_fns(hold, h, eatr, ebtr, fluxes, Hml, dt, G, GV, US, tv, &
                               CS%optics, CS%tracer_flow_CSp, CS%debug, &
-                              use_KPP = CS%use_KPP, &
-                              nonLocalTrans = CS%KPP_NLTscalar)
+                              KPP_CSp=CS%KPP_CSp, &
+                              nonLocalTrans=CS%KPP_NLTscalar)
 
   elseif (CS%double_diffuse) then  ! extra diffusivity for passive tracers
 
@@ -2298,14 +2301,14 @@ subroutine layered_diabatic(u, v, h, tv, Hml, fluxes, visc, ADp, CDp, dt, Time_e
 
     call call_tracer_column_fns(hold, h, eatr, ebtr, fluxes, Hml, dt, G, GV, US, tv, &
                                 CS%optics, CS%tracer_flow_CSp, CS%debug, &
-                                use_KPP = CS%use_KPP, &
-                                nonLocalTrans = CS%KPP_NLTscalar)
+                                KPP_CSp=CS%KPP_CSp, &
+                                nonLocalTrans=CS%KPP_NLTscalar)
 
   else
     call call_tracer_column_fns(hold, h, ea, eb, fluxes, Hml, dt, G, GV, US, tv, &
                                 CS%optics, CS%tracer_flow_CSp, CS%debug, &
-                                use_KPP = CS%use_KPP, &
-                                nonLocalTrans = CS%KPP_NLTscalar)
+                                KPP_CSp=CS%KPP_CSp, &
+                                nonLocalTrans=CS%KPP_NLTscalar)
 
   endif  ! (CS%mix_boundary_tracers)
 

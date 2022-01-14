@@ -10,7 +10,7 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser, only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type, only : forcing
 use MOM_grid, only : ocean_grid_type
-use MOM_CVMix_KPP, only : KPP_NonLocalTransport
+use MOM_CVMix_KPP, only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index, only : hor_index_type
 use MOM_io, only : vardesc, var_desc, query_vardesc
 use MOM_open_boundary, only : ocean_OBC_type
@@ -35,7 +35,6 @@ public pseudo_salt_stock, pseudo_salt_tracer_end
 
 !> The control structure for the pseudo-salt tracer
 type, public :: pseudo_salt_tracer_CS ; private
-  logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
   type(tracer_type), pointer :: tr_ptr !< pointer to tracer inside Tr_reg
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM tracer registry
@@ -91,10 +90,6 @@ function register_pseudo_salt_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
-
-  call get_param(param_file, mdl, "PSEUDOSALT_APPLY_NONLOCAL_TRANSPORT", CS%applyNonLocalTrans, &
-                 "If True, applies the non-local transport to pseudo-salt tracer", &
-                 default=.false.)
 
   allocate(CS%ps(isd:ied,jsd:jed,nz), source=0.0)
   allocate(CS%diff(isd:ied,jsd:jed,nz), source=0.0)
@@ -176,7 +171,7 @@ end subroutine initialize_pseudo_salt_tracer
 
 !> Apply sources, sinks and diapycnal diffusion to the tracers in this package.
 subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, debug, &
-              use_KPP, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
+              KPP_CSp, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -199,7 +194,7 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
                                               !! call to register_pseudo_salt_tracer.
   type(thermo_var_ptrs),   intent(in) :: tv   !< A structure pointing to various thermodynamic variables
   logical,                 intent(in) :: debug !< If true calculate checksums
-  logical,       optional, intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
+  type(KPP_CS),  optional, pointer    :: KPP_CSp  !< KPP control structure
   real,          optional, intent(in)   :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                               !! be fluxed out of the top layer in a timestep [nondim]
@@ -229,12 +224,9 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   endif
 
   ! Compute KPP nonlocal term if necessary
-  if (present(use_KPP) .and. present(nonLocalTrans)) then
-    if (use_KPP) &
-      call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
-                                 fluxes%KPP_salt_flux(:,:), dt, CS%diag, &
-                                 CS%tr_ptr, CS%ps(:,:,:), budget_scale=GV%H_to_kg_m2)
-  endif
+  if (associated(KPP_CSp) .and. present(nonLocalTrans)) &
+    call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, fluxes%KPP_salt_flux(:,:), &
+                               dt, CS%diag, CS%tr_ptr, CS%ps(:,:,:), budget_scale=GV%H_to_kg_m2)
 
   ! This uses applyTracerBoundaryFluxesInOut, usually in ALE mode
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then

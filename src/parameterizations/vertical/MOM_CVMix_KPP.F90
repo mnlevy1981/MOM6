@@ -94,7 +94,7 @@ type, public :: KPP_CS ; private
   logical :: debug                     !< If True, calculate checksums and write debugging information
   character(len=30) :: MatchTechnique  !< Method used in CVMix for setting diffusivity and NLT profile functions
   integer :: NLT_shape                 !< MOM6 over-ride of CVMix NLT shape function
-  logical :: applyNonLocalTrans        !< If True, apply non-local transport to heat and scalars
+  logical :: applyNonLocalTrans        !< If True, apply non-local transport to all tracers
   integer :: n_smooth                  !< Number of times smoothing operator is applied on OBLdepth.
   logical :: deepen_only               !< If true, apply OBLdepth smoothing at a cell only if the OBLdepth gets deeper.
   logical :: KPPzeroDiffusivity        !< If True, will set diffusivity and viscosity from KPP to zero
@@ -225,7 +225,7 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive, Waves)
   if (present(passive)) passive=CS%passiveMode ! This is passed back to the caller so
                                                ! the caller knows to not use KPP output
   call get_param(paramFile, mdl, 'APPLY_NONLOCAL_TRANSPORT', CS%applyNonLocalTrans,  &
-                 'If True, applies the non-local transport to heat and scalars. '//  &
+                 'If True, applies the non-local transport to all tracers. '//  &
                  'If False, calculates the non-local transport and tendencies but '//&
                  'purely for diagnostic purposes.',                                   &
                  default=.not. CS%passiveMode)
@@ -1364,11 +1364,9 @@ subroutine KPP_get_BLD(CS, BLD, G, US, m_to_BLD_units)
 end subroutine KPP_get_BLD
 
 !> Apply KPP non-local transport of surface fluxes for a given tracer
-subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
+subroutine KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, &
                                  dt, diag, tr_ptr, scalar, flux_scale, budget_scale)
-
-  logical,                                    intent(in)    :: applyNonLocalTrans !< if True, apply computed
-                                    !! term to scalar
+  type(KPP_CS),                               intent(in)    :: CS            !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
   type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
@@ -1405,7 +1403,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
 
   ! Only continue if we are applying the nonlocal tendency
   ! or the nonlocal tendency diagnostic has been requested
-  if ((tr_ptr%id_NLT_tendency > 0) .or. (applyNonLocalTrans)) then
+  if ((tr_ptr%id_NLT_tendency > 0) .or. (CS%applyNonLocalTrans)) then
 
     dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux, flux_scale_loc)
@@ -1419,7 +1417,7 @@ subroutine KPP_NonLocalTransport(applyNonLocalTrans, G, GV, h, nonLocalTrans, su
     enddo
 
     !  Update tracer due to non-local redistribution of surface flux
-    if (applyNonLocalTrans) then
+    if (CS%applyNonLocalTrans) then
       !$OMP parallel do default(none) shared(G, GV, dt, scalar, dtracer)
       do k = 1, GV%ke
         do j = G%jsc, G%jec
@@ -1453,7 +1451,6 @@ end subroutine KPP_NonLocalTransport
 
 !> Apply KPP non-local transport of surface fluxes for temperature.
 subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt, tr_ptr, scalar, C_p)
-
   type(KPP_CS),                               intent(in)    :: CS     !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G      !< Ocean grid
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid
@@ -1469,8 +1466,8 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   integer :: i, j, k
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
-  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                             dt, CS%diag, tr_ptr, scalar, budget_scale=C_p * GV%H_to_kg_m2)
+  call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &
+                             tr_ptr, scalar, budget_scale=C_p * GV%H_to_kg_m2)
 
 end subroutine KPP_NonLocalTransport_temp
 
@@ -1478,7 +1475,6 @@ end subroutine KPP_NonLocalTransport_temp
 !> Apply KPP non-local transport of surface fluxes for salinity.
 !> This routine is a useful prototype for other material tracers.
 subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt, tr_ptr, scalar)
-
   type(KPP_CS),                               intent(in)    :: CS            !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
   type(verticalGrid_type),                    intent(in)    :: GV            !< Ocean vertical grid
@@ -1493,8 +1489,8 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   integer :: i, j, k
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
-  call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h, nonLocalTrans, surfFlux, &
-                             dt, CS%diag, tr_ptr, scalar, budget_scale=GV%H_to_kg_m2)
+  call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &
+                             tr_ptr, scalar, budget_scale=GV%H_to_kg_m2)
 
 end subroutine KPP_NonLocalTransport_saln
 

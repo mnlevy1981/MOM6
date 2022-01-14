@@ -10,7 +10,7 @@ use MOM_file_parser,     only : get_param, log_param, log_version, param_file_ty
 use MOM_forcing_type,    only : forcing
 use MOM_hor_index,       only : hor_index_type
 use MOM_grid,            only : ocean_grid_type
-use MOM_CVMix_KPP,       only : KPP_NonLocalTransport
+use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_io,              only : file_exists, MOM_read_data, slasher
 use MOM_io,              only : vardesc, var_desc, query_vardesc, stdout
 use MOM_tracer_registry, only : tracer_type
@@ -53,7 +53,6 @@ type, public :: CFC_cap_CS ; private
   character(len=200) :: IC_file !< The file in which the CFC initial values can
                                 !! be found, or an empty string for internal initilaization.
   logical :: Z_IC_file !< If true, the IC_file is in Z-space.  The default is false.
-  logical :: applyNonLocalTrans !< If true, apply nonlocal terms when using KPP for vertical mixing.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the MOM6 tracer registry
   logical :: tracers_may_reinit !< If true, tracers may be reset via the initialization code
@@ -112,9 +111,6 @@ function register_CFC_cap(HI, GV, param_file, CS, tr_Reg, restart_CS)
   endif
   call get_param(param_file, mdl, "CFC_IC_FILE_IS_Z", CS%Z_IC_file, &
                  "If true, CFC_IC_FILE is in depth space, not layer space", &
-                 default=.false.)
-  call get_param(param_file, mdl, "CFC_APPLY_NONLOCAL_TRANSPORT", CS%applyNonLocalTrans, &
-                 "If True, applies the non-local transport to CFC tracers", &
                  default=.false.)
   call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
                  "If true, tracers may go through the initialization code "//&
@@ -285,8 +281,8 @@ end subroutine init_tracer_CFC
 !> Applies diapycnal diffusion, souces and sinks and any other column
 !! tracer physics to the CFC cap tracers. CFCs are relatively simple,
 !! as they are passive tracers with only a surface flux as a source.
-subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, &
-              use_KPP, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
+subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, KPP_CSp, &
+                                  nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G     !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV    !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -307,7 +303,7 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   type(unit_scale_type),   intent(in) :: US    !< A dimensional unit scaling type
   type(CFC_cap_CS),        pointer    :: CS    !< The control structure returned by a
                                                !! previous call to register_CFC_cap.
-  logical,       optional, intent(in) :: use_KPP !< If true, call KPP_NonLocalTransport()
+  type(KPP_CS),  optional, pointer    :: KPP_CSp  !< KPP control structure
   real,          optional, intent(in) :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                                !! be fluxed out of the top layer in a timestep [nondim]
@@ -336,19 +332,15 @@ subroutine CFC_cap_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, C
   CFC11 => CS%CFC_metadata(1)%conc ; CFC12 => CS%CFC_metadata(2)%conc
 
   ! Compute KPP nonlocal term if necessary
-  if (present(use_KPP) .and. present(nonLocalTrans)) then
-    if (use_KPP) then
-      flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
+  if (associated(KPP_CSp) .and. present(nonLocalTrans)) then
+    flux_scale = 1.0 / (GV%rho0 * US%R_to_kg_m3)
 
-      call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
-                                fluxes%cfc11_flux(:,:), dt, CS%diag, &
-                                CS%CFC_metadata(1)%tr_ptr, &
-                                CS%CFC_metadata(1)%conc(:,:,:), flux_scale = flux_scale)
-      call KPP_NonLocalTransport(CS%applyNonLocalTrans, G, GV, h_old, nonLocalTrans, &
-                                fluxes%cfc12_flux(:,:), dt, CS%diag, &
-                                CS%CFC_metadata(2)%tr_ptr, &
-                                CS%CFC_metadata(2)%conc(:,:,:), flux_scale = flux_scale)
-    endif
+    call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, fluxes%cfc11_flux(:,:), dt, CS%diag, &
+                              CS%CFC_metadata(1)%tr_ptr, CS%CFC_metadata(1)%conc(:,:,:), &
+                              flux_scale=flux_scale)
+    call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, fluxes%cfc12_flux(:,:), dt, CS%diag, &
+                              CS%CFC_metadata(2)%tr_ptr, CS%CFC_metadata(2)%conc(:,:,:), &
+                              flux_scale=flux_scale)
   endif
 
   ! Use a tridiagonal solver to determine the concentrations after the
