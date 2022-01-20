@@ -1382,50 +1382,38 @@ subroutine KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, &
   real, optional,                             intent(in)    :: budget_scale  !< Scale factor for budget term
 
   integer :: i, j, k
-  real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
-  real :: flux_scale_loc, budget_scale_loc
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: dtracer
+  real, dimension(SZI_(G),SZJ_(G)) :: surfFlux_loc
 
   ! term used to scale
   if (present(flux_scale)) then
-    flux_scale_loc = flux_scale
+    do j = G%jsc, G%jec ; do i = G%isc, G%iec
+      surfFlux_loc(i,j) = surfFlux(i,j) * flux_scale
+    enddo ; enddo
   else
-    flux_scale_loc = 1.0
-  endif
-
-  if (present(budget_scale)) then
-    budget_scale_loc = flux_scale_loc * budget_scale
-  else
-    budget_scale_loc = flux_scale_loc
+    surfFlux_loc(:,:) = surfFlux(:,:)
   endif
 
   ! Post surface flux diagnostic
-  if (tr_ptr%id_net_surfflux > 0) call post_data(tr_ptr%id_net_surfflux, surfFlux * flux_scale_loc, diag)
+  if (tr_ptr%id_net_surfflux > 0) call post_data(tr_ptr%id_net_surfflux, surfFlux_loc(:,:), diag)
 
   ! Only continue if we are applying the nonlocal tendency
   ! or the nonlocal tendency diagnostic has been requested
   if ((tr_ptr%id_NLT_tendency > 0) .or. (CS%applyNonLocalTrans)) then
 
     dtracer(:,:,:) = 0.0
-    !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux, flux_scale_loc)
-    do k = 1, GV%ke
-      do j = G%jsc, G%jec
-        do i = G%isc, G%iec
-          dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
-                          ( h(i,j,k) + GV%H_subroundoff ) * surfFlux(i,j) * flux_scale_loc
-        enddo
-      enddo
-    enddo
+    !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux_loc)
+    do k = 1, GV%ke ; do j = G%jsc, G%jec ; do i = G%isc, G%iec
+      dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
+                       ( h(i,j,k) + GV%H_subroundoff ) * surfFlux_loc(i,j)
+    enddo ; enddo ; enddo
 
     !  Update tracer due to non-local redistribution of surface flux
     if (CS%applyNonLocalTrans) then
       !$OMP parallel do default(none) shared(G, GV, dt, scalar, dtracer)
-      do k = 1, GV%ke
-        do j = G%jsc, G%jec
-          do i = G%isc, G%iec
-            scalar(i,j,k) = scalar(i,j,k) + dt * dtracer(i,j,k)
-          enddo
-        enddo
-      enddo
+      do k = 1, GV%ke ; do j = G%jsc, G%jec ; do i = G%isc, G%iec
+        scalar(i,j,k) = scalar(i,j,k) + dt * dtracer(i,j,k)
+      enddo ; enddo ; enddo
     endif
     if (tr_ptr%id_NLT_tendency > 0) call post_data(tr_ptr%id_NLT_tendency, dtracer,  diag)
 
@@ -1433,17 +1421,17 @@ subroutine KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, &
 
 
   if (tr_ptr%id_NLT_budget > 0) then
+    if (present(budget_scale)) then
+      do j = G%jsc, G%jec ; do i = G%isc, G%iec
+        surfFlux_loc(i,j) = surfFlux_loc(i,j) * budget_scale
+      enddo ; enddo
+    endif
     dtracer(:,:,:) = 0.0
-    !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux, budget_scale_loc)
-    do k = 1, GV%ke
-      do j = G%jsc, G%jec
-        do i = G%isc, G%iec
-          dtracer(i,j,k) = (nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1)) * &
-                           surfFlux(i,j) * budget_scale_loc
-        enddo
-      enddo
-    enddo
-    call post_data(tr_ptr%id_NLT_budget, dtracer, diag)
+    !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux_loc)
+    do k = 1, GV%ke ; do j = G%jsc, G%jec ; do i = G%isc, G%iec
+      dtracer(i,j,k) = (nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1)) * surfFlux_loc(i,j)
+    enddo ; enddo ; enddo
+    call post_data(tr_ptr%id_NLT_budget, dtracer(:,:,:), diag)
   endif
 
 end subroutine KPP_NonLocalTransport
@@ -1467,7 +1455,7 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &
-                             tr_ptr, scalar, budget_scale=C_p * GV%H_to_kg_m2)
+                             tr_ptr, scalar, budget_scale=C_p*GV%H_to_kg_m2)
 
 end subroutine KPP_NonLocalTransport_temp
 
