@@ -1401,7 +1401,6 @@ subroutine KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, &
   ! or the nonlocal tendency diagnostic has been requested
   if ((tr_ptr%id_NLT_tendency > 0) .or. (CS%applyNonLocalTrans)) then
 
-    dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(dtracer, nonLocalTrans, h, G, GV, surfFlux_loc)
     do k = 1, GV%ke ; do j = G%jsc, G%jec ; do i = G%isc, G%iec
       dtracer(i,j,k) = ( nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1) ) / &
@@ -1426,7 +1425,6 @@ subroutine KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, &
         surfFlux_loc(i,j) = surfFlux_loc(i,j) * budget_scale
       enddo ; enddo
     endif
-    dtracer(:,:,:) = 0.0
     !$OMP parallel do default(none) shared(G, GV, dtracer, nonLocalTrans, surfFlux_loc)
     do k = 1, GV%ke ; do j = G%jsc, G%jec ; do i = G%isc, G%iec
       dtracer(i,j,k) = (nonLocalTrans(i,j,k) - nonLocalTrans(i,j,k+1)) * surfFlux_loc(i,j)
@@ -1445,14 +1443,11 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h      !< Layer/level thickness [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux  !< Surface flux of scalar
-                                                                      !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
+                                                                         !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
   real,                                       intent(in)    :: dt     !< Time-step [s]
-  type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
+  type(tracer_type), pointer,                 intent(in)    :: tr_ptr    !< tracer_type has diagnostic ids on it
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar !< temperature
   real,                                       intent(in)    :: C_p    !< Seawater specific heat capacity [J kg-1 degC-1]
-
-  integer :: i, j, k
-  real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &
                              tr_ptr, scalar, budget_scale=C_p*GV%H_to_kg_m2)
@@ -1461,7 +1456,6 @@ end subroutine KPP_NonLocalTransport_temp
 
 
 !> Apply KPP non-local transport of surface fluxes for salinity.
-!> This routine is a useful prototype for other material tracers.
 subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt, tr_ptr, scalar)
   type(KPP_CS),                               intent(in)    :: CS            !< Control structure
   type(ocean_grid_type),                      intent(in)    :: G             !< Ocean grid
@@ -1469,13 +1463,10 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of scalar
-                                                                        !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
+                                                                             !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
   type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
   real,                                       intent(in)    :: dt            !< Time-step [s]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Scalar (scalar units [conc])
-
-  integer :: i, j, k
-  real, dimension( SZI_(G), SZJ_(G),SZK_(GV) ) :: dtracer
 
   call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &
                              tr_ptr, scalar, budget_scale=GV%H_to_kg_m2)

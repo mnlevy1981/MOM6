@@ -17,8 +17,7 @@ use MOM_open_boundary, only : ocean_OBC_type
 use MOM_restart, only : query_initialized, MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, sponge_CS
 use MOM_time_manager, only : time_type
-use MOM_tracer_registry, only : register_tracer
-use MOM_tracer_types, only : tracer_registry_type, tracer_type
+use MOM_tracer_registry, only : register_tracer, tracer_registry_type, tracer_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_Z_init, only : tracer_Z_init
 use MOM_unit_scaling, only : unit_scale_type
@@ -224,9 +223,11 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   endif
 
   ! Compute KPP nonlocal term if necessary
-  if (associated(KPP_CSp) .and. present(nonLocalTrans)) &
-    call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, fluxes%KPP_salt_flux(:,:), &
-                               dt, CS%diag, CS%tr_ptr, CS%ps(:,:,:), budget_scale=GV%H_to_kg_m2)
+  if (present(KPP_CSp)) then
+    if (associated(KPP_CSp) .and. present(nonLocalTrans)) &
+      call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, fluxes%KPP_salt_flux(:,:), &
+                                 dt, CS%diag, CS%tr_ptr, CS%ps(:,:,:), budget_scale=GV%H_to_kg_m2)
+  endif
 
   ! This uses applyTracerBoundaryFluxesInOut, usually in ALE mode
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
