@@ -222,7 +222,7 @@ subroutine diag_remap_configure_axes(remap_cs, GV, US, param_file)
   allocate(interfaces(remap_cs%nz+1))
   allocate(layers(remap_cs%nz))
 
-  interfaces(:) = getCoordinateInterfaces(remap_cs%regrid_cs)
+  interfaces(:) = getCoordinateInterfaces(remap_cs%regrid_cs, undo_scaling=.true.)
   layers(:) = 0.5 * ( interfaces(1:remap_cs%nz) + interfaces(2:remap_cs%nz+1) )
 
   remap_cs%interface_axes_id = MOM_diag_axis_init(lowercase(trim(remap_cs%diag_coord_name))//'_i', &
@@ -280,7 +280,7 @@ subroutine diag_remap_update(remap_cs, G, GV, US, h, T, S, eqn_of_state, h_targe
   real, dimension(:,:,:),  intent(in) :: h  !< New thickness [H ~> m or kg m-2]
   real, dimension(:,:,:),  intent(in) :: T  !< New temperatures [degC]
   real, dimension(:,:,:),  intent(in) :: S  !< New salinities [ppt]
-  type(EOS_type),          pointer    :: eqn_of_state !< A pointer to the equation of state
+  type(EOS_type),          intent(in) :: eqn_of_state !< A pointer to the equation of state
   real, dimension(:,:,:),  intent(inout) :: h_target  !< The new diagnostic thicknesses [H ~> m or kg m-2]
 
   ! Local variables

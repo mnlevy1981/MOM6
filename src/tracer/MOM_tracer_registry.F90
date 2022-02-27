@@ -108,9 +108,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   integer,              optional, intent(in)    :: diag_form    !< An integer (1 or 2, 1 by default) indicating the
                                                                 !! character string template to use in
                                                                 !! labeling diagnostics
-  type(MOM_restart_CS), optional, pointer       :: restart_CS   !< A pointer to the restart control structure
-                                                                !! this tracer will be registered for
-                                                                !! restarts if this argument is present
+  type(MOM_restart_CS), optional, intent(inout) :: restart_CS   !< MOM restart control struct
   logical,              optional, intent(in)    :: mandatory    !< If true, this tracer must be read
                                                                 !! from a restart file.
   type(tracer_type),    optional, pointer       :: Tr_out       !< If present, returns pointer into registry
@@ -226,14 +224,13 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   if (present(advection_xy)) then ; if (associated(advection_xy)) Tr%advection_xy => advection_xy ; endif
 
-  if (present(restart_CS)) then ; if (associated(restart_CS)) then
+  if (present(restart_CS)) then
     ! Register this tracer to be read from and written to restart files.
     mand = .true. ; if (present(mandatory)) mand = mandatory
 
     call register_restart_field(tr_ptr, Tr%name, mand, restart_CS, &
                                 longname=Tr%longname, units=Tr%units)
-  endif ; endif
-
+  endif
 end subroutine register_tracer
 
 
@@ -281,6 +278,9 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
   character(len=120) :: var_lname      ! A temporary longname for a diagnostic.
   character(len=120) :: cmor_var_lname ! The temporary CMOR long name for a diagnostic
   character(len=72)  :: cmor_varname ! The temporary CMOR name for a diagnostic
+  real :: conversion ! place-holder while I figure out better way to wrap KPP nonlocal budget
+                     ! conversion factors into this function (salinity doesn't follow same
+                     ! pattern as all the other tracers)
   type(tracer_type), pointer :: Tr=>NULL()
   integer :: i, j, k, is, ie, js, je, nz, m, m2, nTr_in
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
@@ -577,15 +577,20 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
     ! KPP nonlocal term diagnostics
     if (use_KPP) then
       Tr%id_net_surfflux = register_diag_field('ocean_model', Tr%net_surfflux_name, diag%axesT1, Time, &
-          Tr%net_surfflux_longname, trim(units)//' m s-1')
+          Tr%net_surfflux_longname, trim(units)//' m s-1', conversion=GV%H_to_m*US%s_to_T)
       Tr%id_NLT_tendency = register_diag_field('ocean_model', "KPP_NLT_d"//trim(shortnm)//"dt", &
           diag%axesTL, Time, &
           trim(longname)//' tendency due to non-local transport of '//trim(lowercase(flux_longname))//&
-          ', as calculated by [CVMix] KPP', trim(units)//' s-1')
+          ', as calculated by [CVMix] KPP', trim(units)//' s-1', conversion=US%s_to_T)
+      if (Tr%conv_scale == 0.001*GV%H_to_kg_m2) then
+        conversion = GV%H_to_kg_m2
+      else
+        conversion = Tr%conv_scale
+      end if
       Tr%id_NLT_budget = register_diag_field('ocean_model', Tr%NLT_budget_name, &
           diag%axesTL, Time, &
           trim(flux_longname)//' content change due to non-local transport, as calculated by [CVMix] KPP', &
-          conv_units, v_extensive=.true.)
+          conv_units, conversion=conversion*US%s_to_T, v_extensive=.true.)
     endif
 
   endif ; enddo
@@ -754,7 +759,7 @@ subroutine MOM_tracer_chkinv(mesg, G, GV, h, Tr, ntr)
   integer,                                   intent(in) :: ntr  !< number of registered tracers
 
   ! Local variables
-  real :: vol_scale ! The dimensional scaling factor to convert volumes to m3 [m3 H-1 L-2 ~> nondim or m3 kg-1]
+  real :: vol_scale ! The dimensional scaling factor to convert volumes to m3 [m3 H-1 L-2 ~> 1 or m3 kg-1]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: tr_inv ! Volumetric tracer inventory in each cell [conc m3]
   real :: total_inv ! The total amount of tracer [conc m3]
   integer :: is, ie, js, je, nz
