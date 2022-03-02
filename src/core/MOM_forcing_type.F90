@@ -193,8 +193,8 @@ type, public :: forcing
 
   ! CFC-related arrays needed in the MOM_CFC_cap module
   real, pointer, dimension(:,:) :: &
-    cfc11_flux    => NULL(), &  !< flux of cfc_11 into the ocean [CU R Z T-1 kg m-3 ~> mol m-2 s-1]
-    cfc12_flux    => NULL(), &  !< flux of cfc_12 into the ocean [CU R Z T-1 kg m-3 ~> mol m-2 s-1]
+    cfc11_flux    => NULL(), &  !< flux of cfc_11 into the ocean [CU R Z T-1 ~> mol m-2 s-1]
+    cfc12_flux    => NULL(), &  !< flux of cfc_12 into the ocean [CU R Z T-1 ~> mol m-2 s-1]
     ice_fraction  => NULL(), &  !< fraction of sea ice coverage at h-cells, from 0 to 1 [nondim].
     u10_sqr       => NULL()     !< wind magnitude at 10 m squared [L2 T-2 ~> m2 s-2]
 
