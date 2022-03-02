@@ -1461,7 +1461,7 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of salt
-                                                                             !! [ppt H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
+                                                                           !! [ppt H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
   real,                                       intent(in)    :: dt            !< Time-step [T ~> s]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Salinity [ppt]
   type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
