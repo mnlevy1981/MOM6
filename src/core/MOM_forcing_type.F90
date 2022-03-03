@@ -113,7 +113,6 @@ type, public :: forcing
                                !! forcing timestep [H ~> m or kg m-2]
     netMassOut    => NULL(), & !< Net water mass flux out of the ocean integrated over a forcing timestep,
                                !! with negative values for water leaving the ocean [H ~> m or kg m-2]
-    netSalt       => NULL(), & !< Net salt entering the ocean [kgSalt m-2 s-1]
     KPP_salt_flux => NULL()    !< KPP effective salt flux [ppt m s-1]
 
   ! heat associated with water crossing ocean surface
@@ -3556,8 +3555,6 @@ subroutine homogenize_forcing(fluxes, G)
     call homogenize_field_t(fluxes%seaice_melt, G)
     call homogenize_field_t(fluxes%netMassOut, G)
     call homogenize_field_t(fluxes%netMassIn, G)
-    !This was removed and I don't think replaced. Not needed?
-    !call homogenize_field_t(fluxes%netSalt, G)
   endif
 
   if (do_heat) then
