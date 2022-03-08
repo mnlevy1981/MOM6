@@ -1,5 +1,4 @@
-!> Pulls out types previously defined in MOM_tracer_registry
-!! To avoid circular dependencies
+!> This module contains the tracer_type and tracer_registry_type
 module MOM_tracer_types
 
 implicit none ; private
