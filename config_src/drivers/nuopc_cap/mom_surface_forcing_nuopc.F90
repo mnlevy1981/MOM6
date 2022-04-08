@@ -196,8 +196,7 @@ type, public :: ice_ocean_boundary_type
                                                               !! ice-shelves, expressed as a coefficient
                                                               !! for divergence damping, as determined
                                                               !! outside of the ocean model in [m3/s]
-  real, pointer, dimension(:,:)   :: ustk0           => NULL() !< Surface Stokes drift, zonal [m/s]
-  real, pointer, dimension(:,:)   :: vstk0           => NULL() !< Surface Stokes drift, meridional [m/s]
+  real, pointer, dimension(:,:)   :: lamult          => NULL() !< Langmuir enhancement factor [nondim]
   real, pointer, dimension(:)     :: stk_wavenumbers => NULL() !< The central wave number of Stokes bands [rad/m]
   real, pointer, dimension(:,:,:) :: ustkb           => NULL() !< Stokes Drift spectrum, zonal [m/s]
                                                                !! Horizontal  - u points
@@ -346,7 +345,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
 
-    call marbl_forcing_type_init(isd,ied,jsd,jed,fluxes%MARBL_forcing)
+    call marbl_forcing_type_init(isd,ied,jsd,jed,fluxes%MARBL_forcing, CS%marbl_forcing_CSp)
 
   endif   ! endif for allocation and initialization
 
@@ -554,23 +553,29 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     fluxes%sw(i,j) = fluxes%sw_vis_dir(i,j) + fluxes%sw_vis_dif(i,j) + &
                      fluxes%sw_nir_dir(i,j) + fluxes%sw_nir_dif(i,j)
 
+    ! sea ice fraction [nondim]
+    if (associated(IOB%ice_fraction) .and. associated(fluxes%ice_fraction)) &
+         fluxes%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
+    ! 10-m wind speed squared [m2/s2]
+    if (associated(IOB%u10_sqr) .and. associated(fluxes%u10_sqr)) &
+         fluxes%u10_sqr(i,j) = US%m_to_L**2 * US%T_to_s**2 * G%mask2dT(i,j) * IOB%u10_sqr(i-i0,j-j0)
+
   enddo ; enddo
 
-<<<<<<< HEAD
   ! Copy MARBL-specific IOB fields into fluxes%MARBL_forcing
   call convert_marbl_IOB_to_forcings(IOB%MARBL_IOB, Time, G, US, i0, j0, fluxes%MARBL_forcing, CS%marbl_forcing_CSp)
-=======
-  if (CS%use_CFC) then
-    do j=js,je ; do i=is,ie
-      ! sea ice fraction [nondim]
-      if (associated(IOB%ice_fraction)) &
-           fluxes%ice_fraction(i,j) = G%mask2dT(i,j) * IOB%ice_fraction(i-i0,j-j0)
-      ! 10-m wind speed squared [m2/s2]
-      if (associated(IOB%u10_sqr)) &
-           fluxes%u10_sqr(i,j) = US%m_to_L**2 * US%T_to_s**2 * G%mask2dT(i,j) * IOB%u10_sqr(i-i0,j-j0)
+
+  ! wave to ocean coupling
+  if ( associated(IOB%lamult)) then
+    do j=js,je; do i=is,ie
+      if (IOB%ice_fraction(i-i0,j-j0) <= 0.05 ) then
+        fluxes%lamult(i,j) = IOB%lamult(i-i0,j-j0)
+      else
+        fluxes%lamult(i,j) = 1.0
+      endif
     enddo ; enddo
+    call pass_var(fluxes%lamult, G%domain, halo=1 )
   endif
->>>>>>> dev/ncar
 
   ! applied surface pressure from atmosphere and cryosphere
   if (associated(IOB%p)) then
@@ -590,7 +595,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! CFCs
   if (CS%use_CFC) then
-    call CFC_cap_fluxes(fluxes, sfc_state, G, CS%Rho0, Time, CS%id_cfc11_atm, CS%id_cfc11_atm)
+    call CFC_cap_fluxes(fluxes, sfc_state, G, US, CS%Rho0, Time, CS%id_cfc11_atm, CS%id_cfc11_atm)
   endif
 
   if (associated(IOB%salt_flux)) then
@@ -731,8 +736,11 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
   if (associated(forces%rigidity_ice_u)) forces%rigidity_ice_u(:,:) = 0.0
   if (associated(forces%rigidity_ice_v)) forces%rigidity_ice_v(:,:) = 0.0
 
-  if ( associated(IOB%ustkb) ) &
+  if ( associated(IOB%lamult) ) then
+    call allocate_mech_forcing(G, forces, waves=.true., num_stk_bands=0)
+  elseif ( associated(IOB%ustkb) ) then
     call allocate_mech_forcing(G, forces, waves=.true., num_stk_bands=IOB%num_stk_bands)
+  endif
 
   ! applied surface pressure from atmosphere and cryosphere
   if (CS%use_limited_P_SSH) then
@@ -895,17 +903,13 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
   if ( associated(IOB%ustkb) ) then
 
     forces%stk_wavenumbers(:) = IOB%stk_wavenumbers
-    do j=js,je; do i=is,ie
-      forces%ustk0(i,j) = IOB%ustk0(i-I0,j-J0) ! How to be careful here that the domains are right?
-      forces%vstk0(i,j) = IOB%vstk0(i-I0,j-J0)
-    enddo ; enddo
-    call pass_vector(forces%ustk0,forces%vstk0, G%domain )
     do istk = 1,IOB%num_stk_bands
       do j=js,je; do i=is,ie
         forces%ustkb(i,j,istk) = IOB%ustkb(i-I0,j-J0,istk)
         forces%vstkb(i,j,istk) = IOB%vstkb(i-I0,j-J0,istk)
       enddo; enddo
-      call pass_vector(forces%ustkb(:,:,istk),forces%vstkb(:,:,istk), G%domain )
+      call pass_var(forces%ustkb(:,:,istk), G%domain )
+      call pass_var(forces%vstkb(:,:,istk), G%domain )
     enddo
   endif
 
@@ -1084,7 +1088,7 @@ subroutine forcing_save_restart(CS, G, Time, directory, time_stamped, &
 end subroutine forcing_save_restart
 
 !> Initialize the surface forcing, including setting parameters and allocating permanent memory.
-subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt, restore_temp)
+subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt, restore_temp, use_waves)
   type(time_type),          intent(in)    :: Time !< The current model time
   type(ocean_grid_type),    intent(in)    :: G    !< The ocean's grid structure
   type(unit_scale_type),    intent(in)    :: US   !< A dimensional unit scaling type
@@ -1097,6 +1101,8 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                                                   !! restoring will be applied in this model.
   logical, optional,        intent(in)    :: restore_temp !< If present and true surface temperature
                                                   !! restoring will be applied in this model.
+  logical, optional,        intent(in)    :: use_waves !< If present and true, use waves and activate
+                                                  !! the corresponding wave forcing diagnostics
 
   ! Local variables
   real :: utide  ! The RMS tidal velocity [Z T-1 ~> m s-1].
@@ -1368,7 +1374,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                  "as seen by MOM6.", default=.false.)
 
   call register_forcing_type_diags(Time, diag, US, CS%use_temperature, CS%handles, &
-                                   use_berg_fluxes=iceberg_flux_diags, use_cfcs=CS%use_CFC)
+                                   use_berg_fluxes=iceberg_flux_diags, use_waves=use_waves, use_cfcs=CS%use_CFC)
 
   call get_param(param_file, mdl, "ALLOW_FLUX_ADJUSTMENTS", CS%allow_flux_adjustments, &
                  "If true, allows flux adjustments to specified via the "//&
@@ -1413,7 +1419,9 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
                    "internal BC generation (TODO).", default=" ", do_not_log=.true.)
     if ((len_trim(CS%CFC_BC_file) > 0) .and. (scan(CS%CFC_BC_file,'/') == 0)) then
       ! Add the directory if CFC_BC_file is not already a complete path.
-      CS%CFC_BC_file = trim(slasher(CS%inputdir))//trim(CS%CFC_BC_file)
+      CS%CFC_BC_file = trim(CS%inputdir) // trim(CS%CFC_BC_file)
+    endif
+    if (len_trim(CS%CFC_BC_file) > 0) then
       call get_param(param_file, mdl, "CFC11_VARIABLE", CS%cfc11_var_name, &
                    "The name of the variable representing CFC-11 in  "//&
                    "CFC_BC_FILE.", default="CFC_11", do_not_log=.true.)

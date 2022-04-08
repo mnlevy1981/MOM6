@@ -82,9 +82,10 @@ type, public :: tracer_type
   real, dimension(:,:,:), pointer :: advection_xy   => NULL() !< convergence of lateral advective tracer fluxes
                                                               !! [conc H T-1 ~> conc m s-1 or conc kg m-2 s-1]
 !  real, dimension(:,:,:), pointer :: diff_cont_xy   => NULL() !< convergence of lateral diffusive tracer fluxes
-!                                                              !! [conc H s-1 ~> conc m s-1 or conc kg m-2 s-1]
+!                                                              !! [conc H T-1 ~> conc m s-1 or conc kg m-2 s-1]
 !  real, dimension(:,:,:), pointer :: diff_conc_xy   => NULL() !< convergence of lateral diffusive tracer fluxes
-!                                                              !! expressed as a change in concentration [conc s-1]
+!                                                              !! expressed as a change in concentration
+!                                                              !! [conc T-1 ~> conc s-1]
   real, dimension(:,:,:), pointer :: t_prev         => NULL() !< tracer concentration array at a previous
                                                               !! timestep used for diagnostics [conc]
   real, dimension(:,:,:), pointer :: Trxh_prev      => NULL() !< layer integrated tracer concentration array
@@ -218,9 +219,7 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
   integer,              optional, intent(in)    :: diag_form    !< An integer (1 or 2, 1 by default) indicating the
                                                                 !! character string template to use in
                                                                 !! labeling diagnostics
-  type(MOM_restart_CS), optional, pointer       :: restart_CS   !< A pointer to the restart control structure
-                                                                !! this tracer will be registered for
-                                                                !! restarts if this argument is present
+  type(MOM_restart_CS), optional, intent(inout) :: restart_CS   !< MOM restart control struct
   logical,              optional, intent(in)    :: mandatory    !< If true, this tracer must be read
                                                                 !! from a restart file.
 
@@ -318,14 +317,13 @@ subroutine register_tracer(tr_ptr, Reg, param_file, HI, GV, name, longname, unit
 
   if (present(advection_xy)) then ; if (associated(advection_xy)) Tr%advection_xy => advection_xy ; endif
 
-  if (present(restart_CS)) then ; if (associated(restart_CS)) then
+  if (present(restart_CS)) then
     ! Register this tracer to be read from and written to restart files.
     mand = .true. ; if (present(mandatory)) mand = mandatory
 
     call register_restart_field(tr_ptr, Tr%name, mand, restart_CS, &
                                 longname=Tr%longname, units=Tr%units)
-  endif ; endif
-
+  endif
 end subroutine register_tracer
 
 
@@ -429,7 +427,7 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE)
           trim(flux_units), v_extensive=.true., y_cell_method='sum', &
           conversion=(US%L_to_m**2)*Tr%flux_scale*US%s_to_T)
       Tr%id_dfy = register_diag_field("ocean_model", trim(shortnm)//"_dfy", &
-          diag%axesCvL, Time, trim(flux_longname)//" diffusive zonal flux" , &
+          diag%axesCvL, Time, trim(flux_longname)//" diffusive meridional flux" , &
           trim(flux_units), v_extensive=.true., x_cell_method='sum', &
           conversion=(US%L_to_m**2)*Tr%flux_scale*US%s_to_T)
       Tr%id_lbd_dfx = register_diag_field("ocean_model", trim(shortnm)//"_lbd_diffx", &
@@ -889,7 +887,7 @@ subroutine MOM_tracer_chkinv(mesg, G, GV, h, Tr, ntr)
   integer,                                   intent(in) :: ntr  !< number of registered tracers
 
   ! Local variables
-  real :: vol_scale ! The dimensional scaling factor to convert volumes to m3 [m3 H-1 L-2 ~> nondim or m3 kg-1]
+  real :: vol_scale ! The dimensional scaling factor to convert volumes to m3 [m3 H-1 L-2 ~> 1 or m3 kg-1]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: tr_inv ! Volumetric tracer inventory in each cell [conc m3]
   real :: total_inv ! The total amount of tracer [conc m3]
   integer :: is, ie, js, je, nz

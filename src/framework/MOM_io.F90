@@ -4,15 +4,17 @@ module MOM_io
 ! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_array_transform,  only : allocate_rotated_array, rotate_array
+use MOM_array_transform,  only : rotate_array_pair, rotate_vector
 use MOM_domains,          only : MOM_domain_type, domain1D, broadcast, get_domain_components
-use MOM_domains,          only : rescale_comp_data, AGRID, BGRID_NE, CGRID_NE
+use MOM_domains,          only : rescale_comp_data, num_PEs, AGRID, BGRID_NE, CGRID_NE
 use MOM_dyn_horgrid,      only : dyn_horgrid_type
 use MOM_ensemble_manager, only : get_ensemble_id
 use MOM_error_handler,    only : MOM_error, NOTE, FATAL, WARNING, is_root_PE
 use MOM_file_parser,      only : log_version, param_file_type
 use MOM_grid,             only : ocean_grid_type
-use MOM_io_infra,         only : MOM_read_data, MOM_read_vector, read_field_chksum
-use MOM_io_infra,         only : read_data=>MOM_read_data ! read_data will be removed soon.
+use MOM_io_infra,         only : read_field, read_vector
+use MOM_io_infra,         only : read_data => read_field ! Deprecated
+use MOM_io_infra,         only : read_field_chksum
 use MOM_io_infra,         only : file_type, file_exists, get_file_info, get_file_fields
 use MOM_io_infra,         only : open_file, open_ASCII_file, close_file, flush_file, file_is_open
 use MOM_io_infra,         only : get_field_size, fieldtype, field_exists, get_field_atts
@@ -49,6 +51,8 @@ public :: MOM_read_data, MOM_read_vector, read_field_chksum
 public :: slasher, write_field, write_version_number
 public :: io_infra_init, io_infra_end
 public :: stdout_if_root
+public :: get_var_axes_info
+public :: get_axis_info
 ! This is used to set up information descibing non-domain-decomposed axes.
 public :: axis_info, set_axis_info, delete_axis_info
 ! This is used to set up global file attributes
@@ -64,6 +68,24 @@ public :: APPEND_FILE, OVERWRITE_FILE, READONLY_FILE, WRITEONLY_FILE
 !> These encoding constants are used to indicate the discretization position of a variable
 public :: CENTER, CORNER, NORTH_FACE, EAST_FACE
 
+!> Read a field from file using the infrastructure I/O.
+interface MOM_read_data
+  module procedure MOM_read_data_0d
+  module procedure MOM_read_data_0d_int
+  module procedure MOM_read_data_1d
+  module procedure MOM_read_data_1d_int
+  module procedure MOM_read_data_2d
+  module procedure MOM_read_data_2d_region
+  module procedure MOM_read_data_3d
+  module procedure MOM_read_data_4d
+end interface MOM_read_data
+
+!> Read a vector from file using the infrastructure I/O.
+interface MOM_read_vector
+  module procedure MOM_read_vector_2d
+  module procedure MOM_read_vector_3d
+end interface MOM_read_vector
+
 !> Write a registered field to an output file, potentially with rotation
 interface MOM_write_field
   module procedure MOM_write_field_4d
@@ -78,6 +100,7 @@ end interface MOM_write_field
 interface read_variable
   module procedure read_variable_0d, read_variable_0d_int
   module procedure read_variable_1d, read_variable_1d_int
+  module procedure read_variable_2d
 end interface read_variable
 
 !> Read a global or variable attribute from a named netCDF file using netCDF calls
@@ -215,6 +238,8 @@ subroutine create_file(IO_handle, filename, vars, novars, fields, threading, tim
     isg = dG%isg ; ieg = dG%ieg ; jsg = dG%jsg ; jeg = dG%jeg
     IsgB = dG%IsgB ; IegB = dG%IegB ; JsgB = dG%JsgB ; JegB = dG%JegB
   endif
+
+  if (domain_set .and. (num_PEs() == 1)) thread = SINGLE_FILE
 
   one_file = .true.
   if (domain_set) one_file = (thread == SINGLE_FILE)
@@ -864,6 +889,136 @@ subroutine read_variable_1d_int(filename, varname, var, ncid_in)
 
   call broadcast(var, size(var), blocking=.true.)
 end subroutine read_variable_1d_int
+
+!> Read a 2d array from a netCDF input file and save to a variable.
+!!
+!! Start and nread lenths may exceed var rank.  This allows for reading slices
+!! of larger arrays.
+!!
+!! Previous versions of the model required a time axis on IO fields.  This
+!! constraint was dropped in later versions.  As a result, versions both with
+!! and without a time axis now exist.  In order to support all such versions,
+!! we use a reshaped version of start and nread in order to read the variable
+!! as it exists in the file.
+!!
+!! Certain constraints are still applied to start and nread in order to ensure
+!! that varname is a valid 2d array, or contains valid 2d slices.
+!!
+!! I/O occurs only on the root PE, and data is broadcast to other ranks.
+!! Due to potentially large memory communication and storage, this subroutine
+!! should only be used when domain-decomposition is unavaialable.
+subroutine read_variable_2d(filename, varname, var, start, nread, ncid_in)
+  character(len=*), intent(in) :: filename  !< Name of file to be read
+  character(len=*), intent(in) :: varname   !< Name of variable to be read
+  real, intent(out)            :: var(:,:)  !< Output array of variable
+  integer, optional, intent(in) :: start(:) !< Starting index on each axis.
+  integer, optional, intent(in) :: nread(:) !< Number of values to be read along each axis
+  integer, optional, intent(in) :: ncid_in  !< netCDF ID of an opened file.
+              !! If absent, the file is opened and closed within this routine.
+
+  integer :: ncid, varid
+  integer :: field_ndims, dim_len
+  integer, allocatable :: field_dimids(:), field_shape(:)
+  integer, allocatable :: field_start(:), field_nread(:)
+  integer :: i, rc
+  character(len=*), parameter :: hdr = "read_variable_2d: "
+  character(len=128) :: msg
+
+  ! Validate shape of start and nread
+  if (present(start)) then
+    if (size(start) < 2) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " start must have at least two dimensions.")
+  endif
+
+  if (present(nread)) then
+    if (size(nread) < 2) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " nread must have at least two dimensions.")
+
+    if (any(nread(3:) > 1)) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " nread may only read a single level in higher dimensions.")
+  endif
+
+  ! Since start and nread may be reshaped, we cannot rely on netCDF to ensure
+  ! that their lengths are equivalent, and must do it here.
+  if (present(start) .and. present(nread)) then
+    if (size(start) /= size(nread)) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+        // " start and nread must have the same length.")
+  endif
+
+  ! Open and read `varname` from `filename`
+  if (is_root_pe()) then
+    if (present(ncid_in)) then
+      ncid = ncid_in
+    else
+      call open_file_to_Read(filename, ncid)
+    endif
+
+    call get_varid(varname, ncid, filename, varid, match_case=.false.)
+    if (varid < 0) call MOM_error(FATAL, "Unable to get netCDF varid for "//trim(varname)//&
+                                         " in "//trim(filename))
+
+    ! Query for the dimensionality of the input field
+    rc = nf90_inquire_variable(ncid, varid, ndims=field_ndims)
+    if (rc /= NF90_NOERR) call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) //&
+          ": Difficulties reading "//trim(varname)//" from "//trim(filename))
+
+    ! Confirm that field is at least 2d
+    if (field_ndims < 2) &
+      call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) // " " // &
+          trim(varname) // " from " // trim(filename) // " is not a 2D field.")
+
+    ! If start and nread are present, then reshape them to match field dims
+    if (present(start) .or. present(nread)) then
+      allocate(field_shape(field_ndims))
+      allocate(field_dimids(field_ndims))
+
+      rc = nf90_inquire_variable(ncid, varid, dimids=field_dimids)
+      if (rc /= NF90_NOERR) call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) //&
+            ": Difficulties reading "//trim(varname)//" from "//trim(filename))
+
+      do i = 1, field_ndims
+        rc = nf90_inquire_dimension(ncid, field_dimids(i), len=dim_len)
+        if (rc /= NF90_NOERR) &
+          call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) &
+              // ": Difficulties reading dimensions from " // trim(filename))
+        field_shape(i) = dim_len
+      enddo
+
+      ! Reshape start(:) and nreads(:) in case ranks differ
+      allocate(field_start(field_ndims))
+      field_start(:) = 1
+      if (present(start)) then
+        dim_len = min(size(start), size(field_start))
+        field_start(:dim_len) = start(:dim_len)
+      endif
+
+      allocate(field_nread(field_ndims))
+      field_nread(:2) = field_shape(:2)
+      field_nread(3:) = 1
+      if (present(nread)) field_shape(:2) = nread(:2)
+
+      rc = nf90_get_var(ncid, varid, var, field_start, field_nread)
+
+      deallocate(field_start)
+      deallocate(field_nread)
+      deallocate(field_shape)
+      deallocate(field_dimids)
+    else
+      rc = nf90_get_var(ncid, varid, var)
+    endif
+
+    if (rc /= NF90_NOERR) call MOM_error(FATAL, hdr // trim(nf90_strerror(rc)) //&
+          " Difficulties reading "//trim(varname)//" from "//trim(filename))
+
+    if (.not.present(ncid_in)) call close_file_to_read(ncid, filename)
+  endif
+
+  call broadcast(var, size(var), blocking=.true.)
+end subroutine read_variable_2d
 
 !> Read a character-string global or variable attribute
 subroutine read_attribute_str(filename, attname, att_val, varname, found, all_read, ncid_in)
@@ -1520,6 +1675,32 @@ subroutine delete_axis_info(axes)
   enddo
 end subroutine delete_axis_info
 
+
+!> Retrieve the information from an axis_info type.
+subroutine get_axis_info(axis,name,longname,units,cartesian,ax_size,ax_data)
+  type(axis_info), intent(in) :: axis                               !< An axis type
+  character(len=*), intent(out), optional    :: name                !< The axis name.
+  character(len=*), intent(out), optional    :: longname            !< The axis longname.
+  character(len=*), intent(out), optional    :: units               !< The axis units.
+  character(len=*), intent(out), optional    :: cartesian           !< The cartesian attribute
+                                                                    !! of the axis [X,Y,Z,T].
+  integer,          intent(out), optional   :: ax_size              !< The size of the axis.
+  real, optional, allocatable, dimension(:), intent(out) :: ax_data !< The axis label data.
+
+  if (present(ax_data)) then
+    if (allocated(ax_data)) deallocate(ax_data)
+    allocate(ax_data(axis%ax_size))
+    ax_data(:) = axis%ax_data
+  endif
+
+  if (present(name)) name = axis%name
+  if (present(longname)) longname = axis%longname
+  if (present(units)) units = axis%units
+  if (present(cartesian)) cartesian = axis%cartesian
+  if (present(ax_size)) ax_size = axis%ax_size
+
+end subroutine get_axis_info
+
 !> Store information that can be used to create an attribute in a subsequent call to create_file.
 subroutine set_attribute_info(attribute, name, str_value)
   type(attribute_info), intent(inout) :: attribute !< A type with information about a named attribute
@@ -1617,6 +1798,293 @@ subroutine query_vardesc(vd, name, units, longname, hor_grid, z_grid, t_grid, &
   endif
 
 end subroutine query_vardesc
+
+
+!> Read a scalar from file using infrastructure I/O.
+subroutine MOM_read_data_0d(filename, fieldname, data, timelevel, scale, MOM_Domain, &
+                            global_file, file_may_be_4d)
+  character(len=*), intent(in)  :: filename     !< Input filename
+  character(len=*), intent(in)  :: fieldname    !< Field variable name
+  real, intent(inout)           :: data         !< Field value
+  integer, optional, intent(in) :: timelevel    !< Time level to read in file
+  real, optional, intent(in)    :: scale        !< Rescale factor
+  type(MOM_domain_type), optional, intent(in) :: MOM_Domain !< Model domain decomposition
+  logical, optional, intent(in) :: global_file    !< If true, read from a single file
+  logical, optional, intent(in) :: file_may_be_4d !< If true, fields may be stored
+                                                  !! as 4d arrays in the file.
+
+  call read_field(filename, fieldname, data, &
+    timelevel=timelevel, scale=scale, MOM_Domain=MOM_Domain, &
+    global_file=global_file, file_may_be_4d=file_may_be_4d &
+  )
+end subroutine MOM_read_data_0d
+
+
+!> Read a scalar integer from file using infrastructure I/O.
+subroutine MOM_read_data_0d_int(filename, fieldname, data, timelevel)
+  character(len=*), intent(in) :: filename    !< Input filename
+  character(len=*), intent(in) :: fieldname   !< Field variable name
+  integer, intent(inout) :: data              !< Field value
+  integer, optional, intent(in) :: timelevel  !< Time level to read in file
+
+  call read_field(filename, fieldname, data, timelevel=timelevel)
+end subroutine MOM_read_data_0d_int
+
+
+!> Read a 1d array from file using infrastructure I/O.
+subroutine MOM_read_data_1d(filename, fieldname, data, timelevel, scale, MOM_Domain, &
+                            global_file, file_may_be_4d)
+  character(len=*), intent(in)  :: filename   !< Input filename
+  character(len=*), intent(in)  :: fieldname  !< Field variable name
+  real, dimension(:), intent(inout) :: data   !< Field value
+  integer, optional, intent(in) :: timelevel  !< Time level to read in file
+  real, optional, intent(in)    :: scale      !< Rescale factor
+  type(MOM_domain_type), optional, intent(in) :: MOM_Domain !< Model domain decomposition
+  logical, optional, intent(in) :: global_file    !< If true, read from a single file
+  logical, optional, intent(in) :: file_may_be_4d !< If true, fields may be stored
+                                                  !! as 4d arrays in the file.
+
+  call read_field(filename, fieldname, data, &
+    timelevel=timelevel, scale=scale, MOM_Domain=MOM_Domain, &
+    global_file=global_file, file_may_be_4d=file_may_be_4d &
+  )
+end subroutine MOM_read_data_1d
+
+
+!> Read a 1d integer array from file using infrastructure I/O.
+subroutine MOM_read_data_1d_int(filename, fieldname, data, timelevel)
+  character(len=*), intent(in) :: filename    !< Input filename
+  character(len=*), intent(in) :: fieldname   !< Field variable name
+  integer, dimension(:), intent(inout) :: data  !< Field value
+  integer, optional, intent(in) :: timelevel  !< Time level to read in file
+
+  call read_field(filename, fieldname, data, timelevel=timelevel)
+end subroutine MOM_read_data_1d_int
+
+
+!> Read a 2d array from file using infrastructure I/O.
+subroutine MOM_read_data_2d(filename, fieldname, data, MOM_Domain, &
+                            timelevel, position, scale, global_file, file_may_be_4d)
+  character(len=*), intent(in)  :: filename  !< Input filename
+  character(len=*), intent(in)  :: fieldname !< Field variable name
+  real, dimension(:,:), intent(inout) :: data   !< Field value
+  type(MOM_domain_type), intent(in) :: MOM_Domain !< Model domain decomposition
+  integer, optional, intent(in) :: timelevel !< Time level to read in file
+  integer, optional, intent(in) :: position  !< Grid positioning flag
+  real, optional, intent(in)    :: scale     !< Rescale factor
+  logical, optional, intent(in) :: global_file    !< If true, read from a single file
+  logical, optional, intent(in) :: file_may_be_4d !< If true, fields may be stored
+                                                  !! as 4d arrays in the file.
+
+  integer :: turns    ! Number of quarter-turns from input to model grid
+  real, allocatable :: data_in(:,:)  ! Field array on the input grid
+
+  turns = MOM_domain%turns
+  if (turns == 0) then
+    call read_field(filename, fieldname, data, MOM_Domain, &
+      timelevel=timelevel, position=position, scale=scale, &
+      global_file=global_file, file_may_be_4d=file_may_be_4d &
+    )
+  else
+    call allocate_rotated_array(data, [1,1], -turns, data_in)
+    call read_field(filename, fieldname, data_in, MOM_Domain%domain_in, &
+      timelevel=timelevel, position=position, scale=scale, &
+      global_file=global_file, file_may_be_4d=file_may_be_4d &
+    )
+    call rotate_array(data_in, turns, data)
+    deallocate(data_in)
+  endif
+end subroutine MOM_read_data_2d
+
+
+!> Read a 2d region array from file using infrastructure I/O.
+subroutine MOM_read_data_2d_region(filename, fieldname, data, start, nread, MOM_domain, &
+                                   no_domain, scale, turns)
+  character(len=*), intent(in)  :: filename   !< Input filename
+  character(len=*), intent(in)  :: fieldname  !< Field variable name
+  real, dimension(:,:), intent(inout) :: data !< Field value
+  integer, dimension(:), intent(in) :: start  !< Starting index for each axis.
+                                              !! In 2d, start(3:4) must be 1.
+  integer, dimension(:), intent(in) :: nread  !< Number of values to read along each axis.
+                                              !! In 2d, nread(3:4) must be 1.
+  type(MOM_domain_type), optional, intent(in) :: MOM_Domain !< Model domain decomposition
+  logical, optional, intent(in) :: no_domain  !< If true, field does not use
+                                              !! domain decomposion.
+  real, optional, intent(in)    :: scale      !< Rescale factor
+  integer, optional, intent(in) :: turns      !< Number of quarter turns from
+                                              !! input to model grid
+
+  integer :: qturns                   ! Number of quarter turns
+  real, allocatable :: data_in(:,:)   ! Field array on the input grid
+
+  qturns = 0
+  if (present(turns)) qturns = modulo(turns, 4)
+
+  if (qturns == 0) then
+    call read_field(filename, fieldname, data, start, nread, &
+      MOM_Domain=MOM_Domain, no_domain=no_domain, scale=scale &
+    )
+  else
+    call allocate_rotated_array(data, [1,1], -qturns, data_in)
+    call read_field(filename, fieldname, data_in, start, nread, &
+      MOM_Domain=MOM_Domain%domain_in, no_domain=no_domain, scale=scale &
+    )
+    call rotate_array(data_in, qturns, data)
+    deallocate(data_in)
+  endif
+end subroutine MOM_read_data_2d_region
+
+
+!> Read a 3d array from file using infrastructure I/O.
+subroutine MOM_read_data_3d(filename, fieldname, data, MOM_Domain, &
+                            timelevel, position, scale, global_file, file_may_be_4d)
+  character(len=*), intent(in)  :: filename     !< Input filename
+  character(len=*), intent(in)  :: fieldname    !< Field variable name
+  real, dimension(:,:,:), intent(inout) :: data !< Field value
+  type(MOM_domain_type), intent(in) :: MOM_Domain !< Model domain decomposition
+  integer, optional, intent(in) :: timelevel    !< Time level to read in file
+  integer, optional, intent(in) :: position     !< Grid positioning flag
+  real, optional, intent(in)    :: scale        !< Rescale factor
+  logical, optional, intent(in) :: global_file  !< If true, read from a single file
+  logical, optional, intent(in) :: file_may_be_4d !< If true, fields may be stored
+                                                  !! as 4d arrays in the file.
+
+  integer :: turns    ! Number of quarter-turns from input to model grid
+  real, allocatable :: data_in(:,:,:)  ! Field array on the input grid
+
+  turns = MOM_domain%turns
+  if (turns == 0) then
+    call read_field(filename, fieldname, data, MOM_Domain, &
+      timelevel=timelevel, position=position, scale=scale, &
+      global_file=global_file, file_may_be_4d=file_may_be_4d &
+    )
+  else
+    call allocate_rotated_array(data, [1,1,1], -turns, data_in)
+    call read_field(filename, fieldname, data_in, MOM_Domain%domain_in, &
+      timelevel=timelevel, position=position, scale=scale, &
+      global_file=global_file, file_may_be_4d=file_may_be_4d &
+    )
+    call rotate_array(data_in, turns, data)
+    deallocate(data_in)
+  endif
+end subroutine MOM_read_data_3d
+
+
+!> Read a 4d array from file using infrastructure I/O.
+subroutine MOM_read_data_4d(filename, fieldname, data, MOM_Domain, &
+                            timelevel, position, scale, global_file)
+  character(len=*), intent(in) :: filename      !< Input filename
+  character(len=*), intent(in) :: fieldname     !< Field variable name
+  real, dimension(:,:,:,:), intent(inout) :: data !< Field value
+  type(MOM_domain_type), intent(in) :: MOM_Domain !< Model domain decomposition
+  integer, optional, intent(in) :: timelevel    !< Time level to read in file
+  integer, optional, intent(in) :: position     !< Grid positioning flag
+  real, optional, intent(in)    :: scale        !< Rescale factor
+  logical, optional, intent(in) :: global_file  !< If true, read from a single file
+
+  integer :: turns    ! Number of quarter-turns from input to model grid
+  real, allocatable :: data_in(:,:,:,:)  ! Field array on the input grid
+
+  turns = MOM_domain%turns
+
+  if (turns == 0) then
+    call read_field(filename, fieldname, data, MOM_Domain, &
+      timelevel=timelevel, position=position, scale=scale, &
+      global_file=global_file &
+    )
+  else
+    ! Read field along the input grid and rotate to the model grid
+    call allocate_rotated_array(data, [1,1,1,1], -turns, data_in)
+    call read_field(filename, fieldname, data_in, MOM_Domain%domain_in, &
+      timelevel=timelevel, position=position, scale=scale, &
+      global_file=global_file &
+    )
+    call rotate_array(data_in, turns, data)
+    deallocate(data_in)
+  endif
+end subroutine MOM_read_data_4d
+
+
+!> Read a 2d vector tuple from file using infrastructure I/O.
+subroutine MOM_read_vector_2d(filename, u_fieldname, v_fieldname, u_data, v_data, MOM_Domain, &
+                              timelevel, stagger, scalar_pair, scale)
+  character(len=*), intent(in) :: filename      !< Input filename
+  character(len=*), intent(in) :: u_fieldname   !< Field variable name in u
+  character(len=*), intent(in) :: v_fieldname   !< Field variable name in v
+  real, dimension(:,:), intent(inout) :: u_data !< Field value in u
+  real, dimension(:,:), intent(inout) :: v_data !< Field value in v
+  type(MOM_domain_type), intent(in) :: MOM_Domain !< Model domain decomposition
+  integer, optional, intent(in) :: timelevel    !< Time level to read in file
+  integer, optional, intent(in) :: stagger      !< Grid staggering flag
+  logical, optional, intent(in) :: scalar_pair  !< True if tuple is not a vector
+  real, optional, intent(in) :: scale           !< Rescale factor
+
+  integer :: turns  ! Number of quarter-turns from input to model grid
+  real, allocatable :: u_data_in(:,:), v_data_in(:,:)   ! [uv] on the input grid
+
+  turns = MOM_Domain%turns
+  if (turns == 0) then
+    call read_vector(filename, u_fieldname, v_fieldname, &
+        u_data, v_data, MOM_domain, timelevel=timelevel, stagger=stagger, &
+        scalar_pair=scalar_pair, scale=scale &
+    )
+  else
+    call allocate_rotated_array(u_data, [1,1], -turns, u_data_in)
+    call allocate_rotated_array(v_data, [1,1], -turns, v_data_in)
+    call read_vector(filename, u_fieldname, v_fieldname, &
+      u_data_in, v_data_in, MOM_domain%domain_in, timelevel=timelevel, &
+        stagger=stagger, scalar_pair=scalar_pair, scale=scale &
+    )
+    if (scalar_pair) then
+      call rotate_array_pair(u_data_in, v_data_in, turns, u_data, v_data)
+    else
+      call rotate_vector(u_data_in, v_data_in, turns, u_data, v_data)
+    endif
+    deallocate(v_data_in)
+    deallocate(u_data_in)
+  endif
+end subroutine MOM_read_vector_2d
+
+
+!> Read a 3d vector tuple from file using infrastructure I/O.
+subroutine MOM_read_vector_3d(filename, u_fieldname, v_fieldname, u_data, v_data, MOM_Domain, &
+                              timelevel, stagger, scalar_pair, scale)
+  character(len=*), intent(in) :: filename      !< Input filename
+  character(len=*), intent(in) :: u_fieldname   !< Field variable name in u
+  character(len=*), intent(in) :: v_fieldname   !< Field variable name in v
+  real, dimension(:,:,:), intent(inout) :: u_data !< Field value in u
+  real, dimension(:,:,:), intent(inout) :: v_data !< Field value in v
+  type(MOM_domain_type), intent(in) :: MOM_Domain !< Model domain decomposition
+  integer, optional, intent(in) :: timelevel    !< Time level to read in file
+  integer, optional, intent(in) :: stagger      !< Grid staggering flag
+  logical, optional, intent(in) :: scalar_pair  !< True if tuple is not a vector
+  real, optional, intent(in) :: scale           !< Rescale factor
+
+  integer :: turns  ! Number of quarter-turns from input to model grid
+  real, allocatable :: u_data_in(:,:,:), v_data_in(:,:,:) ! [uv] on the input grid
+
+  turns = MOM_Domain%turns
+  if (turns == 0) then
+    call read_vector(filename, u_fieldname, v_fieldname, &
+        u_data, v_data, MOM_domain, timelevel=timelevel, stagger=stagger, &
+        scalar_pair=scalar_pair, scale=scale &
+    )
+  else
+    call allocate_rotated_array(u_data, [1,1,1], -turns, u_data_in)
+    call allocate_rotated_array(v_data, [1,1,1], -turns, v_data_in)
+    call read_vector(filename, u_fieldname, v_fieldname, &
+        u_data_in, v_data_in, MOM_domain%domain_in, timelevel=timelevel, &
+        stagger=stagger, scalar_pair=scalar_pair, scale=scale &
+    )
+    if (scalar_pair) then
+      call rotate_array_pair(u_data_in, v_data_in, turns, u_data, v_data)
+    else
+      call rotate_vector(u_data_in, v_data_in, turns, u_data, v_data)
+    endif
+    deallocate(v_data_in)
+    deallocate(u_data_in)
+  endif
+end subroutine MOM_read_vector_3d
 
 
 !> Write a 4d field to an output file, potentially with rotation
@@ -1924,7 +2392,80 @@ subroutine MOM_io_init(param_file)
   call log_version(param_file, mdl, version)
 
 end subroutine MOM_io_init
+!> Returns the dimension variable information for a netCDF variable
+subroutine get_var_axes_info(filename, fieldname, axes_info)
+  character(len=*), intent(in) ::            filename  !< A filename from which to read
+  character(len=*), intent(in) ::            fieldname !< The name of the field to read
+  type(axis_info), dimension(4), intent(inout) :: axes_info !< A returned array of field axis information
 
+  !! local variables
+  integer ::  rcode
+  logical :: success
+  integer ::  ncid, varid, ndims
+  integer :: id, jd, kd
+  integer, dimension(4) :: dims, dim_id
+  real :: missing_value
+  character(len=128)  :: dim_name(4)
+  integer, dimension(1) :: start, count
+  !! cartesian axis data
+  real, allocatable, dimension(:) :: x
+  real, allocatable, dimension(:) :: y
+  real, allocatable, dimension(:) :: z
+
+
+  call open_file_to_read(filename, ncid, success=success)
+
+  rcode = NF90_INQ_VARID(ncid, trim(fieldname), varid)
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(fieldname)//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+
+  rcode = NF90_INQUIRE_VARIABLE(ncid, varid, ndims=ndims, dimids=dims)
+  if (rcode /= 0) call MOM_error(FATAL, "Error inquiring about the dimensions of "//trim(fieldname)//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  if (ndims < 3) call MOM_error(FATAL,"Variable "//trim(fieldname)//" in file "//trim(filename)// &
+                                " has too few dimensions to be read as a 3-d array.")
+  rcode = NF90_INQUIRE_DIMENSION(ncid, dims(1), dim_name(1), len=id)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 1 data for "// &
+                trim(fieldname)//" in file "// trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQ_VARID(ncid, dim_name(1), dim_id(1))
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(dim_name(1))//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQUIRE_DIMENSION(ncid, dims(2), dim_name(2), len=jd)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 2 data for "// &
+                trim(fieldname)//" in file "// trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQ_VARID(ncid, dim_name(2), dim_id(2))
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(dim_name(2))//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQUIRE_DIMENSION(ncid, dims(3), dim_name(3), len=kd)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 3 data for "// &
+                trim(fieldname)//" in file "// trim(filename)//" in hinterp_extrap")
+  rcode = NF90_INQ_VARID(ncid, dim_name(3), dim_id(3))
+  if (rcode /= 0) call MOM_error(FATAL,"error finding variable "//trim(dim_name(3))//&
+                                 " in file "//trim(filename)//" in hinterp_extrap")
+  allocate(x(id), y(jd), z(kd))
+
+  start = 1 ; count = 1 ; count(1) = id
+  rcode = NF90_GET_VAR(ncid, dim_id(1), x, start, count)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 1 values for var_name "// &
+                trim(fieldname)//",dim_name "//trim(dim_name(1))//" in file "// trim(filename)//" in hinterp_extrap")
+  start = 1 ; count = 1 ; count(1) = jd
+  rcode = NF90_GET_VAR(ncid, dim_id(2), y, start, count)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 2 values for var_name "// &
+                trim(fieldname)//",dim_name "//trim(dim_name(2))//" in file "// trim(filename)//" in  hinterp_extrap")
+  start = 1 ; count = 1 ; count(1) = kd
+  rcode = NF90_GET_VAR(ncid, dim_id(3), z, start, count)
+  if (rcode /= 0) call MOM_error(FATAL,"error reading dimension 3 values for var_name "// &
+                trim(fieldname//",dim_name "//trim(dim_name(3)))//" in file "// trim(filename)//" in  hinterp_extrap")
+
+  call set_axis_info(axes_info(1), name=trim(dim_name(1)), ax_size=id, ax_data=x,cartesian='X')
+  call set_axis_info(axes_info(2), name=trim(dim_name(2)), ax_size=jd, ax_data=y,cartesian='Y')
+  call set_axis_info(axes_info(3), name=trim(dim_name(3)), ax_size=kd, ax_data=z,cartesian='Z')
+
+  call close_file_to_read(ncid, filename)
+
+  deallocate(x,y,z)
+
+end subroutine get_var_axes_info
 !> \namespace mom_io
 !!
 !!   This file contains a number of subroutines that manipulate

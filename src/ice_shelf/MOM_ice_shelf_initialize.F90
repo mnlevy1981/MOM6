@@ -7,7 +7,7 @@ use MOM_grid, only : ocean_grid_type
 use MOM_array_transform,      only : rotate_array
 use MOM_hor_index,  only : hor_index_type
 use MOM_file_parser, only : get_param, read_param, log_param, param_file_type
-use MOM_io, only: MOM_read_data, file_exists, slasher, CORNER
+use MOM_io, only: MOM_read_data, file_exists, field_exists, slasher, CORNER
 use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
 use MOM_unit_scaling, only : unit_scale_type
 use user_shelf_init, only: USER_init_ice_thickness
@@ -61,9 +61,9 @@ subroutine initialize_ice_thickness(h_shelf, area_shelf_h, hmask, G, G_in, US, P
   if (PRESENT(rotate_index)) rotate=rotate_index
 
   if (rotate) then
-    allocate(tmp1_2d(G_in%isd:G_in%ied,G_in%jsd:G_in%jed)) ; tmp1_2d(:,:)=0.0
-    allocate(tmp2_2d(G_in%isd:G_in%ied,G_in%jsd:G_in%jed)) ; tmp2_2d(:,:)=0.0
-    allocate(tmp3_2d(G_in%isd:G_in%ied,G_in%jsd:G_in%jed)) ; tmp3_2d(:,:)=0.0
+    allocate(tmp1_2d(G_in%isd:G_in%ied,G_in%jsd:G_in%jed), source=0.0)
+    allocate(tmp2_2d(G_in%isd:G_in%ied,G_in%jsd:G_in%jed), source=0.0)
+    allocate(tmp3_2d(G_in%isd:G_in%ied,G_in%jsd:G_in%jed), source=0.0)
     select case ( trim(config) )
       case ("CHANNEL") ; call initialize_ice_thickness_channel (tmp1_2d, tmp2_2d, tmp3_2d, G_in, US, PF)
       case ("FILE") ; call initialize_ice_thickness_from_file (tmp1_2d, tmp2_2d, tmp3_2d, G_in, US, PF)
@@ -101,9 +101,10 @@ subroutine initialize_ice_thickness_from_file(h_shelf, area_shelf_h, hmask, G, U
   !  This subroutine reads ice thickness and area from a file and puts it into
   !  h_shelf [Z ~> m] and area_shelf_h [L2 ~> m2] (and dimensionless) and updates hmask
   character(len=200) :: filename,thickness_file,inputdir ! Strings for file/path
-  character(len=200) :: thickness_varname, area_varname  ! Variable name in file
+  character(len=200) :: thickness_varname, area_varname, hmask_varname  ! Variable name in file
   character(len=40)  :: mdl = "initialize_ice_thickness_from_file" ! This subroutine's name.
   integer :: i, j, isc, jsc, iec, jec
+  logical :: hmask_set
   real :: len_sidestress, mask, udh
 
   call MOM_mesg("Initialize_ice_thickness_from_file: reading thickness")
@@ -125,45 +126,59 @@ subroutine initialize_ice_thickness_from_file(h_shelf, area_shelf_h, hmask, G, U
   call get_param(PF, mdl, "ICE_AREA_VARNAME", area_varname, &
                  "The name of the area variable in ICE_THICKNESS_FILE.", &
                  default="area_shelf_h")
-
+  hmask_varname="h_mask"
   if (.not.file_exists(filename, G%Domain)) call MOM_error(FATAL, &
        " initialize_topography_from_file: Unable to open "//trim(filename))
   call MOM_read_data(filename, trim(thickness_varname), h_shelf, G%Domain, scale=US%m_to_Z)
   call MOM_read_data(filename,trim(area_varname), area_shelf_h, G%Domain, scale=US%m_to_L**2)
-
+  if (field_exists(filename, trim(hmask_varname), MOM_domain=G%Domain)) then
+    call MOM_read_data(filename, trim(hmask_varname), hmask, G%Domain)
+    hmask_set = .true.
+  else
+    call MOM_error(WARNING, "Ice shelf thickness initialized without setting the shelf mask "//&
+              "from variable "//trim(hmask_varname)//", which does not exist in "//trim(filename))
+    hmask_set = .false.
+  endif
   isc = G%isc ; jsc = G%jsc ; iec = G%iec ; jec = G%jec
 
-  do j=jsc,jec
-    do i=isc,iec
+  if (.not.hmask_set) then
+    ! Set hmask based on the values in h_shelf.
+    do j=jsc,jec ; do i=isc,iec
+      hmask(i,j) = 0.0
+      if (h_shelf(i,j) > 0.0) hmask(i,j) = 1.0
+    enddo ; enddo
+  endif
+
+    do j=jsc,jec
+      do i=isc,iec
 
       ! taper ice shelf in area where there is no sidestress -
       ! but do not interfere with hmask
 
-      if ((G%geoLonCv(i,j) > len_sidestress).and. &
-          (len_sidestress > 0.)) then
-        udh = exp(-(G%geoLonCv(i,j)-len_sidestress)/5.0) * h_shelf(i,j)
-        if (udh <= 25.0) then
-          h_shelf(i,j) = 0.0
-          area_shelf_h(i,j) = 0.0
-        else
-          h_shelf(i,j) = udh
+        if ((len_sidestress > 0.) .and. (G%geoLonCv(i,j) > len_sidestress)) then
+          udh = exp(-(G%geoLonCv(i,j)-len_sidestress)/5.0) * h_shelf(i,j)
+          if (udh <= 25.0) then
+            h_shelf(i,j) = 0.0
+            area_shelf_h(i,j) = 0.0
+          else
+            h_shelf(i,j) = udh
+          endif
         endif
-      endif
 
       ! update thickness mask
 
-      if (area_shelf_h (i,j) >= G%areaT(i,j)) then
-        hmask(i,j) = 1.
-      elseif (area_shelf_h (i,j) == 0.0) then
-        hmask(i,j) = 0.
-      elseif ((area_shelf_h(i,j) > 0) .and. (area_shelf_h(i,j) <= G%areaT(i,j))) then
-        hmask(i,j) = 2.
-      else
-        call MOM_error(FATAL,mdl// " AREA IN CELL OUT OF RANGE")
-      endif
+        if (area_shelf_h(i,j) >= G%areaT(i,j)) then
+          hmask(i,j) = 1.
+          area_shelf_h(i,j)=G%areaT(i,j)
+        elseif (area_shelf_h(i,j) == 0.0) then
+          hmask(i,j) = 0.
+        elseif ((area_shelf_h(i,j) > 0) .and. (area_shelf_h(i,j) <= G%areaT(i,j))) then
+          hmask(i,j) = 2.
+        else
+          call MOM_error(FATAL,mdl// " AREA IN CELL OUT OF RANGE")
+        endif
+      enddo
     enddo
-  enddo
-
 end subroutine initialize_ice_thickness_from_file
 
 !> Initialize ice shelf thickness for a channel configuration
@@ -380,13 +395,13 @@ end subroutine initialize_ice_shelf_boundary_channel
 
 
 !> Initialize ice shelf flow from file
-subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,float_cond,&
-                                         hmask,h_shelf, G, US, PF)
-!subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,ice_visc,float_cond,&
+!subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,float_cond,&
 !                                         hmask,h_shelf, G, US, PF)
+subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,float_cond,&
+                                         G, US, PF)
   type(ocean_grid_type), intent(in)    :: G    !< The ocean's grid structure
   real, dimension(SZDI_(G),SZDJ_(G)), &
-                         intent(inout) :: bed_elev !< The ice shelf u velocity  [Z ~> m].
+                         intent(inout) :: bed_elev !< The bed elevation   [Z ~> m].
    real, dimension(SZIB_(G),SZJB_(G)), &
                           intent(inout) :: u_shelf !< The zonal ice shelf velocity  [L T-1 ~> m s-1].
    real, dimension(SZIB_(G),SZJB_(G)), &
@@ -395,12 +410,12 @@ subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,float_cond,&
   real, dimension(SZDI_(G),SZDJ_(G)), &
                          intent(inout)    :: float_cond !< An array indicating where the ice
                                                 !! shelf is floating: 0 if floating, 1 if not.
-  real, dimension(SZDI_(G),SZDJ_(G)), &
-                         intent(in) :: hmask !< A mask indicating which tracer points are
+!  real, dimension(SZDI_(G),SZDJ_(G)), &
+!                         intent(in) :: hmask !< A mask indicating which tracer points are
                                              !! partly or fully covered by an ice-shelf
-  real, dimension(SZDI_(G),SZDJ_(G)), &
-                         intent(in) :: h_shelf !< A mask indicating which tracer points are
-                                             !! partly or fully covered by an ice-shelf
+!  real, dimension(SZDI_(G),SZDJ_(G)), &
+!                         intent(in) :: h_shelf !< A mask indicating which tracer points are
+!                                             !! partly or fully covered by an ice-shelf
   type(unit_scale_type), intent(in)    :: US !< A structure containing unit conversion factors
   type(param_file_type), intent(in)    :: PF !< A structure to parse for run-time parameters
 
@@ -436,10 +451,10 @@ subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,float_cond,&
                  "The name of the thickness variable in ICE_VELOCITY_FILE.", &
                  default="viscosity")
   call get_param(PF, mdl, "BED_TOPO_FILE", bed_topo_file, &
-                 "The file from which the velocity is read.", &
+                 "The file from which the bed elevation is read.", &
                  default="ice_shelf_vel.nc")
   call get_param(PF, mdl, "BED_TOPO_VARNAME", bed_varname, &
-                 "The name of the thickness variable in ICE_VELOCITY_FILE.", &
+                 "The name of the thickness variable in ICE_INPUT_FILE.", &
                  default="depth")
   if (.not.file_exists(filename, G%Domain)) call MOM_error(FATAL, &
        " initialize_ice_shelf_velocity_from_file: Unable to open "//trim(filename))
@@ -453,15 +468,8 @@ subroutine initialize_ice_flow_from_file(bed_elev,u_shelf, v_shelf,float_cond,&
 
  filename = trim(inputdir)//trim(bed_topo_file)
  call MOM_read_data(filename,trim(bed_varname), bed_elev, G%Domain, scale=1.)
-  isc = G%isc ; jsc = G%jsc ; iec = G%iec ; jec = G%jec
+!  isc = G%isc ; jsc = G%jsc ; iec = G%iec ; jec = G%jec
 
-!  do j=jsc,jec
-!    do i=isc,iec
-!       if  (hmask(i,j) == 1.) then
-!               ice_visc(i,j) = ice_visc(i,j) * (G%areaT(i,j) * h_shelf(i,j))
-!       endif
-!    enddo
-!  enddo
 
 end subroutine initialize_ice_flow_from_file
 
@@ -493,7 +501,7 @@ subroutine initialize_ice_shelf_boundary_from_file(u_face_mask_bdry, v_face_mask
                           intent(inout) :: hmask !< A mask indicating which tracer points are
                                               !! partly or fully covered by an ice-shelf
    real, dimension(SZDI_(G),SZDJ_(G)), &
-                          intent(inout) :: h_shelf !< Ice-shelf thickness
+                          intent(in) :: h_shelf !< Ice-shelf thickness
    type(unit_scale_type), intent(in)    :: US !< A structure containing unit conversion factors
    type(param_file_type), intent(in)    :: PF !< A structure to parse for run-time parameters
 
@@ -518,9 +526,9 @@ subroutine initialize_ice_shelf_boundary_from_file(u_face_mask_bdry, v_face_mask
   call get_param(PF, mdl, "ICE_THICKNESS_FILE", icethick_file, &
                  "The file from which the ice-shelf thickness is read.", &
                  default="ice_shelf_thick.nc")
-  call get_param(PF, mdl, "ICE_THICKNESS_VARNAME", h_varname, &
-                 "The name of the thickness variable in ICE_THICKNESS_FILE.", &
-                 default="h_shelf")
+!  call get_param(PF, mdl, "ICE_THICKNESS_VARNAME", h_varname, &
+!                 "The name of the thickness variable in ICE_THICKNESS_FILE.", &
+!                 default="h_shelf")
   call get_param(PF, mdl, "ICE_THICKNESS_MASK_VARNAME", hmsk_varname, &
                  "The name of the icethickness mask variable in ICE_THICKNESS_FILE.", &
                  default="h_mask")
@@ -557,7 +565,7 @@ subroutine initialize_ice_shelf_boundary_from_file(u_face_mask_bdry, v_face_mask
  call MOM_read_data(filename,trim(vmask_varname), vmask, G%Domain, position=CORNER,scale=1.)
  filename = trim(inputdir)//trim(icethick_file)
 
- call MOM_read_data(filename, trim(h_varname), h_shelf, G%Domain, scale=US%m_to_Z)
+! call MOM_read_data(filename, trim(h_varname), h_shelf, G%Domain, scale=US%m_to_Z)
  call MOM_read_data(filename,trim(hmsk_varname), hmask, G%Domain, scale=1.)
   isc = G%isc ; jsc = G%jsc ; iec = G%iec ; jec = G%jec
 

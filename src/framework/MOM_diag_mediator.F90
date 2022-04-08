@@ -39,6 +39,7 @@ implicit none ; private
 #define MAX_DSAMP_LEV 2
 
 public set_axes_info, post_data, register_diag_field, time_type
+public post_product_u, post_product_sum_u, post_product_v, post_product_sum_v
 public set_masks_for_axes
 public post_data_1d_k
 public safe_alloc_ptr, safe_alloc_alloc
@@ -764,7 +765,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       ! Level/layer h-points in diagnostic coordinate
       axes => diag_cs%remap_axesTL(c)
       nk = axes%nz
-      allocate( axes%mask3d(G%isd:G%ied,G%jsd:G%jed,nk) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%isd:G%ied,G%jsd:G%jed,nk), source=0. )
       call diag_remap_calc_hmask(diag_cs%diag_remap_cs(c), G, axes%mask3d)
 
       h_axes => diag_cs%remap_axesTL(c) ! Use the h-point masks to generate the u-, v- and q- masks
@@ -773,7 +774,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesCuL(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at u-layers')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%IsdB:G%IedB,G%jsd:G%jed,nk) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%IsdB:G%IedB,G%jsd:G%jed,nk), source=0. )
       do k = 1, nk ; do j=G%jsc,G%jec ; do I=G%isc-1,G%iec
         if (h_axes%mask3d(i,j,k) + h_axes%mask3d(i+1,j,k) > 0.) axes%mask3d(I,j,k) = 1.
       enddo ; enddo ; enddo
@@ -782,7 +783,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesCvL(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at v-layers')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%isd:G%ied,G%JsdB:G%JedB,nk) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%isd:G%ied,G%JsdB:G%JedB,nk), source=0. )
       do k = 1, nk ; do J=G%jsc-1,G%jec ; do i=G%isc,G%iec
         if (h_axes%mask3d(i,j,k) + h_axes%mask3d(i,j+1,k) > 0.) axes%mask3d(i,J,k) = 1.
       enddo ; enddo ; enddo
@@ -791,7 +792,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesBL(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at q-layers')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%IsdB:G%IedB,G%JsdB:G%JedB,nk) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%IsdB:G%IedB,G%JsdB:G%JedB,nk), source=0. )
       do k = 1, nk ; do J=G%jsc-1,G%jec ; do I=G%isc-1,G%iec
         if (h_axes%mask3d(i,j,k) + h_axes%mask3d(i+1,j+1,k) + &
             h_axes%mask3d(i+1,j,k) + h_axes%mask3d(i,j+1,k) > 0.) axes%mask3d(I,J,k) = 1.
@@ -801,7 +802,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesTi(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at h-interfaces')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%isd:G%ied,G%jsd:G%jed,nk+1) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%isd:G%ied,G%jsd:G%jed,nk+1), source=0. )
       do J=G%jsc-1,G%jec+1 ; do i=G%isc-1,G%iec+1
         if (h_axes%mask3d(i,j,1) > 0.) axes%mask3d(i,J,1) = 1.
         do K = 2, nk
@@ -816,7 +817,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesCui(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at u-interfaces')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%IsdB:G%IedB,G%jsd:G%jed,nk+1) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%IsdB:G%IedB,G%jsd:G%jed,nk+1), source=0. )
       do k = 1, nk+1 ; do j=G%jsc,G%jec ; do I=G%isc-1,G%iec
         if (h_axes%mask3d(i,j,k) + h_axes%mask3d(i+1,j,k) > 0.) axes%mask3d(I,j,k) = 1.
       enddo ; enddo ; enddo
@@ -825,7 +826,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesCvi(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at v-interfaces')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%isd:G%ied,G%JsdB:G%JedB,nk+1) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%isd:G%ied,G%JsdB:G%JedB,nk+1), source=0. )
       do k = 1, nk+1 ; do J=G%jsc-1,G%jec ; do i=G%isc,G%iec
         if (h_axes%mask3d(i,j,k) + h_axes%mask3d(i,j+1,k) > 0.) axes%mask3d(i,J,k) = 1.
       enddo ; enddo ; enddo
@@ -834,7 +835,7 @@ subroutine set_masks_for_axes(G, diag_cs)
       axes => diag_cs%remap_axesBi(c)
       call assert(axes%nz == nk, 'set_masks_for_axes: vertical size mismatch at q-interfaces')
       call assert(.not. associated(axes%mask3d), 'set_masks_for_axes: already associated')
-      allocate( axes%mask3d(G%IsdB:G%IedB,G%JsdB:G%JedB,nk+1) ) ; axes%mask3d(:,:,:) = 0.
+      allocate( axes%mask3d(G%IsdB:G%IedB,G%JsdB:G%JedB,nk+1), source=0. )
       do k = 1, nk ; do J=G%jsc-1,G%jec ; do I=G%isc-1,G%iec
         if (h_axes%mask3d(i,j,k) + h_axes%mask3d(i+1,j+1,k) + &
             h_axes%mask3d(i+1,j,k) + h_axes%mask3d(i,j+1,k) > 0.) axes%mask3d(I,J,k) = 1.
@@ -1802,6 +1803,108 @@ subroutine post_data_3d_low(diag, field, diag_cs, is_static, mask)
 
 end subroutine post_data_3d_low
 
+!> Calculate and write out diagnostics that are the product of two 3-d arrays at u-points
+subroutine post_product_u(id, u_a, u_b, G, nz, diag, mask, alt_h)
+  integer,                  intent(in) :: id   !< The ID for this diagnostic
+  type(ocean_grid_type),    intent(in) :: G    !< ocean grid structure
+  integer,                  intent(in) :: nz   !< The size of the arrays in the vertical
+  real, dimension(G%IsdB:G%IedB, G%jsd:G%jed, nz), &
+                            intent(in) :: u_a  !< The first u-point array in arbitrary units [A]
+  real, dimension(G%IsdB:G%IedB, G%jsd:G%jed, nz), &
+                            intent(in) :: u_b  !< The second u-point array in arbitrary units [B]
+  type(diag_ctrl),          intent(in) :: diag !< regulates diagnostic output
+  real,           optional, intent(in) :: mask(:,:,:)  !< If present, use this real array as the data mask [nondim]
+  real,   target, optional, intent(in) :: alt_h(:,:,:) !< An alternate thickness to use for vertically
+                                               !! remapping this diagnostic [H ~> m or kg m-2]
+
+  ! Local variables
+  real, dimension(G%IsdB:G%IedB, G%jsd:G%jed, nz) :: u_prod ! The product of u_a and u_b [A B]
+  integer :: i, j, k
+
+  if (id <= 0) return
+
+  do k=1,nz ; do j=G%jsc,G%jec ; do I=G%IscB,G%IecB
+    u_prod(I,j,k) = u_a(I,j,k) * u_b(I,j,k)
+  enddo ; enddo ; enddo
+  call post_data(id, u_prod, diag, mask=mask, alt_h=alt_h)
+
+end subroutine post_product_u
+
+!> Calculate and write out diagnostics that are the vertical sum of the product of two 3-d arrays at u-points
+subroutine post_product_sum_u(id, u_a, u_b, G, nz, diag)
+  integer,                  intent(in) :: id   !< The ID for this diagnostic
+  type(ocean_grid_type),    intent(in) :: G    !< ocean grid structure
+  integer,                  intent(in) :: nz   !< The size of the arrays in the vertical
+  real, dimension(G%IsdB:G%IedB, G%jsd:G%jed, nz), &
+                            intent(in) :: u_a  !< The first u-point array in arbitrary units [A]
+  real, dimension(G%IsdB:G%IedB, G%jsd:G%jed, nz), &
+                            intent(in) :: u_b  !< The second u-point array in arbitrary units [B]
+  type(diag_ctrl),          intent(in) :: diag !< regulates diagnostic output
+
+  real, dimension(G%IsdB:G%IedB, G%jsd:G%jed) :: u_sum  ! The vertical sum of the product of u_a and u_b [A B]
+  integer :: i, j, k
+
+  if (id <= 0) return
+
+  u_sum(:,:) = 0.0
+  do k=1,nz ; do j=G%jsc,G%jec ; do I=G%IscB,G%IecB
+    u_sum(I,j) = u_sum(I,j) + u_a(I,j,k) * u_b(I,j,k)
+  enddo ; enddo ; enddo
+  call post_data(id, u_sum, diag)
+
+end subroutine post_product_sum_u
+
+!> Calculate and write out diagnostics that are the product of two 3-d arrays at v-points
+subroutine post_product_v(id, v_a, v_b, G, nz, diag, mask, alt_h)
+  integer,                  intent(in) :: id   !< The ID for this diagnostic
+  type(ocean_grid_type),    intent(in) :: G    !< ocean grid structure
+  integer,                  intent(in) :: nz   !< The size of the arrays in the vertical
+  real, dimension(G%isd:G%ied, G%JsdB:G%JedB, nz), &
+                            intent(in) :: v_a  !< The first v-point array in arbitrary units [A]
+  real, dimension(G%isd:G%ied, G%JsdB:G%JedB, nz), &
+                            intent(in) :: v_b  !< The second v-point array in arbitrary units [B]
+  type(diag_ctrl),          intent(in) :: diag !< regulates diagnostic output
+  real,           optional, intent(in) :: mask(:,:,:)  !< If present, use this real array as the data mask [nondim]
+  real,   target, optional, intent(in) :: alt_h(:,:,:) !< An alternate thickness to use for vertically
+                                               !! remapping this diagnostic [H ~> m or kg m-2]
+
+  ! Local variables
+  real, dimension(G%isd:G%ied, G%JsdB:G%JedB, nz) :: v_prod ! The product of v_a and v_b [A B]
+  integer :: i, j, k
+
+  if (id <= 0) return
+
+  do k=1,nz ; do J=G%JscB,G%JecB ; do i=G%isc,G%iec
+    v_prod(i,J,k) = v_a(i,J,k) * v_b(i,J,k)
+  enddo ; enddo ; enddo
+  call post_data(id, v_prod, diag, mask=mask, alt_h=alt_h)
+
+end subroutine post_product_v
+
+!> Calculate and write out diagnostics that are the vertical sum of the product of two 3-d arrays at v-points
+subroutine post_product_sum_v(id, v_a, v_b, G, nz, diag)
+  integer,                  intent(in) :: id   !< The ID for this diagnostic
+  type(ocean_grid_type),    intent(in) :: G    !< ocean grid structure
+  integer,                  intent(in) :: nz   !< The size of the arrays in the vertical
+  real, dimension(G%isd:G%ied, G%JsdB:G%JedB, nz), &
+                            intent(in) :: v_a  !< The first v-point array in arbitrary units [A]
+  real, dimension(G%isd:G%ied, G%JsdB:G%JedB, nz), &
+                            intent(in) :: v_b  !< The second v-point array in arbitrary units [B]
+  type(diag_ctrl),          intent(in) :: diag !< regulates diagnostic output
+
+  real, dimension(G%isd:G%ied, G%JsdB:G%JedB) :: v_sum ! The vertical sum of the product of v_a and v_b [A B]
+  integer :: i, j, k
+
+  if (id <= 0) return
+
+  v_sum(:,:) = 0.0
+  do k=1,nz ; do J=G%JscB,G%JecB ; do i=G%isc,G%iec
+    v_sum(i,J) = v_sum(i,J) + v_a(i,J,k) * v_b(i,J,k)
+  enddo ; enddo ; enddo
+  call post_data(id, v_sum, diag)
+
+end subroutine post_product_sum_v
+
 !> Post the horizontally area-averaged diagnostic
 subroutine post_xy_average(diag_cs, diag, field)
   type(diag_type),   intent(in) :: diag !< This diagnostic
@@ -1969,10 +2072,10 @@ integer function register_diag_field(module_name, field_name, axes_in, init_time
                                                          !! integrated). Default/absent for intensive.
   ! Local variables
   real :: MOM_missing_value
-  type(diag_ctrl), pointer :: diag_cs => NULL()
-  type(axes_grp), pointer :: remap_axes => null()
-  type(axes_grp), pointer :: axes => null()
-  type(axes_grp), pointer :: axes_d2 => null()
+  type(diag_ctrl), pointer :: diag_cs
+  type(axes_grp), pointer :: remap_axes
+  type(axes_grp), pointer :: axes
+  type(axes_grp), pointer :: axes_d2
   integer :: dm_id, i, dl
   character(len=256) :: msg, cm_string
   character(len=256) :: new_module_name
@@ -2097,8 +2200,8 @@ integer function register_diag_field(module_name, field_name, axes_in, init_time
 
     new_module_name = trim(module_name)//'_d2'
 
+    axes_d2 => null()
     if (axes_in%rank == 3 .or. axes_in%rank == 2 ) then
-      axes_d2 => null()
       if (axes_in%id == diag_cs%axesTL%id) then
         axes_d2 => diag_cs%dsamp(dl)%axesTL
       elseif (axes_in%id == diag_cs%axesBL%id) then
@@ -2129,6 +2232,7 @@ integer function register_diag_field(module_name, field_name, axes_in, init_time
               //trim(new_module_name)//"-"//trim(field_name))
       endif
     endif
+
     ! Register the native diagnostic
     if (associated(axes_d2)) then
        active = register_diag_field_expand_cmor(dm_id, new_module_name, field_name, axes_d2, &
@@ -3473,16 +3577,18 @@ subroutine diag_mediator_end(time, diag_CS, end_diag_manager)
     call axes_grp_end(diag_cs%remap_axesCvi(i))
   enddo
 
-  deallocate(diag_cs%remap_axesZL)
-  deallocate(diag_cs%remap_axesZi)
-  deallocate(diag_cs%remap_axesTL)
-  deallocate(diag_cs%remap_axesTi)
-  deallocate(diag_cs%remap_axesBL)
-  deallocate(diag_cs%remap_axesBi)
-  deallocate(diag_cs%remap_axesCuL)
-  deallocate(diag_cs%remap_axesCui)
-  deallocate(diag_cs%remap_axesCvL)
-  deallocate(diag_cs%remap_axesCvi)
+  if (diag_cs%num_diag_coords > 0) then
+    deallocate(diag_cs%remap_axesZL)
+    deallocate(diag_cs%remap_axesZi)
+    deallocate(diag_cs%remap_axesTL)
+    deallocate(diag_cs%remap_axesTi)
+    deallocate(diag_cs%remap_axesBL)
+    deallocate(diag_cs%remap_axesBi)
+    deallocate(diag_cs%remap_axesCuL)
+    deallocate(diag_cs%remap_axesCui)
+    deallocate(diag_cs%remap_axesCvL)
+    deallocate(diag_cs%remap_axesCvi)
+  endif
 
   do dl=2,MAX_DSAMP_LEV
     if (allocated(diag_cs%dsamp(dl)%remap_axesTL)) &
