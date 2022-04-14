@@ -757,9 +757,12 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_rofi"                  , "will provide") !-> ice runoff
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac"                   , "will provide") !-> ice fraction
   call fld_list_add(fldsToOcn_num, fldsToOcn, "So_duu10n"                  , "will provide") !-> wind^2 at 10m
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstwet"                , "will provide", ungridded_lbound=1, ungridded_ubound=4)
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstdry"                , "will provide", ungridded_lbound=1, ungridded_ubound=4)
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_bcph"                  , "will provide", ungridded_lbound=1, ungridded_ubound=3)
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstwet"                , "will provide", &
+                    ungridded_lbound=1, ungridded_ubound=4)
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstdry"                , "will provide", &
+                    ungridded_lbound=1, ungridded_ubound=4)
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_bcph"                  , "will provide", &
+                    ungridded_lbound=1, ungridded_ubound=3)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_flxdst"                , "will provide") !-> ice runoff
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcphi"                 , "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcpho"                 , "will provide")
@@ -774,9 +777,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     else if (wave_method == "SURFACE_BANDS") then
       if (cesm_coupled) then
         call fld_list_add(fldsToOcn_num, fldsToOcn, "Sw_pstokes_x", "will provide", &
-          ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%num_stk_bands)
+                          ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%num_stk_bands)
         call fld_list_add(fldsToOcn_num, fldsToOcn, "Sw_pstokes_y", "will provide", &
-          ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%num_stk_bands)
+                          ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%num_stk_bands)
       else ! below is the old approach of importing partitioned stokes drift components. after the planned ww3 nuopc
            ! cap unification, this else block should be removed in favor of the more flexible import approach above.
         if (Ice_ocean_boundary%num_stk_bands > 3) then
