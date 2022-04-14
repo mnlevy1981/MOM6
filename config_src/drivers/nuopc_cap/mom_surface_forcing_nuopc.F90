@@ -1389,7 +1389,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   endif
 
   ! Set up MARBL forcing control structure
-  call marbl_forcing_init(G, param_file, CS%diag, Time, CS%inputdir, CS%marbl_forcing_CSp)
+  call marbl_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%marbl_forcing_CSp)
 
   if (present(restore_salt)) then ; if (restore_salt) then
     salt_file = trim(CS%inputdir) // trim(CS%salt_restore_file)

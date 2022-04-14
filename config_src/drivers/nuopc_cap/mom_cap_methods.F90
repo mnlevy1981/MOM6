@@ -428,7 +428,8 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ice_ocean_boundary%MARBL_IOB%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Fioi_flxdst',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_dust_flux, areacor=med2mod_areacor, rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_dust_flux, &
+       areacor=med2mod_areacor, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
@@ -439,7 +440,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) = 0._ESMF_KIND_R8
   do esmf_ind=1,3
-    call state_getimport(importState, 'Faxa_bcph1',  &
+    call state_getimport(importState, 'Faxa_bcph',  &
          isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:), &
          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
@@ -453,13 +454,15 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Fioi_bcpho',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:), areacor=med2mod_areacor, do_sum=.true., rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:), &
+       areacor=med2mod_areacor, do_sum=.true., rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
   call state_getimport(importState, 'Fioi_bcphi',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:), areacor=med2mod_areacor, do_sum=.true., rc=rc)
+       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:), &
+       areacor=med2mod_areacor, do_sum=.true., rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &

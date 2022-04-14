@@ -413,11 +413,11 @@ contains
 
   subroutine marbl_iob_allocate(isc, iec, jsc, jec, MARBL_IOB)
 
-    integer,                                      intent(in) :: isc           !< start of i-indices for current block
-    integer,                                      intent(in) :: iec           !< end of i-indices for current block
-    integer,                                      intent(in) :: jsc           !< start of j-indices for current block
-    integer,                                      intent(in) :: jec           !< end of j-indices for current block
-    type(marbl_ice_ocean_boundary_type), pointer, intent(inout) :: MARBL_IOB  !< MARBL-specific ice-ocean boundary type
+    integer,                                      intent(in) :: isc        !< start of i-indices for current block
+    integer,                                      intent(in) :: iec        !< end of i-indices for current block
+    integer,                                      intent(in) :: jsc        !< start of j-indices for current block
+    integer,                                      intent(in) :: jec        !< end of j-indices for current block
+    type(marbl_ice_ocean_boundary_type), pointer             :: MARBL_IOB  !< MARBL-specific ice-ocean boundary type
 
     if (associated(MARBL_IOB)) then
       call MOM_error(WARNING, "marbl_iob_allocate called with an associated "// &
@@ -439,8 +439,8 @@ contains
     MARBL_IOB%seaice_dust_flux(:,:)     = 0.0
     MARBL_IOB%atm_bc_flux(:,:)          = 0.0
     MARBL_IOB%seaice_bc_flux(:,:)       = 0.0
-    MARBL_IOB%ice_fraction              = 0.0
-    MARBL_IOB%u10_sqr                   = 0.0
+    MARBL_IOB%ice_fraction(:,:)         = 0.0
+    MARBL_IOB%u10_sqr(:,:)              = 0.0
 
   end subroutine marbl_iob_allocate
 
@@ -485,6 +485,7 @@ contains
 
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
+    time_varying_data(:,:) = 1.
     if (CS%diag_ids%atm_fine_dust > 0) &
       call post_data(CS%diag_ids%atm_fine_dust, &
                      kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
