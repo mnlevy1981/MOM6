@@ -516,9 +516,9 @@ contains
       if (associated(MARBL_IOB%atm_bc_flux)) then
         ! TODO: abort if atm_fine_dust_flux and atm_coarse_dust_flux are not associated?
         ! Contribution of atmospheric dust to iron flux
-        if (MARBL_IOB%atm_coarse_dust_flux(i,j) < CS%dust_ratio_thres * MARBL_IOB%atm_fine_dust_flux(i,j)) then
+        if (MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) < CS%dust_ratio_thres * MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0)) then
           atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset + CS%dust_ratio_to_fe_bioavail_frac * &
-            (CS%dust_ratio_thres - MARBL_IOB%atm_coarse_dust_flux(i,j) / MARBL_IOB%atm_fine_dust_flux(i,j))
+            (CS%dust_ratio_thres - MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) / MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0))
         else
           atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset
         end if
