@@ -14,13 +14,15 @@ use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
 use MOM_grid,            only : ocean_grid_type
+use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index,       only : hor_index_type
 use MOM_io,              only : file_exists, MOM_read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
-use MOM_tracer_registry, only : register_tracer, tracer_registry_type
+use MOM_tracer_registry, only : register_tracer
+use MOM_tracer_types,    only : tracer_type, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_Z_init,   only : tracer_Z_init, read_Z_edges
 use MOM_unit_scaling,    only : unit_scale_type
@@ -86,13 +88,19 @@ end type saved_state_for_MARBL_type
 !> All calls to MARBL are done via the interface class
 type(MARBL_interface_class) :: MARBL_instances
 
+type, private :: MARBL_tracer_data
+  real, pointer              :: tr(:,:,:) => NULL() !< The array of tracers used in this subroutine, in g m-3?
+  type(tracer_type), pointer :: tr_ptr    => NULL() !< pointer to tracer inside Tr_reg
+end type MARBL_tracer_data
+
 !> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
   character(len=200) :: IC_file !< The file in which the age-tracer initial values cam be found.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
-  real, pointer :: tr(:,:,:,:) => NULL() !< The array of tracers used in this subroutine, in g m-3?
+  type(MARBL_tracer_data), dimension(:), allocatable :: tracer_data  !< type containing tracer data and pointer
+                                                                     !! into tracer registry
 
   integer, allocatable, dimension(:) :: ind_tr !< Indices returned by aof_set_coupler_flux if it is used and the
                                                !! surface tracer concentrations are to be provided to the coupler.
@@ -141,7 +149,8 @@ type, public :: MARBL_tracers_CS ; private
   integer :: bot_flux_to_tend_id  !< register_diag index for BOT_FLUX_TO_TEND
 
   ! NOTE: MARBL will return in cgs so we need to convert to mks
-  real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff [i, j, tracer]
+  real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
+                                  !! [conc m/s]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -443,9 +452,10 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   CS%ntr = size(MARBL_instances%tracer_metadata)
   allocate(CS%ind_tr(CS%ntr))
   allocate(CS%tr_desc(CS%ntr))
-  allocate(CS%tr(isd:ied,jsd:jed,nz,CS%ntr)) ; CS%tr(:,:,:,:) = 0.0
+  allocate(CS%tracer_data(CS%ntr))
 
   do m = 1, CS%ntr
+    allocate(CS%tracer_data(m)%tr(isd:ied,jsd:jed,nz)) ; CS%tracer_data(m)%tr(:,:,:) = 0.0
     write(var_name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(desc_name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%long_name)
     write(units(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%units)
@@ -453,13 +463,14 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 
     ! This is needed to force the compiler not to do a copy in the registration
     ! calls.  Curses on the designers and implementers of Fortran90.
-    tr_ptr => CS%tr(:,:,:,m)
+    tr_ptr => CS%tracer_data(m)%tr(:,:,:)
     call query_vardesc(CS%tr_desc(m), name=var_name, &
                        caller="register_MARBL_tracers")
     ! Register the tracer for horizontal advection, diffusion, and restarts.
     call register_tracer(tr_ptr, tr_Reg, param_file, HI, GV, units = units, &
                          tr_desc=CS%tr_desc(m), registry_diags=.true., &
-                         restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit)
+                         restart_CS=restart_CS, mandatory=.not.CS%tracers_may_reinit, &
+                         Tr_out=CS%tracer_data(m)%tr_ptr)
 
     !   Set coupled_tracers to be true (hard-coded above) to provide the surface
     ! values to the coupler (if any).  This is meta-code and its arguments will
@@ -601,8 +612,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
     call query_vardesc(CS%tr_desc(m), name=name, caller="initialize_MARBL_tracers")
     if ((.not. restart) .or. &
         (CS%tracers_may_reinit .and. &
-         .not. query_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp))) then
-      OK = tracer_Z_init(CS%tr(:,:,:,m), h, CS%IC_file, name, G, GV, US, -1e34)
+         .not. query_initialized(CS%tracer_data(m)%tr(:,:,:), name, CS%restart_CSp))) then
+      OK = tracer_Z_init(CS%tracer_data(m)%tr(:,:,:), h, CS%IC_file, name, G, GV, US, -1e34)
       if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
                                   "Unable to read "//trim(name)//" from "//&
                                   trim(CS%IC_file)//".")
@@ -610,7 +621,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
         do j=G%jsc, G%jec
           do i=G%isc, G%iec
             ! Set negative tracer concentrations to 0
-            if (CS%tr(i,j,k,m) < 0) CS%tr(i,j,k,m) = 0.
+            if (CS%tracer_data(m)%tr(i,j,k) < 0) CS%tracer_data(m)%tr(i,j,k) = 0.
           end do
         end do
       end do
@@ -774,7 +785,7 @@ end subroutine setup_saved_state
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
 subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, &
-              evap_CFL_limit, minimum_forcing_depth)
+              KPP_CSp, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
@@ -796,6 +807,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   type(MARBL_tracers_CS),     pointer :: CS   !< The control structure returned by a previous
                                               !! call to register_MARBL_tracers.
   type(thermo_var_ptrs),   intent(in) :: tv   !< A structure pointing to various thermodynamic variables
+  type(KPP_CS),  optional, pointer    :: KPP_CSp  !< KPP control structure
+  real,          optional, intent(in) :: nonLocalTrans(:,:,:) !< Non-local transport [nondim]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
                                               !! be fluxed out of the top layer in a timestep [nondim]
   real,          optional, intent(in) :: minimum_forcing_depth !< The smallest depth over which
@@ -872,7 +885,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * tracers at surface
       !       TODO: average over some shallow depth (e.g. 5m)
       do m=1,CS%ntr
-        MARBL_instances%tracers_at_surface(1,m) = CS%tr(i,j,1,m)
+        MARBL_instances%tracers_at_surface(1,m) = CS%tracer_data(m)%tr(i,j,1)
       end do
 
       !     * surface flux saved state
@@ -942,25 +955,38 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   do m=1,CS%ntr
     if (CS%id_surface_flux_out(m) > 0) &
       call post_data(CS%id_surface_flux_out(m), CS%STF(:,:,m), CS%diag)
-  end do
+  enddo
   do m=1,size(CS%surface_flux_diags)
     if (CS%surface_flux_diags(m)%id > 0) &
       call post_data(CS%surface_flux_diags(m)%id, CS%surface_flux_diags(m)%field_2d(:,:), CS%diag)
-  end do
+  enddo
 
   ! (3) Apply surface fluxes via vertical diffusion
+  ! Compute KPP nonlocal term if necessary
+  if (present(KPP_CSp)) then
+    if (associated(KPP_CSp) .and. present(nonLocalTrans)) then
+      do m=1,CS%ntr
+        call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, CS%STF(:,:,m), &
+                                   dt, CS%diag, CS%tracer_data(m)%tr_ptr, &
+                                   CS%tracer_data(m)%tr(:,:,:), flux_scale=GV%Z_to_H * US%T_to_s)
+      enddo
+    endif
+  endif
+
   if (present(evap_CFL_limit) .and. present(minimum_forcing_depth)) then
     do m=1,CS%ntr
       do k=1,nz ;do j=js,je ; do i=is,ie
         h_work(i,j,k) = h_old(i,j,k)
       enddo ; enddo ; enddo
-      call applyTracerBoundaryFluxesInOut(G, GV, CS%tr(:,:,:,m) , dt, fluxes, h_work, &
+      call applyTracerBoundaryFluxesInOut(G, GV, CS%tracer_data(m)%tr(:,:,:) , dt, fluxes, h_work, &
           evap_CFL_limit, minimum_forcing_depth)
-      call tracer_vertdiff(h_work, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=GV%Rho0 * CS%STF(:,:,m))
+      call tracer_vertdiff(h_work, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &
+                           sfc_flux=GV%Rho0 * CS%STF(:,:,m) * US%T_to_s)
     enddo
   else
     do m=1,CS%ntr
-      call tracer_vertdiff(h_old, ea, eb, dt, CS%tr(:,:,:,m), G, GV, sfc_flux=GV%Rho0 * CS%STF(:,:,m))
+      call tracer_vertdiff(h_old, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &
+                           sfc_flux=GV%Rho0 * CS%STF(:,:,m) * US%T_to_s)
     enddo
   endif
 
@@ -1056,7 +1082,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !      * Column Tracers
       !        NOTE: POP averages previous two timesteps, should we do that too?
       do m=1,CS%ntr
-        MARBL_instances%tracers(m, :) = CS%tr(i,j,:,m)
+        MARBL_instances%tracers(m, :) = CS%tracer_data(m)%tr(i,j,:)
       end do
 
       !     * interior tendency saved state
@@ -1076,8 +1102,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       ! v. Apply tendencies immediately
       !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
-      do k=1,GV%ke
-        CS%tr(i,j,k,:) = CS%tr(i,j,k,:) + G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(:, k)
+      do m=1,CS%ntr
+        CS%tracer_data(m)%tr(i,j,:) = CS%tracer_data(m)%tr(i,j,:) + &
+                                      G%mask2dT(i,j)*dt*MARBL_instances%interior_tendencies(m,:)
       end do
 
       ! vi. Copy output that MOM6 needs to hold on to
@@ -1216,7 +1243,7 @@ function MARBL_tracer_stock(h, stocks, G, GV, CS, names, units, stock_index)
     units(m) = trim(units(m))//" kg"
     stocks(m) = 0.0
     do k=1,nz ; do j=js,je ; do i=is,ie
-      stocks(m) = stocks(m) + CS%tr(i,j,k,m) * &
+      stocks(m) = stocks(m) + CS%tracer_data(m)%tr(i,j,k) * &
                              (G%mask2dT(i,j) * G%areaT(i,j) * h(i,j,k))
     enddo ; enddo ; enddo
     stocks(m) = GV%H_to_kg_m2 * stocks(m)
@@ -1250,7 +1277,7 @@ subroutine MARBL_tracers_surface_state(state, h, G, CS)
     do m=1,CS%ntr
       !   This call loads the surface values into the appropriate array in the
       ! coupler-type structure.
-      call coupler_type_set_data(CS%tr(:,:,1,m), CS%ind_tr(m), ind_csurf, &
+      call coupler_type_set_data(CS%tracer_data(m)%tr(:,:,1), CS%ind_tr(m), ind_csurf, &
                    state%tr_fields, idim=(/isd, is, ie, ied/), &
                    jdim=(/jsd, js, je, jed/) )
     enddo
@@ -1271,7 +1298,12 @@ subroutine MARBL_tracers_end(CS)
   ! TODO: print MARBL timers to stdout as well
 
   if (associated(CS)) then
-    if (associated(CS%tr)) deallocate(CS%tr)
+    if (allocated(CS%tracer_data)) then
+      do m=1,CS%ntr
+        if (associated(CS%tracer_data(m)%tr)) deallocate(CS%tracer_data(m)%tr)
+      end do
+      deallocate(CS%tracer_data)
+    end if
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end
