@@ -470,44 +470,43 @@ contains
     integer :: i, j, is, ie, js, je
     real :: atm_fe_bioavail_frac     !< TODO: define this (local) term
     real :: seaice_fe_bioavail_frac  !< TODO: define this (local) term
+    real :: dust_flux_conversion     !< TODO: define this (local) term
     real :: iron_flux_conversion     !< TODO: define this (local) term
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
                                      !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
-    real :: kg_m2_s_conversion       !< A combination of unit conversion factors for rescaling
-                                     !! mass fluxes [R Z s m2 kg-1 T-1 ~> 1].
 
     if (.not. CS%use_marbl_tracers) return
 
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
     ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
-    kg_m2_s_conversion = US%kg_m2s_to_RZ_T
-    iron_flux_conversion = kg_m2_s_conversion * 1.e8 / molw_Fe ! kg / m^2 / s -> nmol / cm^2 / s
+    dust_flux_conversion = US%kg_m2s_to_RZ_T * 0.1            ! kg / m^2 / s -> g / cm^2 / s
+    iron_flux_conversion = US%kg_m2s_to_RZ_T * 1.e8 / molw_Fe ! kg / m^2 / s -> nmol / cm^2 / s
 
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
     time_varying_data(:,:) = 1.
     if (CS%diag_ids%atm_fine_dust > 0) &
       call post_data(CS%diag_ids%atm_fine_dust, &
-                     kg_m2_s_conversion * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     US%kg_m2s_to_RZ_T * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_coarse_dust > 0) &
       call post_data(CS%diag_ids%atm_coarse_dust, &
-                     kg_m2_s_conversion * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     US%kg_m2s_to_RZ_T * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_bc > 0) &
-      call post_data(CS%diag_ids%atm_bc, kg_m2_s_conversion * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%atm_bc, US%kg_m2s_to_RZ_T * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_dust > 0) &
-      call post_data(CS%diag_ids%ice_dust, kg_m2_s_conversion * MARBL_IOB%seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%ice_dust, US%kg_m2s_to_RZ_T * MARBL_IOB%seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_bc > 0) &
-      call post_data(CS%diag_ids%ice_bc, kg_m2_s_conversion * MARBL_IOB%seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%ice_bc, US%kg_m2s_to_RZ_T * MARBL_IOB%seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
 
     do j=js,je ; do i=is,ie
       if (associated(MARBL_IOB%atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
-        MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * kg_m2_s_conversion) * &
+        MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * dust_flux_conversion) * &
                                        (MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
                                         MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) + &
                                         MARBL_IOB%seaice_dust_flux(i-i0,j-j0))
