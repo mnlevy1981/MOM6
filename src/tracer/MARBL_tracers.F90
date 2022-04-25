@@ -88,6 +88,7 @@ end type saved_state_for_MARBL_type
 !> All calls to MARBL are done via the interface class
 type(MARBL_interface_class) :: MARBL_instances
 
+!> Pointer to tracer concentration and to tracer_type in tracer registry
 type, private :: MARBL_tracer_data
   real, pointer              :: tr(:,:,:) => NULL() !< The array of tracers used in this subroutine, in g m-3?
   type(tracer_type), pointer :: tr_ptr    => NULL() !< pointer to tracer inside Tr_reg
@@ -148,9 +149,10 @@ type, public :: MARBL_tracers_CS ; private
                                                                             !! (top 100m)
   integer :: bot_flux_to_tend_id  !< register_diag index for BOT_FLUX_TO_TEND
 
-  ! NOTE: MARBL will return in cgs so we need to convert to mks
   real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
                                   !! [conc m/s]
+  real, allocatable :: RIV_FLUXES(:,:,:) !< river flux forcing for applyTracerBoundaryFluxesInOut (dims: i, j, tracer)
+                                         !! [conc m/s]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -533,7 +535,9 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
 
   ! Allocate memory for surface tracer fluxes
   allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr))
+  allocate(CS%RIV_FLUXES(SZI_(G), SZJ_(G), CS%ntr))
   CS%STF(:,:,:) = 0.
+  CS%RIV_FLUXES(:,:,:) = 0.
 
   ! Register diagnostics returned from MARBL (surface flux first, then interior tendency)
   call register_MARBL_diags(MARBL_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
@@ -921,35 +925,33 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   end do
   ! Add River Fluxes to STF
   if (CS%tracer_inds%no3_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%no3_ind) = CS%STF(:,:,CS%tracer_inds%no3_ind) + fluxes%MARBL_forcing%no3_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = fluxes%MARBL_forcing%no3_riv_flux(:,:)
   if (CS%tracer_inds%po4_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%po4_ind) = CS%STF(:,:,CS%tracer_inds%po4_ind) + fluxes%MARBL_forcing%po4_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = fluxes%MARBL_forcing%po4_riv_flux(:,:)
   if (CS%tracer_inds%don_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%don_ind) = CS%STF(:,:,CS%tracer_inds%don_ind) + fluxes%MARBL_forcing%don_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = fluxes%MARBL_forcing%don_riv_flux(:,:)
   if (CS%tracer_inds%donr_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%donr_ind) = CS%STF(:,:,CS%tracer_inds%donr_ind) + fluxes%MARBL_forcing%donr_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = fluxes%MARBL_forcing%donr_riv_flux(:,:)
   if (CS%tracer_inds%dop_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%dop_ind) = CS%STF(:,:,CS%tracer_inds%dop_ind) + fluxes%MARBL_forcing%dop_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = fluxes%MARBL_forcing%dop_riv_flux(:,:)
   if (CS%tracer_inds%dopr_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%dopr_ind) = CS%STF(:,:,CS%tracer_inds%dopr_ind) + fluxes%MARBL_forcing%dopr_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = fluxes%MARBL_forcing%dopr_riv_flux(:,:)
   if (CS%tracer_inds%sio3_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%sio3_ind) = CS%STF(:,:,CS%tracer_inds%sio3_ind) + fluxes%MARBL_forcing%sio3_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = fluxes%MARBL_forcing%sio3_riv_flux(:,:)
   if (CS%tracer_inds%fe_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%fe_ind) = CS%STF(:,:,CS%tracer_inds%fe_ind) + fluxes%MARBL_forcing%fe_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = fluxes%MARBL_forcing%fe_riv_flux(:,:)
   if (CS%tracer_inds%doc_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%doc_ind) = CS%STF(:,:,CS%tracer_inds%doc_ind) + fluxes%MARBL_forcing%doc_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = fluxes%MARBL_forcing%doc_riv_flux(:,:)
   if (CS%tracer_inds%docr_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%docr_ind) = CS%STF(:,:,CS%tracer_inds%docr_ind) + fluxes%MARBL_forcing%docr_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind) = fluxes%MARBL_forcing%docr_riv_flux(:,:)
   if (CS%tracer_inds%alk_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%alk_ind) = CS%STF(:,:,CS%tracer_inds%alk_ind) + fluxes%MARBL_forcing%alk_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = fluxes%MARBL_forcing%alk_riv_flux(:,:)
   if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%alk_alt_co2_ind) + &
-                                                 fluxes%MARBL_forcing%alk_alt_co2_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = fluxes%MARBL_forcing%alk_alt_co2_riv_flux(:,:)
   if (CS%tracer_inds%dic_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%dic_ind) = CS%STF(:,:,CS%tracer_inds%dic_ind) + fluxes%MARBL_forcing%dic_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = fluxes%MARBL_forcing%dic_riv_flux(:,:)
   if (CS%tracer_inds%dic_alt_co2_ind > 0) &
-    CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) = CS%STF(:,:,CS%tracer_inds%dic_alt_co2_ind) + &
-                                                 fluxes%MARBL_forcing%dic_alt_co2_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = fluxes%MARBL_forcing%dic_alt_co2_riv_flux(:,:)
 
   ! (2) Post surface fluxes and their diagnostics (currently all 2D)
   do m=1,CS%ntr
@@ -979,7 +981,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         h_work(i,j,k) = h_old(i,j,k)
       enddo ; enddo ; enddo
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tracer_data(m)%tr(:,:,:) , dt, fluxes, h_work, &
-          evap_CFL_limit, minimum_forcing_depth)
+          evap_CFL_limit, minimum_forcing_depth, in_flux_optional=CS%RIV_FLUXES(:,:,m))
       call tracer_vertdiff(h_work, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &
                            sfc_flux=GV%Rho0 * CS%STF(:,:,m) * US%T_to_s)
     enddo
