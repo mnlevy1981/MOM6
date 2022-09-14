@@ -3,6 +3,7 @@ module pseudo_salt_tracer
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
+use MOM_coms,            only : EFP_type
 use MOM_debugging,       only : hchksum
 use MOM_diag_mediator,   only : post_data, register_diag_field, safe_alloc_ptr
 use MOM_diag_mediator,   only : diag_ctrl
@@ -14,7 +15,8 @@ use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index,       only : hor_index_type
 use MOM_io,              only : vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
-use MOM_restart,         only : query_initialized, MOM_restart_CS
+use MOM_restart,         only : query_initialized, set_initialized, MOM_restart_CS
+use MOM_spatial_means,   only : global_mass_int_EFP
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
 use MOM_tracer_registry, only : register_tracer, tracer_registry_type, tracer_type
@@ -77,10 +79,8 @@ function register_pseudo_salt_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
-    call MOM_error(WARNING, "register_pseudo_salt_tracer called with an "// &
-                             "associated control structure.")
-    register_pseudo_salt_tracer = .false.
-    return
+    call MOM_error(FATAL, "register_pseudo_salt_tracer called with an "// &
+                          "associated control structure.")
   endif
   allocate(CS)
 
@@ -107,13 +107,14 @@ function register_pseudo_salt_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
 end function register_pseudo_salt_tracer
 
 !> Initialize the pseudo-salt tracer
-subroutine initialize_pseudo_salt_tracer(restart, day, G, GV, h, diag, OBC, CS, &
+subroutine initialize_pseudo_salt_tracer(restart, day, G, GV, US, h, diag, OBC, CS, &
                                   sponge_CSp, tv)
   logical,                            intent(in) :: restart !< .true. if the fields have already
                                                          !! been read from a restart file.
   type(time_type),            target, intent(in) :: day  !< Time of the start of the run
   type(ocean_grid_type),              intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type),            intent(in) :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),              intent(in) :: US    !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                                       intent(in) :: h    !< Layer thicknesses [H ~> m or kg m-2]
   type(diag_ctrl),            target, intent(in) :: diag !< A structure that is used to regulate
@@ -143,8 +144,9 @@ subroutine initialize_pseudo_salt_tracer(restart, day, G, GV, h, diag, OBC, CS, 
   call query_vardesc(CS%tr_desc, name=name, caller="initialize_pseudo_salt_tracer")
   if ((.not.restart) .or. (.not.query_initialized(CS%ps, name, CS%restart_CSp))) then
     do k=1,nz ; do j=jsd,jed ; do i=isd,ied
-      CS%ps(i,j,k) = tv%S(i,j,k)
+      CS%ps(i,j,k) = US%S_to_ppt*tv%S(i,j,k)
     enddo ; enddo ; enddo
+    call set_initialized(CS%ps, name, CS%restart_CSp)
   endif
 
   if (associated(OBC)) then
@@ -210,7 +212,7 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   if (.not.associated(CS%ps)) return
 
   if (debug) then
-    call hchksum(tv%S,"salt pre pseudo-salt vertdiff", G%HI)
+    call hchksum(tv%S,"salt pre pseudo-salt vertdiff", G%HI, scale=US%S_to_ppt)
     call hchksum(CS%ps,"pseudo_salt pre pseudo-salt vertdiff", G%HI)
   endif
 
@@ -249,13 +251,13 @@ subroutine pseudo_salt_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, G
   endif
 
   if (debug) then
-    call hchksum(tv%S, "salt post pseudo-salt vertdiff", G%HI)
+    call hchksum(tv%S, "salt post pseudo-salt vertdiff", G%HI, scale=US%S_to_ppt)
     call hchksum(CS%ps, "pseudo_salt post pseudo-salt vertdiff", G%HI)
   endif
 
   if (allocated(CS%diff)) then
     do k=1,nz ; do j=js,je ; do i=is,ie
-      CS%diff(i,j,k) = CS%ps(i,j,k) - tv%S(i,j,k)
+      CS%diff(i,j,k) = CS%ps(i,j,k) - US%S_to_ppt*tv%S(i,j,k)
     enddo ; enddo ; enddo
     if (CS%id_psd>0) call post_data(CS%id_psd, CS%diff, CS%diag)
   endif
@@ -265,13 +267,12 @@ end subroutine pseudo_salt_tracer_column_physics
 
 !> Calculates the mass-weighted integral of all tracer stocks, returning the number of stocks it has
 !! calculated.  If the stock_index is present, only the stock corresponding to that coded index is returned.
-function pseudo_salt_stock(h, stocks, G, GV, US, CS, names, units, stock_index)
+function pseudo_salt_stock(h, stocks, G, GV, CS, names, units, stock_index)
   type(ocean_grid_type),              intent(in)    :: G      !< The ocean's grid structure
   type(verticalGrid_type),            intent(in)    :: GV     !< The ocean's vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in) :: h  !< Layer thicknesses [H ~> m or kg m-2]
-  real, dimension(:),                 intent(out)   :: stocks !< the mass-weighted integrated amount of each
+  type(EFP_type), dimension(:),       intent(out)   :: stocks !< The mass-weighted integrated amount of each
                                                               !! tracer, in kg times concentration units [kg conc]
-  type(unit_scale_type),              intent(in)    :: US     !< A dimensional unit scaling type
   type(pseudo_salt_tracer_CS),        pointer       :: CS     !< The control structure returned by a previous
                                                               !! call to register_pseudo_salt_tracer
   character(len=*), dimension(:),     intent(out)   :: names  !< The names of the stocks calculated
@@ -281,10 +282,6 @@ function pseudo_salt_stock(h, stocks, G, GV, US, CS, names, units, stock_index)
   integer                                           :: pseudo_salt_stock !< Return value: the number of
                                                               !! stocks calculated here
 
-  ! Local variables
-  real :: stock_scale ! The dimensional scaling factor to convert stocks to kg [kg H-1 L-2 ~> kg m-3 or 1]
-  integer :: i, j, k, is, ie, js, je, nz
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   pseudo_salt_stock = 0
   if (.not.associated(CS)) return
@@ -297,14 +294,9 @@ function pseudo_salt_stock(h, stocks, G, GV, US, CS, names, units, stock_index)
     return
   endif ; endif
 
-  stock_scale = US%L_to_m**2 * GV%H_to_kg_m2
   call query_vardesc(CS%tr_desc, name=names(1), units=units(1), caller="pseudo_salt_stock")
   units(1) = trim(units(1))//" kg"
-  stocks(1) = 0.0
-  do k=1,nz ; do j=js,je ; do i=is,ie
-    stocks(1) = stocks(1) + CS%diff(i,j,k) * (G%mask2dT(i,j) * G%areaT(i,j) * h(i,j,k))
-  enddo ; enddo ; enddo
-  stocks(1) = stock_scale * stocks(1)
+  stocks(1) = global_mass_int_EFP(h, G, GV, CS%diff, on_PE_only=.true.)
 
   pseudo_salt_stock = 1
 

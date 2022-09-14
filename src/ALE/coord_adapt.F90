@@ -122,8 +122,8 @@ subroutine build_adapt_column(CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, zNex
   integer,                                     intent(in)    :: i    !< The i-index of the column to work on
   integer,                                     intent(in)    :: j    !< The j-index of the column to work on
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: zInt !< Interface heights [H ~> m or kg m-2].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: tInt !< Interface temperatures [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: sInt !< Interface salinities [ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: tInt !< Interface temperatures [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)    :: sInt !< Interface salinities [S ~> ppt]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),   intent(in)    :: h    !< Layer thicknesses [H ~> m or kg m-2]
   real, dimension(SZK_(GV)+1),                 intent(inout) :: zNext !< updated interface positions
 
@@ -131,8 +131,8 @@ subroutine build_adapt_column(CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, zNex
   integer :: k, nz
   real :: h_up, b1, b_denom_1, d1, depth, nominal_z, stretching
   real :: drdz  ! The vertical density gradient [R H-1 ~> kg m-4 or m-1]
-  real, dimension(SZK_(GV)+1) :: alpha ! drho/dT [R degC-1 ~> kg m-3 degC-1]
-  real, dimension(SZK_(GV)+1) :: beta  ! drho/dS [R ppt-1 ~> kg m-3 ppt-1]
+  real, dimension(SZK_(GV)+1) :: alpha ! drho/dT [R C-1 ~> kg m-3 degC-1]
+  real, dimension(SZK_(GV)+1) :: beta  ! drho/dS [R S-1 ~> kg m-3 ppt-1]
   real, dimension(SZK_(GV)+1) :: del2sigma ! Laplacian of in situ density times grid spacing [R ~> kg m-3]
   real, dimension(SZK_(GV)+1) :: dh_d2s ! Thickness change in response to del2sigma [H ~> m or kg m-2]
   real, dimension(SZK_(GV)) :: kGrid, c1 ! grid diffusivity on layers, and tridiagonal work array
@@ -154,7 +154,7 @@ subroutine build_adapt_column(CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, zNex
   ! TODO: this needs to be adjusted to account for vanished layers near topography
 
   ! up (j-1)
-  if (G%mask2dT(i,j-1) > 0.) then
+  if (G%mask2dT(i,j-1) > 0.0) then
     call calculate_density_derivs( &
          0.5 * (tInt(i,j,2:nz) + tInt(i,j-1,2:nz)), &
          0.5 * (sInt(i,j,2:nz) + sInt(i,j-1,2:nz)), &
@@ -166,7 +166,7 @@ subroutine build_adapt_column(CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, zNex
           beta(2:nz)  * (sInt(i,j-1,2:nz) - sInt(i,j,2:nz)))
   endif
   ! down (j+1)
-  if (G%mask2dT(i,j+1) > 0.) then
+  if (G%mask2dT(i,j+1) > 0.0) then
     call calculate_density_derivs( &
          0.5 * (tInt(i,j,2:nz) + tInt(i,j+1,2:nz)), &
          0.5 * (sInt(i,j,2:nz) + sInt(i,j+1,2:nz)), &
@@ -178,7 +178,7 @@ subroutine build_adapt_column(CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, zNex
           beta(2:nz)  * (sInt(i,j+1,2:nz) - sInt(i,j,2:nz)))
   endif
   ! left (i-1)
-  if (G%mask2dT(i-1,j) > 0.) then
+  if (G%mask2dT(i-1,j) > 0.0) then
     call calculate_density_derivs( &
          0.5 * (tInt(i,j,2:nz) + tInt(i-1,j,2:nz)), &
          0.5 * (sInt(i,j,2:nz) + sInt(i-1,j,2:nz)), &
@@ -190,7 +190,7 @@ subroutine build_adapt_column(CS, G, GV, US, tv, i, j, zInt, tInt, sInt, h, zNex
           beta(2:nz)  * (sInt(i-1,j,2:nz) - sInt(i,j,2:nz)))
   endif
   ! right (i+1)
-  if (G%mask2dT(i+1,j) > 0.) then
+  if (G%mask2dT(i+1,j) > 0.0) then
     call calculate_density_derivs( &
          0.5 * (tInt(i,j,2:nz) + tInt(i+1,j,2:nz)), &
          0.5 * (sInt(i,j,2:nz) + sInt(i+1,j,2:nz)), &

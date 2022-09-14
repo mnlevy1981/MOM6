@@ -6,7 +6,7 @@ module MOM_barotropic
 use MOM_debugging, only : hchksum, uvchksum
 use MOM_cpu_clock, only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOCK_ROUTINE
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, register_diag_field
-use MOM_diag_mediator, only : diag_ctrl, enable_averaging
+use MOM_diag_mediator, only : diag_ctrl, enable_averaging, enable_averages
 use MOM_domains, only : min_across_PEs, clone_MOM_domain, deallocate_MOM_domain
 use MOM_domains, only : To_All, Scalar_Pair, AGRID, CORNER, MOM_domain_type
 use MOM_domains, only : create_group_pass, do_group_pass, group_pass_type
@@ -17,7 +17,7 @@ use MOM_forcing_type, only : mech_forcing
 use MOM_grid, only : ocean_grid_type
 use MOM_hor_index, only : hor_index_type
 use MOM_io, only : vardesc, var_desc, MOM_read_data, slasher
-use MOM_open_boundary, only : ocean_OBC_type, OBC_SIMPLE, OBC_NONE, open_boundary_query
+use MOM_open_boundary, only : ocean_OBC_type, OBC_NONE, open_boundary_query
 use MOM_open_boundary, only : OBC_DIRECTION_E, OBC_DIRECTION_W
 use MOM_open_boundary, only : OBC_DIRECTION_N, OBC_DIRECTION_S, OBC_segment_type
 use MOM_restart, only : register_restart_field, register_restart_pair
@@ -210,9 +210,9 @@ type, public :: barotropic_CS ; private
                              !! the barotropic acclerations.  Otherwise use the depth based on bathyT.
   real    :: BT_Coriolis_scale !< A factor by which the barotropic Coriolis acceleration anomaly
                              !! terms are scaled [nondim].
-  logical :: answers_2018    !< If true, use expressions for the barotropic solver that recover
-                             !! the answers from the end of 2018.  Otherwise, use more efficient
-                             !! or general expressions.
+  integer :: answer_date     !< The vintage of the expressions in the barotropic solver.
+                             !! Values below 20190101 recover the answers from the end of 2018,
+                             !! while higher values use more efficient or general expressions.
 
   logical :: dynamic_psurf   !< If true, add a dynamic pressure due to a viscous
                              !! ice shelf, for instance.
@@ -1245,13 +1245,13 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
       if (Htot_avg*CS%dy_Cu(I,j) <= 0.0) then
         CS%IDatu(I,j) = 0.0
       elseif (integral_BT_cont) then
-        CS%IDatu(I,j) = CS%dy_Cu(I,j) / (max(find_duhbt_du(ubt(I,j)*dt, BTCL_u(I,j)), &
+        CS%IDatu(I,j) = GV%Z_to_H * CS%dy_Cu(I,j) / (max(find_duhbt_du(ubt(I,j)*dt, BTCL_u(I,j)), &
                                              CS%dy_Cu(I,j)*Htot_avg) )
       elseif (use_BT_cont) then ! Reconsider the max and whether there should be some scaling.
-        CS%IDatu(I,j) = CS%dy_Cu(I,j) / (max(find_duhbt_du(ubt(I,j), BTCL_u(I,j)), &
+        CS%IDatu(I,j) = GV%Z_to_H * CS%dy_Cu(I,j) / (max(find_duhbt_du(ubt(I,j), BTCL_u(I,j)), &
                                              CS%dy_Cu(I,j)*Htot_avg) )
       else
-        CS%IDatu(I,j) = 1.0 / Htot_avg
+        CS%IDatu(I,j) = GV%Z_to_H / Htot_avg
       endif
     endif
 
@@ -1271,13 +1271,13 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
       if (Htot_avg*CS%dx_Cv(i,J) <= 0.0) then
         CS%IDatv(i,J) = 0.0
       elseif (integral_BT_cont) then
-        CS%IDatv(i,J) = CS%dx_Cv(i,J) / (max(find_dvhbt_dv(vbt(i,J)*dt, BTCL_v(i,J)), &
+        CS%IDatv(i,J) = GV%Z_to_H * CS%dx_Cv(i,J) / (max(find_dvhbt_dv(vbt(i,J)*dt, BTCL_v(i,J)), &
                                              CS%dx_Cv(i,J)*Htot_avg) )
       elseif (use_BT_cont) then ! Reconsider the max and whether there should be some scaling.
-        CS%IDatv(i,J) = CS%dx_Cv(i,J) / (max(find_dvhbt_dv(vbt(i,J), BTCL_v(i,J)), &
+        CS%IDatv(i,J) = GV%Z_to_H * CS%dx_Cv(i,J) / (max(find_dvhbt_dv(vbt(i,J), BTCL_v(i,J)), &
                                              CS%dx_Cv(i,J)*Htot_avg) )
       else
-        CS%IDatv(i,J) = 1.0 / Htot_avg
+        CS%IDatv(i,J) = GV%Z_to_H / Htot_avg
       endif
     endif
 
@@ -1724,7 +1724,7 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   I_sum_wt_eta = 1.0 / sum_wt_eta ; I_sum_wt_trans = 1.0 / sum_wt_trans
   do n=1,nstep+nfilter
     wt_vel(n) = wt_vel(n) * I_sum_wt_vel
-    if (CS%answers_2018) then
+    if (CS%answer_date < 20190101) then
       wt_accel2(n) = wt_accel(n)
      ! wt_trans(n) = wt_trans(n) * I_sum_wt_trans
     else
@@ -2351,7 +2351,7 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
 
     if (do_hifreq_output) then
       time_step_end = time_bt_start + real_to_time(n*US%T_to_s*dtbt)
-      call enable_averaging(US%T_to_s*dtbt, time_step_end, CS%diag)
+      call enable_averages(dtbt, time_step_end, CS%diag)
       if (CS%id_ubt_hifreq > 0) call post_data(CS%id_ubt_hifreq, ubt(IsdB:IedB,jsd:jed), CS%diag)
       if (CS%id_vbt_hifreq > 0) call post_data(CS%id_vbt_hifreq, vbt(isd:ied,JsdB:JedB), CS%diag)
       if (CS%id_eta_hifreq > 0) call post_data(CS%id_eta_hifreq, eta(isd:ied,jsd:jed), CS%diag)
@@ -2394,7 +2394,7 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   ! Reset the time information in the diag type.
   if (do_hifreq_output) call enable_averaging(time_int_in, time_end_in, CS%diag)
 
-  if (CS%answers_2018) then
+  if (CS%answer_date < 20190101) then
     I_sum_wt_vel = 1.0 / sum_wt_vel ; I_sum_wt_eta = 1.0 / sum_wt_eta
     I_sum_wt_accel = 1.0 / sum_wt_accel ; I_sum_wt_trans = 1.0 / sum_wt_trans
   else
@@ -2462,7 +2462,7 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
   if (id_clock_pass_post > 0) call cpu_clock_end(id_clock_pass_post)
   if (id_clock_calc_post > 0) call cpu_clock_begin(id_clock_calc_post)
 
-  if (CS%answers_2018) then
+  if (CS%answer_date < 20190101) then
     do j=js,je ; do I=is-1,ie
       CS%ubtav(I,j) = ubt_sum(I,j) * I_sum_wt_trans
       uhbtav(I,j) = uhbt_sum(I,j) * I_sum_wt_trans
@@ -2711,7 +2711,7 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
       ADp%visc_rem_u(I,j,k) = visc_rem_u(I,j,k)
     enddo ; enddo ; enddo
   endif
-  if (associated(ADp%visc_rem_u)) then
+  if (associated(ADp%visc_rem_v)) then
     do k=1,nz ; do J=js-1,je ; do i=is,ie
       ADp%visc_rem_v(i,J,k) = visc_rem_v(i,J,k)
     enddo ; enddo ; enddo
@@ -2776,7 +2776,6 @@ subroutine set_dtbt(G, GV, US, CS, eta, pbce, BT_cont, gtot_est, SSH_add)
   logical :: use_BT_cont
   type(memory_size_type) :: MS
 
-  character(len=200) :: mesg
   integer :: i, j, k, is, ie, js, je, nz
 
   if (.not.CS%module_is_initialized) call MOM_error(FATAL, &
@@ -3053,7 +3052,7 @@ end subroutine apply_velocity_OBCs
 !! boundary conditions, as developed by Mehmet Ilicak.
 subroutine set_up_BT_OBC(OBC, eta, BT_OBC, BT_Domain, G, GV, US, MS, halo, use_BT_cont, &
                          integral_BT_cont, dt_baroclinic, Datu, Datv, BTCL_u, BTCL_v)
- type(ocean_OBC_type), target,          intent(inout) :: OBC    !< An associated pointer to an OBC type.
+  type(ocean_OBC_type), target,          intent(inout) :: OBC    !< An associated pointer to an OBC type.
   type(memory_size_type),                intent(in)    :: MS     !< A type that describes the memory sizes of the
                                                                  !! argument arrays.
   real, dimension(SZIW_(MS),SZJW_(MS)),  intent(in)    :: eta    !< The barotropic free surface height anomaly or
@@ -3086,10 +3085,9 @@ subroutine set_up_BT_OBC(OBC, eta, BT_OBC, BT_Domain, G, GV, US, MS, halo, use_B
 
   ! Local variables
   real :: I_dt      ! The inverse of the time interval of this call [T-1 ~> s-1].
-  integer :: i, j, k, is, ie, js, je, n, nz, Isq, Ieq, Jsq, Jeq
+  integer :: i, j, k, is, ie, js, je, n, nz
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   integer :: isdw, iedw, jsdw, jedw
-  logical :: OBC_used
   type(OBC_segment_type), pointer  :: segment !< Open boundary segment
 
   is = G%isc-halo ; ie = G%iec+halo ; js = G%jsc-halo ; je = G%jec+halo
@@ -3306,7 +3304,6 @@ subroutine btcalc(h, G, GV, CS, h_u, h_v, may_use_default, OBC)
                                ! in roundoff and can be neglected [H ~> m or kg m-2].
   real :: wt_arith             ! The weight for the arithmetic mean thickness [nondim].
                                ! The harmonic mean uses a weight of (1 - wt_arith).
-  real :: Rh                   ! A ratio of summed thicknesses [nondim]
   real :: e_u(SZIB_(G),SZK_(GV)+1) ! The interface heights at u-velocity points [H ~> m or kg m-2]
   real :: e_v(SZI_(G),SZK_(GV)+1)  ! The interface heights at v-velocity points [H ~> m or kg m-2]
   real :: D_shallow_u(SZI_(G)) ! The height of the shallower of the adjacent bathymetric depths
@@ -3622,8 +3619,6 @@ function uhbt_to_ubt(uhbt, BTC) result(ubt)
   real :: uherr_min, uherr_max   ! The bounding values of the transport error [H L2 T-1 ~> m3 s-1 or kg s-1]
                                  ! or [H L2 ~> m3 or kg].
   real, parameter :: tol = 1.0e-10 ! A fractional match tolerance [nondim]
-  real :: dvel  ! Temporary variable used in the limiting the velocity [L T-1 ~> m s-1] or [L ~> m].
-  real :: vsr   ! Temporary variable used in the limiting the velocity [nondim].
   real, parameter :: vs1 = 1.25  ! Nondimensional parameters used in limiting
   real, parameter :: vs2 = 2.0   ! the velocity, starting at vs1, with the
                                  ! maximum increase of vs2, both [nondim].
@@ -3757,8 +3752,6 @@ function vhbt_to_vbt(vhbt, BTC) result(vbt)
   real :: vherr_min, vherr_max   ! The bounding values of the transport error [H L2 T-1 ~> m3 s-1 or kg s-1]
                                  ! or [H L2 ~> m3 or kg].
   real, parameter :: tol = 1.0e-10 ! A fractional match tolerance [nondim]
-  real :: dvel  ! Temporary variable used in the limiting the velocity [L T-1 ~> m s-1] or [L ~> m].
-  real :: vsr   ! Temporary variable used in the limiting the velocity [nondim].
   real, parameter :: vs1 = 1.25  ! Nondimensional parameters used in limiting
   real, parameter :: vs2 = 2.0   ! the velocity, starting at vs1, with the
                                  ! maximum increase of vs2, both [nondim].
@@ -4295,8 +4288,6 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
                                        ! name in wave_drag_file.
   real :: vel_rescale ! A rescaling factor for horizontal velocity from the representation in
                       ! a restart file to the internal representation in this run.
-  real :: uH_rescale  ! A rescaling factor for thickness transports from the representation in
-                      ! a restart file to the internal representation in this run.
   real :: mean_SL     ! The mean sea level that is used along with the bathymetry to estimate the
                       ! geometry when LINEARIZED_BT_CORIOLIS is true or BT_NONLIN_STRESS is false [Z ~> m].
   real :: det_de      ! The partial derivative due to self-attraction and loading of the reference
@@ -4308,8 +4299,12 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
   type(memory_size_type) :: MS
   type(group_pass_type) :: pass_static_data, pass_q_D_Cor
   type(group_pass_type) :: pass_bt_hbt_btav, pass_a_polarity
+  integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: default_2018_answers ! The default setting for the various 2018_ANSWERS flags.
-  logical :: apply_bt_drag, use_BT_cont_type
+  logical :: answers_2018    ! If true, use expressions for the barotropic solver that recover
+                             ! the answers from the end of 2018.  Otherwise, use more efficient
+                             ! or general expressions.
+  logical :: use_BT_cont_type
   character(len=48) :: thickness_units, flux_units
   character*(40) :: hvel_str
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
@@ -4448,13 +4443,25 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
   call get_param(param_file, mdl, "BT_CORIOLIS_SCALE", CS%BT_Coriolis_scale, &
                  "A factor by which the barotropic Coriolis anomaly terms are scaled.", &
                  units="nondim", default=1.0)
+  call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
+                 "This sets the default value for the various _ANSWER_DATE parameters.", &
+                 default=99991231)
   call get_param(param_file, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
-                 default=.false.)
-  call get_param(param_file, mdl, "BAROTROPIC_2018_ANSWERS", CS%answers_2018, &
+                 default=(default_answer_date<20190101))
+  call get_param(param_file, mdl, "BAROTROPIC_2018_ANSWERS", answers_2018, &
                  "If true, use expressions for the barotropic solver that recover the answers "//&
                  "from the end of 2018.  Otherwise, use more efficient or general expressions.", &
                  default=default_2018_answers)
+  ! Revise inconsistent default answer dates.
+  if (answers_2018 .and. (default_answer_date >= 20190101)) default_answer_date = 20181231
+  if (.not.answers_2018 .and. (default_answer_date < 20190101)) default_answer_date = 20190101
+  call get_param(param_file, mdl, "BAROTROPIC_ANSWER_DATE", CS%answer_date, &
+                 "The vintage of the expressions in the barotropic solver. "//&
+                 "Values below 20190101 recover the answers from the end of 2018, "//&
+                 "while higher values uuse more efficient or general expressions.  "//&
+                 "If both BAROTROPIC_2018_ANSWERS and BAROTROPIC_ANSWER_DATE are specified, the "//&
+                 "latter takes precedence.", default=default_answer_date)
 
   call get_param(param_file, mdl, "TIDES", CS%tides, &
                  "If true, apply tidal momentum forcing.", default=.false.)
@@ -4748,8 +4755,8 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
   dtbt_tmp = -1.0
   if (query_initialized(CS%dtbt, "DTBT", restart_CS)) then
     dtbt_tmp = CS%dtbt
-    if ((US%s_to_T_restart /= 0.0) .and. (US%s_to_T_restart /= US%s_to_T)) &
-      dtbt_tmp = (US%s_to_T / US%s_to_T_restart) * CS%dtbt
+    if ((US%s_to_T_restart /= 0.0) .and. (US%s_to_T_restart /= 1.0)) &
+      dtbt_tmp = (1.0 / US%s_to_T_restart) * CS%dtbt
   endif
 
   ! Estimate the maximum stable barotropic time step.
@@ -4909,8 +4916,8 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
       CS%vbtav(i,J) = CS%vbtav(i,J) + CS%frhatv(i,J,k) * v(i,J,k)
     enddo ; enddo ; enddo
   elseif ((US%s_to_T_restart*US%m_to_L_restart /= 0.0) .and. &
-          (US%m_to_L*US%s_to_T_restart) /= (US%m_to_L_restart*US%s_to_T)) then
-    vel_rescale = (US%m_to_L*US%s_to_T_restart) / (US%m_to_L_restart*US%s_to_T)
+          (US%s_to_T_restart /= US%m_to_L_restart)) then
+    vel_rescale = US%s_to_T_restart / US%m_to_L_restart
     do j=js,je ; do I=is-1,ie ; CS%ubtav(I,j) = vel_rescale * CS%ubtav(I,j) ; enddo ; enddo
     do J=js-1,je ; do i=is,ie ; CS%vbtav(i,J) = vel_rescale * CS%vbtav(i,J) ; enddo ; enddo
   endif
@@ -4921,8 +4928,8 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
       do j=js,je ; do I=is-1,ie ; CS%ubt_IC(I,j) = CS%ubtav(I,j) ; enddo ; enddo
       do J=js-1,je ; do i=is,ie ; CS%vbt_IC(i,J) = CS%vbtav(i,J) ; enddo ; enddo
     elseif ((US%s_to_T_restart*US%m_to_L_restart /= 0.0) .and. &
-            (US%m_to_L*US%s_to_T_restart) /= (US%m_to_L_restart*US%s_to_T)) then
-      vel_rescale = (US%m_to_L*US%s_to_T_restart) / (US%m_to_L_restart*US%s_to_T)
+            (US%s_to_T_restart /= US%m_to_L_restart)) then
+      vel_rescale = US%s_to_T_restart / US%m_to_L_restart
       do j=js,je ; do I=is-1,ie ; CS%ubt_IC(I,j) = vel_rescale * CS%ubt_IC(I,j) ; enddo ; enddo
       do J=js-1,je ; do i=is,ie ; CS%vbt_IC(i,J) = vel_rescale * CS%vbt_IC(i,J) ; enddo ; enddo
     endif
@@ -5022,11 +5029,12 @@ end subroutine barotropic_end
 
 !> This subroutine is used to register any fields from MOM_barotropic.F90
 !! that should be written to or read from the restart file.
-subroutine register_barotropic_restarts(HI, GV, param_file, CS, restart_CS)
+subroutine register_barotropic_restarts(HI, GV, US, param_file, CS, restart_CS)
   type(hor_index_type),    intent(in) :: HI         !< A horizontal index type structure.
+  type(verticalGrid_type), intent(in) :: GV         !< The ocean's vertical grid structure.
+  type(unit_scale_type),   intent(in) :: US         !< A dimensional unit scaling type
   type(param_file_type),   intent(in) :: param_file !< A structure to parse for run-time parameters.
   type(barotropic_CS),     intent(inout) :: CS      !< Barotropic control structure
-  type(verticalGrid_type), intent(in) :: GV         !< The ocean's vertical grid structure.
   type(MOM_restart_CS),    intent(inout) :: restart_CS !< MOM restart control structure
 
   ! Local variables
@@ -5056,7 +5064,8 @@ subroutine register_barotropic_restarts(HI, GV, param_file, CS, restart_CS)
                 hor_grid='u', z_grid='1')
   vd(3) = var_desc("vbtav","m s-1","Time mean barotropic meridional velocity",&
                 hor_grid='v', z_grid='1')
-  call register_restart_pair(CS%ubtav, CS%vbtav, vd(2), vd(3), .false., restart_CS)
+  call register_restart_pair(CS%ubtav, CS%vbtav, vd(2), vd(3), .false., restart_CS, &
+                             conversion=US%L_T_to_m_s)
 
   if (CS%gradual_BT_ICs) then
     vd(2) = var_desc("ubt_IC", "m s-1", &
@@ -5065,12 +5074,12 @@ subroutine register_barotropic_restarts(HI, GV, param_file, CS, restart_CS)
     vd(3) = var_desc("vbt_IC", "m s-1", &
                 longname="Next initial condition for the barotropic meridional velocity",&
                 hor_grid='v', z_grid='1')
-    call register_restart_pair(CS%ubt_IC, CS%vbt_IC, vd(2), vd(3), .false., restart_CS)
+    call register_restart_pair(CS%ubt_IC, CS%vbt_IC, vd(2), vd(3), .false., restart_CS, &
+                               conversion=US%L_T_to_m_s)
   endif
 
-
   call register_restart_field(CS%dtbt, "DTBT", .false., restart_CS, &
-                              longname="Barotropic timestep", units="seconds")
+                              longname="Barotropic timestep", units="seconds", conversion=US%T_to_s)
 
 end subroutine register_barotropic_restarts
 

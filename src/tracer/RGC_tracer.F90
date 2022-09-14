@@ -75,8 +75,8 @@ function register_RGC_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   type(MOM_restart_CS),    intent(inout) :: restart_CS !< MOM restart control struct
 
   character(len=80)  :: name, longname
-! This include declares and sets the variable "version".
-#include "version_variable.h"
+  ! This include declares and sets the variable "version".
+# include "version_variable.h"
   character(len=40)  :: mdl = "RGC_tracer" ! This module's name.
   character(len=200) :: inputdir
   real, pointer :: tr_ptr(:,:,:) => NULL()
@@ -85,9 +85,8 @@ function register_RGC_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
-    call MOM_error(WARNING, "RGC_register_tracer called with an "// &
-                            "associated control structure.")
-    return
+    call MOM_error(FATAL, "RGC_register_tracer called with an "// &
+                          "associated control structure.")
   endif
   allocate(CS)
 
@@ -172,16 +171,7 @@ subroutine initialize_RGC_tracer(restart, day, G, GV, h, diag, OBC, CS, &
                                              !! sponges, if they are in use.  Otherwise this may be unassociated.
 
   real, allocatable :: temp(:,:,:)
-  real, pointer, dimension(:,:,:) :: &
-    OBC_tr1_u => NULL(), & ! These arrays should be allocated and set to
-    OBC_tr1_v => NULL()    ! specify the values of tracer 1 that should come
-                           ! in through u- and v- points through the open
-                           ! boundary conditions, in the same units as tr.
   character(len=16) :: name     ! A variable's name in a NetCDF file.
-  character(len=72) :: longname ! The long name of that variable.
-  character(len=48) :: units    ! The dimensions of the variable.
-  character(len=48) :: flux_units ! The units for tracer fluxes, usually
-                            ! kg(tracer) kg(water)-1 m3 s-1 or kg(tracer) s-1.
   real, pointer :: tr_ptr(:,:,:) => NULL()
   real :: h_neglect         ! A thickness that is so small it is usually lost
                             ! in roundoff and can be neglected [H ~> m or kg m-2].
@@ -337,7 +327,6 @@ end subroutine RGC_tracer_column_physics
 
 subroutine RGC_tracer_end(CS)
   type(RGC_tracer_CS), pointer :: CS !< The control structure returned by a previous call to RGC_register_tracer.
-  integer :: m
 
   if (associated(CS)) then
     if (associated(CS%tr)) deallocate(CS%tr)

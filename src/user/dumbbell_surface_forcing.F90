@@ -36,7 +36,7 @@ type, public :: dumbbell_surface_forcing_CS ; private
   real, dimension(:,:), allocatable :: &
     forcing_mask             !< A mask regulating where forcing occurs
   real, dimension(:,:), allocatable :: &
-    S_restore                !< The surface salinity field toward which to restore [ppt].
+    S_restore                !< The surface salinity field toward which to restore [S ~> ppt].
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate the
                              !! timing of diagnostic output.
 end type dumbbell_surface_forcing_CS
@@ -58,8 +58,6 @@ subroutine dumbbell_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
   type(dumbbell_surface_forcing_CS),  pointer  :: CS     !< A control structure returned by a previous
                                                          !! call to dumbbell_surface_forcing_init
   ! Local variables
-  real :: Temp_restore   ! The temperature that is being restored toward [degC].
-  real :: Salin_restore  ! The salinity that is being restored toward [ppt].
   integer :: i, j, is, ie, js, je
   integer :: isd, ied, jsd, jed
 
@@ -180,9 +178,9 @@ subroutine dumbbell_surface_forcing_init(Time, G, US, param_file, diag, CS)
   type(dumbbell_surface_forcing_CS), &
                                 pointer    :: CS   !< A pointer to the control structure for this module
   ! Local variables
-  real :: S_surf  ! Initial surface salinity [ppt]
-  real :: S_range ! Range of the initial vertical distribution of salinity [ppt]
-  real :: x, y    ! Latitude and longitude normalized by the domain size [nondim]
+  real :: S_surf  ! Initial surface salinity [S ~> ppt]
+  real :: S_range ! Range of the initial vertical distribution of salinity [S ~> ppt]
+  real :: x       ! Latitude normalized by the domain size [nondim]
   integer :: i, j
   logical :: dbrotate    ! If true, rotate the domain.
 # include "version_variable.h"
@@ -215,20 +213,21 @@ subroutine dumbbell_surface_forcing_init(Time, G, US, param_file, diag, CS)
                  units="Pa", default = 10000.0, scale=US%kg_m3_to_R*US%m_s_to_L_T**2)
   call get_param(param_file, mdl, "DUMBBELL_SLP_PERIOD", CS%slp_period, &
                  "Periodicity of SLP forcing in reservoirs.", &
-                 units="days", default = 1.0)
+                 units="days", default=1.0)
   call get_param(param_file, mdl, "DUMBBELL_ROTATION", dbrotate, &
                 'Logical for rotation of dumbbell domain.',&
                  units='nondim', default=.false., do_not_log=.true.)
   call get_param(param_file, mdl,"INITIAL_SSS", S_surf, &
-                 "Initial surface salinity", units="1e-3", default=34.0, do_not_log=.true.)
+                 "Initial surface salinity", &
+                 units="1e-3", default=34.0, scale=US%ppt_to_S, do_not_log=.true.)
   call get_param(param_file, mdl,"INITIAL_S_RANGE", S_range, &
-                 "Initial salinity range (bottom - surface)", units="1e-3", &
-                 default=2., do_not_log=.true.)
+                 "Initial salinity range (bottom - surface)", &
+                 units="1e-3", default=2., scale=US%ppt_to_S, do_not_log=.true.)
 
   call get_param(param_file, mdl, "RESTOREBUOY", CS%restorebuoy, &
                  "If true, the buoyancy fluxes drive the model back "//&
                  "toward some specified surface state with a rate "//&
-                 "given by FLUXCONST.", default= .false.)
+                 "given by FLUXCONST.", default=.false.)
   if (CS%restorebuoy) then
     call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
                  "The constant that relates the restoring surface fluxes to the relative "//&

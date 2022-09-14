@@ -48,7 +48,7 @@ function register_shelfwave_OBC(param_file, CS, US, OBC_Reg)
   type(OBC_registry_type),  pointer    :: OBC_Reg    !< OBC registry.
   logical                              :: register_shelfwave_OBC
   ! Local variables
-  real :: kk, ll, PI, len_lat
+  real :: PI, len_lat
 
   character(len=32)  :: casename = "shelfwave"       !< This case's name.
 
@@ -66,7 +66,7 @@ function register_shelfwave_OBC(param_file, CS, US, OBC_Reg)
   call get_param(param_file, mdl, "F_0", CS%f0, &
                  default=0.0, units="s-1", scale=US%T_to_s, do_not_log=.true.)
   call get_param(param_file, mdl, "LENLAT", len_lat, &
-                 do_not_log=.true.)
+                 do_not_log=.true., fail_if_missing=.true.)
   call get_param(param_file, mdl,"SHELFWAVE_X_WAVELENGTH",CS%Lx, &
                  "Length scale of shelfwave in x-direction.",&
                  units="Same as x,y", default=100.)
@@ -144,8 +144,7 @@ subroutine shelfwave_set_OBC_data(OBC, CS, G, GV, US, h, Time)
   real :: omega  ! Frequency of the shelf wave [T-1 ~> s-1]
   real :: alpha
   real :: x, y, jj, kk, ll
-  character(len=40)  :: mdl = "shelfwave_set_OBC_data" ! This subroutine's name.
-  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, n
+  integer :: i, j, is, ie, js, je, isd, ied, jsd, jed, n
   integer :: IsdB, IedB, JsdB, JedB
   type(OBC_segment_type), pointer :: segment => NULL()
 

@@ -35,7 +35,7 @@ use MOM_tracer_flow_control,  only : tracer_flow_control_CS, call_tracer_column_
 use MOM_tracer_registry,      only : tracer_registry_type, MOM_tracer_chksum, MOM_tracer_chkinv
 use MOM_unit_scaling,         only : unit_scale_type
 use MOM_variables,            only : thermo_var_ptrs
-use MOM_verticalGrid,         only : verticalGrid_type
+use MOM_verticalGrid,         only : verticalGrid_type, get_thickness_units
 
 implicit none ; private
 
@@ -177,8 +177,8 @@ type, public :: offline_transport_CS ; private
   real, allocatable, dimension(:,:,:,:) :: uhtr_all !< Entire field of zonal transport [H L2 ~> m3 or kg]
   real, allocatable, dimension(:,:,:,:) :: vhtr_all !< Entire field of meridional transport [H L2 ~> m3 or kg]
   real, allocatable, dimension(:,:,:,:) :: hend_all !< Entire field of layer thicknesses [H ~> m or kg m-2]
-  real, allocatable, dimension(:,:,:,:) :: temp_all !< Entire field of temperatures [degC]
-  real, allocatable, dimension(:,:,:,:) :: salt_all !< Entire field of salinities [ppt]
+  real, allocatable, dimension(:,:,:,:) :: temp_all !< Entire field of temperatures [C ~> degC]
+  real, allocatable, dimension(:,:,:,:) :: salt_all !< Entire field of salinities [S ~> ppt]
 
 end type offline_transport_CS
 
@@ -233,10 +233,9 @@ subroutine offline_advection_ale(fluxes, Time_start, time_interval, G, GV, US, C
   integer :: niter, iter
   real    :: Inum_iter    ! The inverse of the number of iterations [nondim]
   character(len=256) :: mesg  ! The text of an error message
-  integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz
-  integer :: isv, iev, jsv, jev ! The valid range of the indices.
+  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
   integer :: IsdB, IedB, JsdB, JedB
-  logical :: z_first, x_before_y
+  logical :: x_before_y
   real :: evap_CFL_limit  ! Limit on the fraction of the water that can be fluxed out of the
                           ! top layer in a timestep [nondim]
   real :: minimum_forcing_depth ! The smallest depth over which fluxes can be applied [H ~> m or kg m-2]
@@ -324,7 +323,7 @@ subroutine offline_advection_ale(fluxes, Time_start, time_interval, G, GV, US, C
       call hchksum(h_vol, "h_vol before advect", G%HI, scale=HL2_to_kg_scale)
       call uvchksum("[uv]htr_sub before advect", uhtr_sub, vhtr_sub, G%HI, scale=HL2_to_kg_scale)
       write(debug_msg, '(A,I4.4)') 'Before advect ', iter
-      call MOM_tracer_chkinv(debug_msg, G, GV, h_pre, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+      call MOM_tracer_chkinv(debug_msg, G, GV, h_pre, CS%tracer_reg)
     endif
 
     call advect_tracer(h_pre, uhtr_sub, vhtr_sub, CS%OBC, CS%dt_offline, G, GV, US, &
@@ -345,7 +344,7 @@ subroutine offline_advection_ale(fluxes, Time_start, time_interval, G, GV, US, C
       if (CS%debug) then
         call hchksum(h_new,"h_new before ALE", G%HI, scale=GV%H_to_m)
         write(debug_msg, '(A,I4.4)') 'Before ALE ', iter
-        call MOM_tracer_chkinv(debug_msg, G, GV, h_new, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+        call MOM_tracer_chkinv(debug_msg, G, GV, h_new, CS%tracer_reg)
       endif
       call cpu_clock_begin(id_clock_ALE)
       call ALE_main_offline(G, GV, h_new, CS%tv, CS%tracer_Reg, CS%ALE_CSp, CS%OBC, CS%dt_offline)
@@ -354,7 +353,7 @@ subroutine offline_advection_ale(fluxes, Time_start, time_interval, G, GV, US, C
       if (CS%debug) then
         call hchksum(h_new, "h_new after ALE", G%HI, scale=GV%H_to_m)
         write(debug_msg, '(A,I4.4)') 'After ALE ', iter
-        call MOM_tracer_chkinv(debug_msg, G, GV, h_new, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+        call MOM_tracer_chkinv(debug_msg, G, GV, h_new, CS%tracer_reg)
       endif
     endif
 
@@ -396,7 +395,7 @@ subroutine offline_advection_ale(fluxes, Time_start, time_interval, G, GV, US, C
   if (CS%debug) then
     call hchksum(h_pre, "h after offline_advection_ale", G%HI, scale=GV%H_to_m)
     call uvchksum("[uv]htr after offline_advection_ale", uhtr, vhtr, G%HI, scale=HL2_to_kg_scale)
-    call MOM_tracer_chkinv("After offline_advection_ale", G, GV, h_pre, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("After offline_advection_ale", G, GV, h_pre, CS%tracer_reg)
   endif
 
   call cpu_clock_end(CS%id_clock_offline_adv)
@@ -432,7 +431,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vhr  !< Remaining meridional mass transport [H L2 ~> m3 or kg]
 
   character(len=256) :: mesg  ! The text of an error message
-  integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz, iter
+  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz, iter
   real :: HL2_to_kg_scale ! Unit conversion factors to cell mass [kg H-1 L-2 ~> kg m-3 or 1]
   real :: prev_tot_residual, tot_residual ! The absolute value of the remaining transports [H L2 ~> m3 or kg]
 
@@ -460,7 +459,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
   if (converged) return
 
   if (CS%debug) then
-    call MOM_tracer_chkinv("Before redistribute ", G, GV, h_pre, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("Before redistribute ", G, GV, h_pre, CS%tracer_reg)
   endif
 
   call cpu_clock_begin(CS%id_clock_redistribute)
@@ -479,7 +478,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
         call pass_vector(uhtr, vhtr, G%Domain)
 
         if (CS%debug) then
-          call MOM_tracer_chksum("Before upwards redistribute ", CS%tracer_Reg%Tr, CS%tracer_Reg%ntr, G)
+          call MOM_tracer_chksum("Before upwards redistribute ", CS%tracer_Reg, G)
           call uvchksum("[uv]tr before upwards redistribute", uhtr, vhtr, G%HI, scale=HL2_to_kg_scale)
         endif
 
@@ -496,7 +495,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
                 max_iter_in=1, update_vol_prev=.true., uhr_out=uhr, vhr_out=vhr)
 
         if (CS%debug) then
-          call MOM_tracer_chksum("After upwards redistribute ", CS%tracer_Reg%Tr, CS%tracer_Reg%ntr, G)
+          call MOM_tracer_chksum("After upwards redistribute ", CS%tracer_Reg, G)
         endif
 
         ! Convert h_new back to layer thickness for ALE remapping
@@ -520,7 +519,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
         call pass_vector(uhtr, vhtr, G%Domain)
 
         if (CS%debug) then
-          call MOM_tracer_chksum("Before barotropic redistribute ", CS%tracer_Reg%Tr, CS%tracer_Reg%ntr, G)
+          call MOM_tracer_chksum("Before barotropic redistribute ", CS%tracer_Reg, G)
           call uvchksum("[uv]tr before upwards redistribute", uhtr, vhtr, G%HI, scale=HL2_to_kg_scale)
         endif
 
@@ -537,7 +536,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
                 max_iter_in=1, update_vol_prev=.true., uhr_out=uhr, vhr_out=vhr)
 
         if (CS%debug) then
-          call MOM_tracer_chksum("After barotropic redistribute ", CS%tracer_Reg%Tr, CS%tracer_Reg%ntr, G)
+          call MOM_tracer_chksum("After barotropic redistribute ", CS%tracer_Reg, G)
         endif
 
         ! Convert h_new back to layer thickness for ALE remapping
@@ -583,7 +582,7 @@ subroutine offline_redistribute_residual(CS, G, GV, US, h_pre, uhtr, vhtr, conve
   if (CS%debug) then
     call hchksum(h_pre, "h_pre after redistribute", G%HI, scale=GV%H_to_m)
     call uvchksum("uhtr after redistribute", uhtr, vhtr, G%HI, scale=HL2_to_kg_scale)
-    call MOM_tracer_chkinv("after redistribute ", G, GV, h_new, CS%tracer_Reg%Tr, CS%tracer_Reg%ntr)
+    call MOM_tracer_chkinv("after redistribute ", G, GV, h_new, CS%tracer_Reg)
   endif
 
   call cpu_clock_end(CS%id_clock_redistribute)
@@ -599,7 +598,7 @@ real function remaining_transport_sum(G, GV, US, uhtr, vhtr, h_new)
                               intent(in   ) :: uhtr  !< Zonal mass transport [H L2 ~> m3 or kg]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                               intent(in   ) :: vhtr  !< Meridional mass transport [H L2 ~> m3 or kg]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                               intent(in   ) :: h_new !< Layer thicknesses [H ~> m or kg m-2]
 
   ! Local variables
@@ -664,7 +663,7 @@ subroutine offline_diabatic_ale(fluxes, Time_start, Time_end, G, GV, US, CS, h_p
     call hchksum(h_pre, "h_pre before offline_diabatic_ale", G%HI, scale=GV%H_to_m)
     call hchksum(eatr, "eatr before offline_diabatic_ale", G%HI, scale=GV%H_to_m)
     call hchksum(ebtr, "ebtr before offline_diabatic_ale", G%HI, scale=GV%H_to_m)
-    call MOM_tracer_chkinv("Before offline_diabatic_ale", G, GV, h_pre, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("Before offline_diabatic_ale", G, GV, h_pre, CS%tracer_reg)
   endif
 
   eatr(:,:,:) = 0.
@@ -728,7 +727,7 @@ subroutine offline_diabatic_ale(fluxes, Time_start, Time_end, G, GV, US, CS, h_p
     call hchksum(h_pre, "h_pre after offline_diabatic_ale", G%HI, scale=GV%H_to_m)
     call hchksum(eatr, "eatr after offline_diabatic_ale", G%HI, scale=GV%H_to_m)
     call hchksum(ebtr, "ebtr after offline_diabatic_ale", G%HI, scale=GV%H_to_m)
-    call MOM_tracer_chkinv("After offline_diabatic_ale", G, GV, h_pre, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("After offline_diabatic_ale", G, GV, h_pre, CS%tracer_reg)
   endif
 
   call cpu_clock_end(CS%id_clock_offline_diabatic)
@@ -768,7 +767,7 @@ subroutine offline_fw_fluxes_into_ocean(G, GV, CS, fluxes, h, in_flux_optional)
 
   if (CS%debug) then
     call hchksum(h, "h before fluxes into ocean", G%HI, scale=GV%H_to_m)
-    call MOM_tracer_chkinv("Before fluxes into ocean", G, GV, h, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("Before fluxes into ocean", G, GV, h, CS%tracer_reg)
   endif
   do m = 1,CS%tracer_reg%ntr
     ! Layer thicknesses should only be updated after the last tracer is finished
@@ -778,7 +777,7 @@ subroutine offline_fw_fluxes_into_ocean(G, GV, CS, fluxes, h, in_flux_optional)
   enddo
   if (CS%debug) then
     call hchksum(h, "h after fluxes into ocean", G%HI, scale=GV%H_to_m)
-    call MOM_tracer_chkinv("After fluxes into ocean", G, GV, h, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("After fluxes into ocean", G, GV, h, CS%tracer_reg)
   endif
 
   ! Now that fluxes into the ocean are done, save the negative fluxes for later
@@ -806,7 +805,7 @@ subroutine offline_fw_fluxes_out_ocean(G, GV, CS, fluxes, h, out_flux_optional)
 
   if (CS%debug) then
     call hchksum(h, "h before fluxes out of ocean", G%HI, scale=GV%H_to_m)
-    call MOM_tracer_chkinv("Before fluxes out of ocean", G, GV, h, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("Before fluxes out of ocean", G, GV, h, CS%tracer_reg)
   endif
   do m = 1, CS%tracer_reg%ntr
     ! Layer thicknesses should only be updated after the last tracer is finished
@@ -816,7 +815,7 @@ subroutine offline_fw_fluxes_out_ocean(G, GV, CS, fluxes, h, out_flux_optional)
   enddo
   if (CS%debug) then
     call hchksum(h, "h after fluxes out of ocean", G%HI, scale=GV%H_to_m)
-    call MOM_tracer_chkinv("Before fluxes out of ocean", G, GV, h, CS%tracer_reg%Tr, CS%tracer_reg%ntr)
+    call MOM_tracer_chkinv("Before fluxes out of ocean", G, GV, h, CS%tracer_reg)
   endif
 
 end subroutine offline_fw_fluxes_out_ocean
@@ -862,16 +861,11 @@ subroutine offline_advection_layer(fluxes, Time_start, time_interval, G, GV, US,
       h_new, &  ! Updated thicknesses [H ~> m or kg m-2]
       h_vol     ! Cell volumes [H L2 ~> m3 or kg]
   ! Work arrays for temperature and salinity
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
-      temp_old, temp_mean, &  ! Temperatures [degC]
-      salt_old, salt_mean     ! Salinities [ppt]
-  integer :: niter, iter
+  integer :: iter
   real    :: dt_iter  ! The timestep of each iteration [T ~> s]
   real    :: HL2_to_kg_scale ! Unit conversion factors to cell mass [kg H-1 L-2 ~> kg m-3 or 1]
-  logical :: converged
   character(len=160) :: mesg  ! The text of an error message
-  integer :: i, j, k, m, is, ie, js, je, isd, ied, jsd, jed, nz
-  integer :: isv, iev, jsv, jev ! The valid range of the indices.
+  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
   integer :: IsdB, IedB, JsdB, JedB
   logical :: z_first, x_before_y
 
@@ -1021,8 +1015,8 @@ subroutine update_offline_fields(CS, G, GV, US, h, fluxes, do_ale)
     call uvchksum("[uv]htr before update_offline_fields", CS%uhtr, CS%vhtr, G%HI, &
                   scale=US%L_to_m**2*GV%H_to_kg_m2)
     call hchksum(CS%h_end, "h_end before update_offline_fields", G%HI, scale=GV%H_to_m)
-    call hchksum(CS%tv%T, "Temp before update_offline_fields", G%HI)
-    call hchksum(CS%tv%S, "Salt before update_offline_fields", G%HI)
+    call hchksum(CS%tv%T, "Temp before update_offline_fields", G%HI, scale=US%C_to_degC)
+    call hchksum(CS%tv%S, "Salt before update_offline_fields", G%HI, scale=US%S_to_ppt)
   endif
 
   ! Store a copy of the layer thicknesses before ALE regrid/remap
@@ -1042,8 +1036,8 @@ subroutine update_offline_fields(CS, G, GV, US, h, fluxes, do_ale)
   if (CS%debug) then
     call uvchksum("[uv]h after update offline from files and arrays", CS%uhtr, CS%vhtr, G%HI, &
                   scale=US%L_to_m**2*GV%H_to_kg_m2)
-    call hchksum(CS%tv%T, "Temp after update offline from files and arrays", G%HI)
-    call hchksum(CS%tv%S, "Salt after update offline from files and arrays", G%HI)
+    call hchksum(CS%tv%T, "Temp after update offline from files and arrays", G%HI, scale=US%C_to_degC)
+    call hchksum(CS%tv%S, "Salt after update offline from files and arrays", G%HI, scale=US%S_to_ppt)
   endif
 
   ! If using an ALE-dependent vertical coordinate, fields will need to be remapped
@@ -1105,8 +1099,8 @@ subroutine update_offline_fields(CS, G, GV, US, h, fluxes, do_ale)
     call uvchksum("[uv]htr after update_offline_fields", CS%uhtr, CS%vhtr, G%HI, &
                   scale=US%L_to_m**2*GV%H_to_kg_m2)
     call hchksum(CS%h_end, "h_end after update_offline_fields", G%HI, scale=GV%H_to_m)
-    call hchksum(CS%tv%T, "Temp after update_offline_fields", G%HI)
-    call hchksum(CS%tv%S, "Salt after update_offline_fields", G%HI)
+    call hchksum(CS%tv%T, "Temp after update_offline_fields", G%HI, scale=US%C_to_degC)
+    call hchksum(CS%tv%S, "Salt after update_offline_fields", G%HI, scale=US%S_to_ppt)
   endif
 
   call callTree_leave("update_offline_fields")
@@ -1166,7 +1160,7 @@ subroutine register_diags_offline_transport(Time, diag, CS, GV, US)
     'at the end of the offline timestep', 'm', conversion=GV%H_to_m)
   CS%id_h_redist = register_diag_field('ocean_model','h_redist', diag%axesTL, Time, &
     'Layer thicknesses before redistribution of mass fluxes', &
-    'm', conversion=GV%H_to_m)
+    get_thickness_units(GV), conversion=GV%H_to_MKS)
 
   ! Regridded/remapped input fields
   CS%id_uhtr_regrid = register_diag_field('ocean_model', 'uhtr_regrid', diag%axesCuL, Time, &
@@ -1176,9 +1170,11 @@ subroutine register_diags_offline_transport(Time, diag, CS, GV, US)
                                           'Meridional mass transport regridded/remapped onto offline grid', &
                                           'kg', conversion=US%L_to_m**2*GV%H_to_kg_m2)
   CS%id_temp_regrid = register_diag_field('ocean_model', 'temp_regrid', diag%axesTL, Time, &
-                                          'Temperature regridded/remapped onto offline grid','C')
+                                          'Temperature regridded/remapped onto offline grid',&
+                                          'C', conversion=US%C_to_degC)
   CS%id_salt_regrid = register_diag_field('ocean_model', 'salt_regrid', diag%axesTL, Time, &
-                                          'Salinity regridded/remapped onto offline grid','g kg-1')
+                                          'Salinity regridded/remapped onto offline grid', &
+                                          'g kg-1', conversion=US%S_to_ppt)
   CS%id_h_regrid = register_diag_field('ocean_model', 'h_regrid', diag%axesTL, Time, &
                                           'Layer thicknesses regridded/remapped onto offline grid', &
                                           'm', conversion=GV%H_to_m)
@@ -1317,7 +1313,7 @@ subroutine offline_transport_init(param_file, CS, diabatic_CSp, G, GV, US)
   character(len=20)  :: redistribute_method
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
-  integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
+  integer :: is, ie, js, je, isd, ied, jsd, jed, nz
   integer :: IsdB, IedB, JsdB, JedB
 
   is   = G%isc   ; ie   = G%iec  ; js   = G%jsc  ; je   = G%jec ; nz = GV%ke
@@ -1475,7 +1471,7 @@ subroutine read_all_input(CS, G, GV, US)
   type(verticalGrid_type),    intent(in)    :: GV    !< Vertical grid structure
   type(unit_scale_type),      intent(in)    :: US    !< A dimensional unit scaling type
 
-  integer :: is, ie, js, je, isd, ied, jsd, jed, nz, t, ntime
+  integer :: isd, ied, jsd, jed, nz, t, ntime
   integer :: IsdB, IedB, JsdB, JedB
 
   nz = GV%ke ; ntime = CS%numtime
@@ -1504,9 +1500,9 @@ subroutine read_all_input(CS, G, GV, US)
       call MOM_read_data(CS%snap_file,'h_end', CS%hend_all(:,:,1:CS%nk_input,t), G%Domain, &
                        timelevel=t, position=CENTER, scale=GV%kg_m2_to_H)
       call MOM_read_data(CS%mean_file,'temp', CS%temp_all(:,:,1:CS%nk_input,t), G%Domain, &
-                       timelevel=t, position=CENTER)
+                       timelevel=t, position=CENTER, scale=US%degC_to_C)
       call MOM_read_data(CS%mean_file,'salt', CS%salt_all(:,:,1:CS%nk_input,t), G%Domain, &
-                       timelevel=t, position=CENTER)
+                       timelevel=t, position=CENTER, scale=US%ppt_to_S)
     enddo
   endif
 

@@ -156,7 +156,7 @@ real elemental pure function PLM_monotonized_slope(u_l, u_c, u_r, s_l, s_c, s_r)
 end function PLM_monotonized_slope
 
 !> Returns a PLM slope using h2 extrapolation from a cell to the left.
-!! Use the negative to extrapolate from the a cell to the right.
+!! Use the negative to extrapolate from the cell to the right.
 real elemental pure function PLM_extrapolate_slope(h_l, h_c, h_neglect, u_l, u_c)
   real, intent(in) :: h_l !< Thickness of left cell [units of grid thickness]
   real, intent(in) :: h_c !< Thickness of center cell [units of grid thickness]
@@ -197,11 +197,9 @@ subroutine PLM_reconstruction( N, h, u, edge_values, ppoly_coef, h_neglect )
 
   ! Local variables
   integer       :: k                    ! loop index
-  real          :: u_l, u_c, u_r        ! left, center and right cell averages
-  real          :: h_l, h_c, h_r, h_cn  ! left, center and right cell widths
+  real          :: u_l, u_r             ! left and right cell averages
   real          :: slope                ! retained PLM slope
-  real          :: a, b                 ! auxiliary variables
-  real          :: u_min, u_max, e_l, e_r, edge
+  real          :: e_r, edge
   real          :: almost_one
   real, dimension(N) :: slp, mslp
   real    :: hNeglect
@@ -307,7 +305,7 @@ end subroutine PLM_boundary_extrapolation
 !! Date of creation: 2008.06.06
 !! L. White
 !!
-!! This module contains routines that handle one-dimensionnal finite volume
+!! This module contains routines that handle one-dimensional finite volume
 !! reconstruction using the piecewise linear method (PLM).
 
 end module PLM_functions

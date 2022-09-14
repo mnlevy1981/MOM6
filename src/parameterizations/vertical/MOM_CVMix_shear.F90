@@ -82,8 +82,8 @@ subroutine calculate_CVMix_shear(u_H, v_H, h, tv, kd, kv, G, GV, US, CS )
   real :: dummy  ! A dummy variable [nondim]
   real :: dRho   ! Buoyancy differences [Z T-2 ~> m s-2]
   real, dimension(2*(GV%ke)) :: pres_1d ! A column of interface pressures [R L2 T-2 ~> Pa]
-  real, dimension(2*(GV%ke)) :: temp_1d ! A column of temperatures [degC]
-  real, dimension(2*(GV%ke)) :: salt_1d ! A column of salinities [ppt]
+  real, dimension(2*(GV%ke)) :: temp_1d ! A column of temperatures [C ~> degC]
+  real, dimension(2*(GV%ke)) :: salt_1d ! A column of salinities [S ~> ppt]
   real, dimension(2*(GV%ke)) :: rho_1d  ! A column of densities at interface pressures [R ~> kg m-3]
   real, dimension(GV%ke+1) :: Ri_Grad !< Gradient Richardson number [nondim]
   real, dimension(GV%ke+1) :: Kvisc   !< Vertical viscosity at interfaces [m2 s-1]
@@ -326,9 +326,9 @@ logical function CVMix_shear_is_used(param_file)
   ! Local variables
   logical :: LMD94, PP81
   call get_param(param_file, mdl, "USE_LMD94", LMD94, &
-       default=.false., do_not_log = .true.)
+       default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "Use_PP81", PP81, &
-       default=.false., do_not_log = .true.)
+       default=.false., do_not_log=.true.)
   CVMix_shear_is_used = (LMD94 .or. PP81)
 end function CVMix_shear_is_used
 

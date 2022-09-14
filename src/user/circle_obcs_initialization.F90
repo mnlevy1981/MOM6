@@ -12,7 +12,6 @@ use MOM_grid, only : ocean_grid_type
 use MOM_tracer_registry, only : tracer_registry_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_type
 
 implicit none ; private
 
@@ -45,7 +44,7 @@ subroutine circle_obcs_initialize_thickness(h, depth_tot, G, GV, param_file, jus
   real :: eta1D(SZK_(GV)+1)! Interface height relative to the sea surface
                            ! positive upward, in depth units [Z ~> m].
   real :: IC_amp           ! The amplitude of the initial height displacement [H ~> m or kg m-2].
-  real :: diskrad, rad, xCenter, xRadius, lonC, latC, xOffset
+  real :: diskrad, rad, lonC, latC, xOffset
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "circle_obcs_initialization"   ! This module's name.

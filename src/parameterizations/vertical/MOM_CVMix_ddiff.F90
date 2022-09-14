@@ -160,21 +160,20 @@ subroutine compute_ddiff_coeffs(h, tv, G, GV, US, j, Kd_T, Kd_S, CS, R_rho)
   ! Local variables
   real, dimension(SZK_(GV)) :: &
     cellHeight, &  !< Height of cell centers [m]
-    dRho_dT,    &  !< partial derivatives of density wrt temp [R degC-1 ~> kg m-3 degC-1]
-    dRho_dS,    &  !< partial derivatives of density wrt saln [R ppt-1 ~> kg m-3 ppt-1]
+    dRho_dT,    &  !< partial derivatives of density wrt temp [R C-1 ~> kg m-3 degC-1]
+    dRho_dS,    &  !< partial derivatives of density wrt saln [R S-1 ~> kg m-3 ppt-1]
     pres_int,   &  !< pressure at each interface [R L2 T-2 ~> Pa]
-    temp_int,   &  !< temp and at interfaces [degC]
-    salt_int,   &  !< salt at at interfaces [ppt]
+    temp_int,   &  !< temp and at interfaces [C ~> degC]
+    salt_int,   &  !< salt at at interfaces [S ~> ppt]
     alpha_dT,   &  !< alpha*dT across interfaces [kg m-3]
     beta_dS,    &  !< beta*dS across interfaces [kg m-3]
-    dT,         &  !< temp. difference between adjacent layers [degC]
-    dS             !< salt difference between adjacent layers [ppt]
+    dT,         &  !< temp. difference between adjacent layers [C ~> degC]
+    dS             !< salt difference between adjacent layers [S ~> ppt]
   real, dimension(SZK_(GV)+1) :: &
     Kd1_T,      &  !< Diapycanal diffusivity of temperature [m2 s-1].
     Kd1_S          !< Diapycanal diffusivity of salinity [m2 s-1].
 
   real, dimension(SZK_(GV)+1) :: iFaceHeight !< Height of interfaces [m]
-  integer :: kOBL                        !< level of OBL extent
   real :: dh, hcorr
   integer :: i, k
 
@@ -274,7 +273,7 @@ end subroutine compute_ddiff_coeffs
 logical function CVMix_ddiff_is_used(param_file)
   type(param_file_type), intent(in) :: param_file !< A structure to parse for run-time parameters
   call get_param(param_file, mdl, "USE_CVMIX_DDIFF", CVMix_ddiff_is_used, &
-                 default=.false., do_not_log = .true.)
+                 default=.false., do_not_log=.true.)
 
 end function CVMix_ddiff_is_used
 

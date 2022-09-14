@@ -13,7 +13,6 @@ use MOM_tracer_registry, only : tracer_registry_type
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_type
 
 use random_numbers_mod, only: initializeRandomNumberStream, getRandomNumbers, randomNumberStream
 
@@ -41,8 +40,6 @@ subroutine Neverworld_initialize_topography(D, G, param_file, max_depth)
 
   ! Local variables
   real :: PI                   ! 3.1415926... calculated as 4*atan(1)
-  real :: D0                   ! A constant to make the maximum     !
-                               ! basin depth MAXIMUM_DEPTH.         !
   real :: x, y
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
@@ -167,7 +164,6 @@ real function dist_line_fixed_y(x, y, x0, x1, y0)
   real, intent(in) :: x0      !< x-position of line segment end[nondim]
   real, intent(in) :: x1      !< x-position of line segment end[nondim]
   real, intent(in) :: y0      !< y-position of line segment [nondim]
-  real :: dx, yr, dy
 
   dist_line_fixed_y = dist_line_fixed_x(y, x, y0, x0, x1)
 end function dist_line_fixed_y
@@ -263,7 +259,7 @@ subroutine Neverworld_initialize_thickness(h, depth_tot, G, GV, US, param_file, 
   real :: noise ! Noise
   type(randomNumberStream) :: rns ! Random numbers for stochastic tidal parameterization
   character(len=40)  :: mdl = "Neverworld_initialize_thickness" ! This subroutine's name.
-  integer :: i, j, k, k1, is, ie, js, je, nz, itt
+  integer :: i, j, k, is, ie, js, je, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 

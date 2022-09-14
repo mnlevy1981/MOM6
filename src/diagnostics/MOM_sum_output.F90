@@ -348,16 +348,12 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
   real :: Salt_anom    ! The change in salt that cannot be accounted for by
                        ! the surface fluxes [ppt kg].
   real :: salin        ! The mean salinity of the ocean [ppt].
-  real :: salin_chg    ! The change in total salt since the last call
-                       ! to this subroutine divided by total mass [ppt].
   real :: salin_anom   ! The change in total salt that cannot be accounted for by
                        ! the surface fluxes divided by total mass [ppt].
   real :: Heat         ! The total amount of Heat in the ocean [J].
   real :: Heat_chg     ! The change in total ocean heat since the last call to this subroutine [J].
   real :: Heat_anom    ! The change in heat that cannot be accounted for by the surface fluxes [J].
   real :: temp         ! The mean potential temperature of the ocean [degC].
-  real :: temp_chg     ! The change in total heat divided by total heat capacity
-                       ! of the ocean since the last call to this subroutine, degC.
   real :: temp_anom    ! The change in total heat that cannot be accounted for
                        ! by the surface fluxes, divided by the total heat
                        ! capacity of the ocean [degC].
@@ -397,7 +393,7 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
                             ! calculation [kg T2 R-1 Z-1 L-2 s-2 ~> 1]
   integer :: num_nc_fields  ! The number of fields that will actually go into
                             ! the NetCDF file.
-  integer :: i, j, k, is, ie, js, je, ns, nz, m, Isq, Ieq, Jsq, Jeq, isr, ier, jsr, jer
+  integer :: i, j, k, is, ie, js, je, nz, m, Isq, Ieq, Jsq, Jeq, isr, ier, jsr, jer
   integer :: li, lbelow, labove  ! indices of deep_area_vol, used to find Z_0APE.
                                  ! lbelow & labove are lower & upper limits for li
                                  ! in the search for the entry in lH to use.
@@ -687,7 +683,7 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
   if (CS%use_temperature) then
     Temp_int(:,:) = 0.0 ; Salt_int(:,:) = 0.0
     do k=1,nz ; do j=js,je ; do i=is,ie
-      Salt_int(i,j) = Salt_int(i,j) + tv%S(i,j,k) * &
+      Salt_int(i,j) = Salt_int(i,j) + US%S_to_ppt*tv%S(i,j,k) * &
                       (h(i,j,k)*(HL2_to_kg * areaTm(i,j)))
       Temp_int(i,j) = Temp_int(i,j) + (US%Q_to_J_kg*tv%C_p * tv%T(i,j,k)) * &
                       (h(i,j,k)*(HL2_to_kg * areaTm(i,j)))
@@ -733,10 +729,6 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
   enddo ; enddo ; enddo
 
   call sum_across_PEs(CS%ntrunc)
-  !   Sum the various quantities across all the processors.  This sum is NOT
-  ! guaranteed to be bitwise reproducible, even on the same decomposition.
-  !   The sum of Tr_stocks should be reimplemented using the reproducing sums.
-  if (nTr_stocks > 0) call sum_across_PEs(Tr_stocks,nTr_stocks)
 
   call max_across_PEs(max_CFL, 2)
 
@@ -764,9 +756,11 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
   mass_chg = EFP_to_real(mass_chg_EFP)
 
   if (CS%use_temperature) then
-    salin = Salt / mass_tot ; salin_anom = Salt_anom / mass_tot
+    salin = Salt / mass_tot
+    salin_anom = Salt_anom / mass_tot
    ! salin_chg = Salt_chg / mass_tot
-    temp = heat / (mass_tot*US%Q_to_J_kg*tv%C_p) ; temp_anom = Heat_anom / (mass_tot*US%Q_to_J_kg*tv%C_p)
+    temp = heat / (mass_tot*US%Q_to_J_kg*US%degC_to_C*tv%C_p)
+    temp_anom = Heat_anom / (mass_tot*US%Q_to_J_kg*US%degC_to_C*tv%C_p)
   endif
   En_mass = toten / mass_tot
 
@@ -852,13 +846,13 @@ subroutine write_energy(u, v, h, tv, day, n, G, GV, US, CS, tracer_CSp, dt_forci
       endif
       do m=1,nTr_stocks
 
-         write(stdout,'("      Total ",a,": ",ES24.16,X,a)') &
+         write(stdout,'("      Total ",a,": ",ES24.16,1X,a)') &
               trim(Tr_names(m)), Tr_stocks(m), trim(Tr_units(m))
 
          if (Tr_minmax_avail(m)) then
-           write(stdout,'(64X,"Global Min:",ES24.16,X,"at: (", f7.2,","f7.2,","f8.2,")"  )') &
+           write(stdout,'(64X,"Global Min:",ES24.16,1X,"at: (",f7.2,",",f7.2,",",f8.2,")"  )') &
                 Tr_min(m),Tr_min_x(m),Tr_min_y(m),Tr_min_z(m)
-           write(stdout,'(64X,"Global Max:",ES24.16,X,"at: (", f7.2,","f7.2,","f8.2,")"  )') &
+           write(stdout,'(64X,"Global Max:",ES24.16,1X,"at: (",f7.2,",",f7.2,",",f8.2,")"  )') &
                 Tr_max(m),Tr_max_x(m),Tr_max_y(m),Tr_max_z(m)
         endif
 
@@ -940,12 +934,6 @@ subroutine accumulate_net_input(fluxes, sfc_state, tv, dt, G, US, CS)
                ! over a time step [ppt kg].
     heat_in    ! The total heat added by surface fluxes, integrated
                ! over a time step [J].
-  real :: FW_input   ! The net fresh water input, integrated over a timestep
-                     ! and summed over space [kg].
-  real :: salt_input ! The total salt added by surface fluxes, integrated
-                     ! over a time step and summed over space [ppt kg].
-  real :: heat_input ! The total heat added by boundary fluxes, integrated
-                     ! over a time step and summed over space [J].
   real :: RZL2_to_kg ! A combination of scaling factors for mass [kg R-1 Z-1 L-2 ~> 1]
   real :: QRZL2_to_J ! A combination of scaling factors for heat [J Q-1 R-1 Z-1 L-2 ~> 1]
 
@@ -957,7 +945,6 @@ subroutine accumulate_net_input(fluxes, sfc_state, tv, dt, G, US, CS)
     heat_in_EFP      ! The total heat added by boundary fluxes, integrated
                      ! over a time step and summed over space [J].
 
-  real :: inputs(3)   ! A mixed array for combining the sums
   integer :: i, j, is, ie, js, je, isr, ier, jsr, jer
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -1008,20 +995,27 @@ subroutine accumulate_net_input(fluxes, sfc_state, tv, dt, G, US, CS)
 !    enddo ; enddo ; endif
 
     ! smg: old code
-    if (associated(tv%TempxPmE)) then
+    if (associated(fluxes%heat_content_evap)) then
       do j=js,je ; do i=is,ie
-        heat_in(i,j) = heat_in(i,j) + (fluxes%C_p * QRZL2_to_J*G%areaT(i,j)) * tv%TempxPmE(i,j)
+        heat_in(i,j) = heat_in(i,j) + dt * QRZL2_to_J * G%areaT(i,j) * &
+                       (fluxes%heat_content_evap(i,j) + fluxes%heat_content_lprec(i,j) + &
+                        fluxes%heat_content_cond(i,j) + fluxes%heat_content_fprec(i,j) + &
+                        fluxes%heat_content_lrunoff(i,j) + fluxes%heat_content_frunoff(i,j))
+      enddo ; enddo
+    elseif (associated(tv%TempxPmE)) then
+      do j=js,je ; do i=is,ie
+        heat_in(i,j) = heat_in(i,j) + (tv%C_p * QRZL2_to_J*G%areaT(i,j)) * tv%TempxPmE(i,j)
       enddo ; enddo
     elseif (associated(fluxes%evap)) then
       do j=js,je ; do i=is,ie
-        heat_in(i,j) = heat_in(i,j) + (US%Q_to_J_kg*fluxes%C_p * sfc_state%SST(i,j)) * FW_in(i,j)
+        heat_in(i,j) = heat_in(i,j) + (US%Q_to_J_kg*tv%C_p * sfc_state%SST(i,j)) * FW_in(i,j)
       enddo ; enddo
     endif
 
     ! The following heat sources may or may not be used.
     if (associated(tv%internal_heat)) then
       do j=js,je ; do i=is,ie
-        heat_in(i,j) = heat_in(i,j) + (fluxes%C_p * QRZL2_to_J*G%areaT(i,j)) * tv%internal_heat(i,j)
+        heat_in(i,j) = heat_in(i,j) + (tv%C_p * QRZL2_to_J*G%areaT(i,j)) * tv%internal_heat(i,j)
       enddo ; enddo
     endif
     if (associated(tv%frazil)) then ; do j=js,je ; do i=is,ie
@@ -1291,8 +1285,7 @@ subroutine read_depth_list(G, US, DL, filename, require_chksum, file_matches)
 
   ! Local variables
   character(len=240) :: var_msg
-  real, allocatable :: tmp(:)
-  integer :: ncid, list_size, k, ndim, sizes(4)
+  integer :: list_size, ndim, sizes(4)
   character(len=:), allocatable :: depth_file_chksum, area_file_chksum
   character(len=16) :: depth_grid_chksum, area_grid_chksum
   logical :: depth_att_found, area_att_found
@@ -1373,7 +1366,7 @@ subroutine get_depth_list_checksums(G, US, depth_chksum, area_chksum)
 
   ! Depth checksum
   do j=G%jsc,G%jec ; do i=G%isc,G%iec
-    field(i,j) = G%bathyT(i,j) + G%Z_ref
+    field(i,j) = US%Z_to_m*(G%bathyT(i,j) + G%Z_ref)
   enddo ; enddo
   write(depth_chksum, '(Z16)') field_chksum(field(:,:))
 

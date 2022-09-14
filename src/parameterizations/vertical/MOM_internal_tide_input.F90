@@ -19,7 +19,7 @@ use MOM_time_manager,     only : time_type, set_time, operator(+), operator(<=)
 use MOM_unit_scaling,     only : unit_scale_type
 use MOM_variables,        only : thermo_var_ptrs, vertvisc_type, p3d
 use MOM_verticalGrid,     only : verticalGrid_type
-use MOM_EOS,              only : calculate_density, calculate_density_derivs, EOS_domain
+use MOM_EOS,              only : calculate_density_derivs, EOS_domain
 
 implicit none ; private
 
@@ -96,14 +96,14 @@ subroutine set_int_tide_input(u, v, h, tv, fluxes, itide, dt, G, GV, US, CS)
     N2_bot        ! The bottom squared buoyancy frequency [T-2 ~> s-2].
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
-    T_f, S_f      ! The temperature and salinity in [degC] and [ppt] with the values in
+    T_f, S_f      ! The temperature and salinity in [C ~> degC] and [S ~> ppt] with the values in
                   ! the massless layers filled vertically by diffusion.
   logical :: use_EOS    ! If true, density is calculated from T & S using an
                         ! equation of state.
   logical :: avg_enabled  ! for testing internal tides (BDM)
   type(time_type) :: time_end        !< For use in testing internal tides (BDM)
 
-  integer :: i, j, k, is, ie, js, je, nz, isd, ied, jsd, jed
+  integer :: i, j, is, ie, js, je, nz, isd, ied, jsd, jed
   integer :: i_global, j_global
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -180,12 +180,11 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
   type(thermo_var_ptrs),                     intent(in)  :: tv   !< A structure containing pointers to the
                                                                  !! thermodynamic fields
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: T_f  !< Temperature after vertical filtering to
-                                                                 !! smooth out the values in thin layers [degC].
+                                                                 !! smooth out the values in thin layers [C ~> degC].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: S_f  !< Salinity after vertical filtering to
-                                                                 !! smooth out the values in thin layers [ppt].
+                                                                 !! smooth out the values in thin layers [S ~> ppt].
   real, dimension(SZI_(G),SZJ_(G)),          intent(in)  :: h2   !< Bottom topographic roughness [Z2 ~> m2].
   type(forcing),                             intent(in)  :: fluxes !< A structure of thermodynamic surface fluxes
-  type(int_tide_input_CS),                   pointer     :: CS   !<  This module's control structure.
   real, dimension(SZI_(G),SZJ_(G)),          intent(out) :: N2_bot !< The squared buoyancy freqency at the
                                                                  !! ocean bottom [T-2 ~> s-2].
   ! Local variables
@@ -193,14 +192,14 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
     dRho_int      ! The unfiltered density differences across interfaces [R ~> kg m-3].
   real, dimension(SZI_(G)) :: &
     pres, &       ! The pressure at each interface [R L2 T-2 ~> Pa].
-    Temp_int, &   ! The temperature at each interface [degC].
-    Salin_int, &  ! The salinity at each interface [ppt].
+    Temp_int, &   ! The temperature at each interface [C ~> degC]
+    Salin_int, &  ! The salinity at each interface [S ~> ppt]
     drho_bot, &   ! The density difference at the bottom of a layer [R ~> kg m-3]
     h_amp, &      ! The amplitude of topographic roughness [Z ~> m].
     hb, &         ! The depth below a layer [Z ~> m].
     z_from_bot, & ! The height of a layer center above the bottom [Z ~> m].
-    dRho_dT, &    ! The partial derivative of density with temperature [R degC-1 ~> kg m-3 degC-1]
-    dRho_dS       ! The partial derivative of density with salinity [R ppt-1 ~> kg m-3 ppt-1].
+    dRho_dT, &    ! The partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
+    dRho_dS       ! The partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1].
 
   real :: dz_int  ! The thickness associated with an interface [Z ~> m].
   real :: G_Rho0  ! The gravitation acceleration divided by the Boussinesq
@@ -253,7 +252,7 @@ subroutine find_N2_bottom(h, tv, T_f, S_f, h2, fluxes, G, GV, US, N2_bot)
     do i=is,ie
       hb(i) = 0.0 ; dRho_bot(i) = 0.0
       z_from_bot(i) = 0.5*GV%H_to_Z*h(i,j,nz)
-      do_i(i) = (G%mask2dT(i,j) > 0.5)
+      do_i(i) = (G%mask2dT(i,j) > 0.0)
       h_amp(i) = sqrt(h2(i,j))
     enddo
 
@@ -301,12 +300,10 @@ subroutine int_tide_input_init(Time, G, GV, US, param_file, diag, CS, itide)
   type(int_tide_input_type), pointer       :: itide !< A structure containing fields related
                                                    !! to the internal tide sources.
   ! Local variables
-  type(vardesc) :: vd
   logical :: read_tideamp
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl = "MOM_int_tide_input"  ! This module's name.
-  character(len=20)  :: tmpstr
   character(len=200) :: filename, tideamp_file, h2_file
 
   real :: mask_itidal        ! A multiplicative land mask, 0 or 1 [nondim]

@@ -154,7 +154,6 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
   real :: khdt_max ! The local limiting value of khdt_x or khdt_y [L2 ~> m2].
   real :: max_CFL ! The global maximum of the diffusive CFL number.
   logical :: use_VarMix, Resoln_scaled, do_online, use_Eady
-  integer :: S_idx, T_idx ! Indices for temperature and salinity if needed
   integer :: i, j, k, m, is, ie, js, je, nz, ntr, itt, num_itts
   real :: I_numitts  ! The inverse of the number of iterations, num_itts.
   real :: scale      ! The fraction of khdt_x or khdt_y that is applied in this
@@ -174,7 +173,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
 
   if (.not. associated(CS)) call MOM_error(FATAL, "MOM_tracer_hor_diff: "// &
        "register_tracer must be called before tracer_hordiff.")
-  if (LOC(Reg)==0) call MOM_error(FATAL, "MOM_tracer_hor_diff: "// &
+  if (.not. associated(Reg)) call MOM_error(FATAL, "MOM_tracer_hor_diff: "// &
        "register_tracer must be called before tracer_hordiff.")
   if (Reg%ntr == 0 .or. (CS%KhTr <= 0.0 .and. .not. VarMix%use_variable_mixing)) return
 
@@ -196,7 +195,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
   endif ; endif
   CS%first_call = .false.
 
-  if (CS%debug) call MOM_tracer_chksum("Before tracer diffusion ", Reg%Tr, ntr, G)
+  if (CS%debug) call MOM_tracer_chksum("Before tracer diffusion ", Reg, G)
 
   use_VarMix = .false. ; Resoln_scaled = .false. ; use_Eady = .false.
   if (VarMix%use_variable_mixing) then
@@ -513,6 +512,14 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
 
       enddo ! End of k loop.
 
+      ! Do user controlled underflow of the tracer concentrations.
+      do m=1,ntr ; if (Reg%Tr(m)%conc_underflow > 0.0) then
+        !$OMP parallel do default(shared)
+        do k=1,nz ; do j=js,je ; do i=is,ie
+          if (abs(Reg%Tr(m)%t(i,j,k)) < Reg%Tr(m)%conc_underflow) Reg%Tr(m)%t(i,j,k) = 0.0
+        enddo ; enddo ; enddo
+      endif ; enddo
+
     enddo ! End of "while" loop.
 
   endif   ! endif for CS%use_neutral_diffusion
@@ -521,7 +528,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
 
   if (CS%Diffuse_ML_interior) then
     if (CS%show_call_tree) call callTree_waypoint("Calling epipycnal_ML_diff (tracer_hordiff)")
-    if (CS%debug) call MOM_tracer_chksum("Before epipycnal diff ", Reg%Tr, ntr, G)
+    if (CS%debug) call MOM_tracer_chksum("Before epipycnal diff ", Reg, G)
 
     call cpu_clock_begin(id_clock_epimix)
     call tracer_epipycnal_ML_diff(h, dt, Reg%Tr, ntr, khdt_x, khdt_y, G, GV, US, &
@@ -529,7 +536,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, G, GV, US, CS, Reg, tv, do_online
     call cpu_clock_end(id_clock_epimix)
   endif
 
-  if (CS%debug) call MOM_tracer_chksum("After tracer diffusion ", Reg%Tr, ntr, G)
+  if (CS%debug) call MOM_tracer_chksum("After tracer diffusion ", Reg, G)
 
   ! post diagnostics for 2d tracer diffusivity
   if (CS%id_KhTr_u > 0) then
@@ -692,7 +699,6 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
   integer :: isd, ied, jsd, jed, IsdB, IedB, k_size
   integer :: kL, kR, kLa, kLb, kRa, kRb, nP, itt, ns, max_itt
   integer :: PEmax_kRho
-  integer :: isv, iev, jsv, jev ! The valid range of the indices.
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
@@ -713,7 +719,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
   ! Determine which layers the mixed- and buffer-layers map into...
   !$OMP parallel do default(shared)
   do k=1,nkmb ; do j=js-2,je+2
-    call calculate_density(tv%T(:,j,k),tv%S(:,j,k), p_ref_cv, rho_coord(:,j,k), &
+    call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p_ref_cv, rho_coord(:,j,k), &
                            tv%eqn_of_state, EOSdom)
   enddo ; enddo
 
@@ -728,7 +734,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
   ! mixed and buffer layer corresponds to, such that:
   !     GV%Rlay(max_kRho-1) < Rml_max <= GV%Rlay(max_kRho)
   !$OMP parallel do default(shared) private(k_min,k_max,k_test)
-  do j=js-2,je+2 ; do i=is-2,ie+2 ; if (G%mask2dT(i,j) > 0.5) then
+  do j=js-2,je+2 ; do i=is-2,ie+2 ; if (G%mask2dT(i,j) > 0.0) then
     if ((Rml_max(i,j) > GV%Rlay(nz)) .or. (nkmb+1 > nz)) then ; max_kRho(i,j) = nz+1
     elseif ((Rml_max(i,j) <= GV%Rlay(nkmb+1)) .or. (nkmb+2 > nz)) then ; max_kRho(i,j) = nkmb+1
     else
@@ -756,7 +762,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
   !$OMP parallel default(shared) private(ns,tmp,itmp)
   !$OMP do
   do j=js-1,je+1
-    do k=1,nkmb ; do i=is-1,ie+1 ; if (G%mask2dT(i,j) > 0.5) then
+    do k=1,nkmb ; do i=is-1,ie+1 ; if (G%mask2dT(i,j) > 0.0) then
       if (h(i,j,k) > h_exclude) then
         num_srt(i,j) = num_srt(i,j) + 1 ; ns = num_srt(i,j)
         k0_srt(i,ns,j) = k
@@ -764,7 +770,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
         h_srt(i,ns,j) = h(i,j,k)
       endif
     endif ; enddo ; enddo
-    do k=nkmb+1,PEmax_kRho ; do i=is-1,ie+1 ; if (G%mask2dT(i,j) > 0.5) then
+    do k=nkmb+1,PEmax_kRho ; do i=is-1,ie+1 ; if (G%mask2dT(i,j) > 0.0) then
       if ((k<=k_end_srt(i,j)) .and. (h(i,j,k) > h_exclude)) then
         num_srt(i,j) = num_srt(i,j) + 1 ; ns = num_srt(i,j)
         k0_srt(i,ns,j) = k
@@ -812,7 +818,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 !$OMP                                  kR,kL,nP,rho_pair,kbs_Lp,kbs_Rp,rho_a,rho_b, &
 !$OMP                                  wt_b,left_set,right_set,h_supply_frac_R,     &
 !$OMP                                  h_supply_frac_L)
-  do j=js,je ; do I=is-1,ie ; if (G%mask2dCu(I,j) > 0.5) then
+  do j=js,je ; do I=is-1,ie ; if (G%mask2dCu(I,j) > 0.0) then
     ! Set up the pairings for fluxes through the zonal faces.
 
     do k=1,num_srt(i,j)   ; h_demand_L(k) = 0.0 ; h_used_L(k) = 0.0 ; enddo
@@ -965,7 +971,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 !$OMP                                  kR,kL,nP,rho_pair,kbs_Lp,kbs_Rp,rho_a,rho_b, &
 !$OMP                                  wt_b,left_set,right_set,h_supply_frac_R,     &
 !$OMP                                  h_supply_frac_L)
-  do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.5) then
+  do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.0) then
     ! Set up the pairings for fluxes through the meridional faces.
 
     do k=1,num_srt(i,j)   ; h_demand_L(k) = 0.0 ; h_used_L(k) = 0.0 ; enddo
@@ -1120,7 +1126,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 !$OMP                          private(Tr_min_face,Tr_max_face,kLa,kLb,kRa,kRb,Tr_La, &
 !$OMP                                     Tr_Lb,Tr_Ra,Tr_Rb,Tr_av_L,wt_b,Tr_av_R,h_L,h_R, &
 !$OMP                                     Tr_flux,Tr_adj_vert,wt_a,vol)
-      do j=js,je ; do I=is-1,ie ; if (G%mask2dCu(I,j) > 0.5) then
+      do j=js,je ; do I=is-1,ie ; if (G%mask2dCu(I,j) > 0.0) then
         ! Determine the fluxes through the zonal faces.
 
         ! Find the acceptable range of tracer concentration around this face.
@@ -1260,7 +1266,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 !$OMP                          private(Tr_min_face,Tr_max_face,kLa,kLb,kRa,kRb,             &
 !$OMP                                  Tr_La,Tr_Lb,Tr_Ra,Tr_Rb,Tr_av_L,wt_b,Tr_av_R,        &
 !$OMP                                  h_L,h_R,Tr_flux,Tr_adj_vert,wt_a,vol)
-      do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.5) then
+      do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.0) then
         ! Determine the fluxes through the meridional faces.
 
         ! Find the acceptable range of tracer concentration around this face.
@@ -1377,7 +1383,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 !$OMP                                  tr_flux_conv,Tr_flux_3d,k0a_Lv,Tr_adj_vert_L,&
 !$OMP                                  deep_wt_Rv,k0a_Rv,Tr_adj_vert_R) &
 !$OMP                          private(kLa,kLb,kRa,kRb,wt_b,wt_a)
-      do i=is,ie ; do J=js-1,je ; if (G%mask2dCv(i,J) > 0.5) then
+      do i=is,ie ; do J=js-1,je ; if (G%mask2dCv(i,J) > 0.0) then
         do k=1,nPv(i,J)
           kLb = k0b_Lv(J)%p(i,k); kRb = k0b_Rv(J)%p(i,k)
           if (deep_wt_Lv(J)%p(i,k) >= 1.0) then
@@ -1400,14 +1406,22 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
           endif
         enddo
       endif ; enddo ; enddo
-!$OMP parallel do default(none) shared(PEmax_kRho,is,ie,js,je,G,h,Tr,tr_flux_conv,m)
+      !$OMP parallel do default(shared)
       do k=1,PEmax_kRho ; do j=js,je ; do i=is,ie
-        if ((G%mask2dT(i,j) > 0.5) .and. (h(i,j,k) > 0.0)) then
+        if ((G%mask2dT(i,j) > 0.0) .and. (h(i,j,k) > 0.0)) then
           Tr(m)%t(i,j,k) = Tr(m)%t(i,j,k) + tr_flux_conv(i,j,k) / &
                                             (h(i,j,k)*G%areaT(i,j))
           tr_flux_conv(i,j,k) = 0.0
         endif
       enddo ; enddo ; enddo
+
+      ! Do user controlled underflow of the tracer concentrations.
+      if (Tr(m)%conc_underflow > 0.0) then
+        !$OMP parallel do default(shared)
+        do k=1,nz ; do j=js,je ; do i=is,ie
+          if (abs(Tr(m)%t(i,j,k)) < Tr(m)%conc_underflow) Tr(m)%t(i,j,k) = 0.0
+        enddo ; enddo ; enddo
+      endif
 
     enddo ! Loop over tracers
   enddo ! Loop over iterations
@@ -1444,7 +1458,6 @@ subroutine tracer_hor_diff_init(Time, G, GV, US, param_file, diag, EOS, diabatic
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "MOM_tracer_hor_diff" ! This module's name.
-  character(len=256) :: mesg    ! Message for error messages.
 
   if (associated(CS)) then
     call MOM_error(WARNING, "tracer_hor_diff_init called with associated control structure.")
@@ -1498,7 +1511,7 @@ subroutine tracer_hor_diff_init(Time, G, GV, US, param_file, diag, EOS, diabatic
   call get_param(param_File, mdl, "RECALC_NEUTRAL_SURF", CS%recalc_neutral_surf, &
                  "If true, then recalculate the neutral surfaces if the \n"//&
                  "diffusive CFL is exceeded. If false, assume that the  \n"//&
-                 "positions of the surfaces do not change \n", default = .false.)
+                 "positions of the surfaces do not change \n", default=.false.)
   CS%ML_KhTR_scale = 1.0
   if (CS%Diffuse_ML_interior) then
     call get_param(param_file, mdl, "ML_KHTR_SCALE", CS%ML_KhTR_scale, &

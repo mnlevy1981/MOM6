@@ -79,8 +79,8 @@ type, public :: KPP_CS ; private
   real    :: cs2                       !< Parameter for multiplying by non-local term
                                        !   This is active for NLT_SHAPE_CUBIC_LMD only
   logical :: enhance_diffusion         !< If True, add enhanced diffusivity at base of boundary layer.
-  character(len=10) :: interpType      !< Type of interpolation to compute bulk Richardson number
-  character(len=10) :: interpType2     !< Type of interpolation to compute diff and visc at OBL_depth
+  character(len=32) :: interpType      !< Type of interpolation to compute bulk Richardson number
+  character(len=32) :: interpType2     !< Type of interpolation to compute diff and visc at OBL_depth
   logical :: computeEkman              !< If True, compute Ekman depth limit for OBLdepth
   logical :: computeMoninObukhov       !< If True, compute Monin-Obukhov limit for OBLdepth
   logical :: passiveMode               !< If True, makes KPP passive meaning it does NOT alter the diffusivity
@@ -159,8 +159,8 @@ type, public :: KPP_CS ; private
   real, allocatable, dimension(:,:,:) :: Kt_KPP    !< Temp diffusivity from KPP [m2 s-1]
   real, allocatable, dimension(:,:,:) :: Ks_KPP    !< Scalar diffusivity from KPP [m2 s-1]
   real, allocatable, dimension(:,:,:) :: Kv_KPP    !< Viscosity due to KPP [m2 s-1]
-  real, allocatable, dimension(:,:)   :: Tsurf     !< Temperature of surface layer [degC]
-  real, allocatable, dimension(:,:)   :: Ssurf     !< Salinity of surface layer [ppt]
+  real, allocatable, dimension(:,:)   :: Tsurf     !< Temperature of surface layer [C ~> degC]
+  real, allocatable, dimension(:,:)   :: Ssurf     !< Salinity of surface layer [S ~> ppt]
   real, allocatable, dimension(:,:)   :: Usurf     !< i-velocity of surface layer [m s-1]
   real, allocatable, dimension(:,:)   :: Vsurf     !< j-velocity of surface layer [m s-1]
   real, allocatable, dimension(:,:,:) :: EnhK      !< Enhancement for mixing coefficient
@@ -196,7 +196,6 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   character(len=20) :: string          !< local temporary string
   character(len=20) :: langmuir_mixing_opt = 'NONE' !< langmuir mixing opt to be passed to CVMix, e.g., LWF16
   character(len=20) :: langmuir_entrainment_opt = 'NONE' !< langmuir entrainment opt to be passed to CVMix, e.g., LWF16
-  character(len=20) :: wave_method
   logical :: CS_IS_ONE=.false.         !< Logical for setting Cs based on Non-local
   logical :: lnoDGat1=.false.          !< True => G'(1) = 0 (shape function)
                                        !! False => compute G'(1) as in LMD94
@@ -533,7 +532,8 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   CS%id_uStar = register_diag_field('ocean_model', 'KPP_uStar', diag%axesT1, Time, &
       'Friction velocity, u*, as used by [CVMix] KPP', 'm/s', conversion=US%Z_to_m*US%s_to_T)
   CS%id_buoyFlux = register_diag_field('ocean_model', 'KPP_buoyFlux', diag%axesTi, Time, &
-      'Surface (and penetrating) buoyancy flux, as used by [CVMix] KPP', 'm2/s3', conversion=US%L_to_m**2*US%s_to_T**3)
+      'Surface (and penetrating) buoyancy flux, as used by [CVMix] KPP', &
+      'm2/s3', conversion=US%L_to_m**2*US%s_to_T**3)
   CS%id_Kt_KPP = register_diag_field('ocean_model', 'KPP_Kheat', diag%axesTi, Time, &
       'Heat diffusivity due to KPP, as calculated by [CVMix] KPP', 'm2/s')
   CS%id_Kd_in = register_diag_field('ocean_model', 'KPP_Kd_in', diag%axesTi, Time, &
@@ -547,9 +547,9 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
   CS%id_NLTs = register_diag_field('ocean_model', 'KPP_NLtransport_salt', diag%axesTi, Time, &
       'Non-local tranpsort (Cs*G(sigma)) for scalars, as calculated by [CVMix] KPP', 'nondim')
   CS%id_Tsurf = register_diag_field('ocean_model', 'KPP_Tsurf', diag%axesT1, Time, &
-      'Temperature of surface layer (10% of OBL depth) as passed to [CVMix] KPP', 'C')
+      'Temperature of surface layer (10% of OBL depth) as passed to [CVMix] KPP', 'C', conversion=US%C_to_degC)
   CS%id_Ssurf = register_diag_field('ocean_model', 'KPP_Ssurf', diag%axesT1, Time, &
-      'Salinity of surface layer (10% of OBL depth) as passed to [CVMix] KPP', 'ppt')
+      'Salinity of surface layer (10% of OBL depth) as passed to [CVMix] KPP', 'ppt', conversion=US%S_to_ppt)
   CS%id_Usurf = register_diag_field('ocean_model', 'KPP_Usurf', diag%axesCu1, Time, &
       'i-component flow of surface layer (10% of OBL depth) as passed to [CVMix] KPP', 'm/s')
   CS%id_Vsurf = register_diag_field('ocean_model', 'KPP_Vsurf', diag%axesCv1, Time, &
@@ -898,8 +898,8 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   type(verticalGrid_type),                    intent(in)    :: GV    !< Ocean vertical grid
   type(unit_scale_type),                      intent(in)    :: US    !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h     !< Layer/level thicknesses [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: Temp  !< potential/cons temp [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: Salt  !< Salinity [ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: Temp  !< potential/cons temp [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: Salt  !< Salinity [S ~> ppt]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)    :: u     !< Velocity i-component [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)    :: v     !< Velocity j-component [L T-1 ~> m s-1]
   type(thermo_var_ptrs),                      intent(in)    :: tv    !< Thermodynamics structure.
@@ -922,21 +922,21 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   ! for EOS calculation
   real, dimension( 3*GV%ke )   :: rho_1D   ! A column of densities [R ~> kg m-3]
   real, dimension( 3*GV%ke )   :: pres_1D  ! A column of pressures [R L2 T-2 ~> Pa]
-  real, dimension( 3*GV%ke )   :: Temp_1D  ! A column of temperatures [degC]
-  real, dimension( 3*GV%ke )   :: Salt_1D  ! A column of salinities [ppt]
+  real, dimension( 3*GV%ke )   :: Temp_1D  ! A column of temperatures [C ~> degC]
+  real, dimension( 3*GV%ke )   :: Salt_1D  ! A column of salinities [S ~> ppt]
 
   real :: surfFricVel, surfBuoyFlux, Coriolis
   real :: GoRho  ! Gravitational acceleration divided by density in MKS units [m R-1 s-2 ~> m4 kg-1 s-2]
   real :: pRef   ! The interface pressure [R L2 T-2 ~> Pa]
-  real :: rho1, rhoK, Uk, Vk, sigma, sigmaRatio
+  real :: Uk, Vk
 
   real :: zBottomMinusOffset   ! Height of bottom plus a little bit [m]
   real :: SLdepth_0d           ! Surface layer depth = surf_layer_ext*OBLdepth.
   real :: hTot                 ! Running sum of thickness used in the surface layer average [m]
   real :: buoy_scale           ! A unit conversion factor for buoyancy fluxes [m2 T3 L-2 s-3 ~> 1]
   real :: delH                 ! Thickness of a layer [m]
-  real :: surfHtemp, surfTemp  ! Integral and average of temp over the surface layer
-  real :: surfHsalt, surfSalt  ! Integral and average of saln over the surface layer
+  real :: surfHtemp, surfTemp  ! Integral and average of temp over the surface layer [C ~> degC]
+  real :: surfHsalt, surfSalt  ! Integral and average of saln over the surface layer [S ~> ppt]
   real :: surfHu, surfU        ! Integral and average of u over the surface layer
   real :: surfHv, surfV        ! Integral and average of v over the surface layer
   real :: dh    ! The local thickness used for calculating interface positions [m]
@@ -947,18 +947,14 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   real :: LangEnhVt2   ! Langmuir enhancement for unresolved shear
   real, dimension(GV%ke) :: U_H, V_H
   real :: MLD_GUESS, LA
-  real :: surfHuS, surfHvS, surfUs, surfVs, wavedir, currentdir
-  real :: VarUp, VarDn, M, VarLo, VarAvg
-  real :: H10pct, H20pct,CMNFACT, USx20pct, USy20pct, enhvt2
-  integer :: B
-  real :: WST
+  real :: surfHuS, surfHvS, surfUs, surfVs
 
   if (CS%Stokes_Mixing .and. .not.associated(Waves)) call MOM_error(FATAL, &
       "KPP_compute_BLD: The Waves control structure must be associated if STOKES_MIXING is True.")
 
   if (CS%debug) then
-    call hchksum(Salt, "KPP in: S",G%HI,haloshift=0)
-    call hchksum(Temp, "KPP in: T",G%HI,haloshift=0)
+    call hchksum(Salt, "KPP in: S", G%HI, haloshift=0, scale=US%S_to_ppt)
+    call hchksum(Temp, "KPP in: T", G%HI, haloshift=0, scale=US%C_to_degC)
     call hchksum(u, "KPP in: u",G%HI,haloshift=0,scale=US%L_T_to_m_s)
     call hchksum(v, "KPP in: v",G%HI,haloshift=0,scale=US%L_T_to_m_s)
   endif
@@ -976,7 +972,7 @@ subroutine KPP_compute_BLD(CS, G, GV, US, h, Temp, Salt, u, v, tv, uStar, buoyFl
   !$OMP                           surfHvS, hTot, delH, surftemp, surfsalt, surfu, surfv,    &
   !$OMP                           surfUs, surfVs, Uk, Vk, deltaU2, km1, kk, pres_1D,        &
   !$OMP                           Temp_1D, salt_1D, surfBuoyFlux2, MLD_GUESS, LA, rho_1D,   &
-  !$OMP                           deltarho, N2_1d, ws_1d, LangEnhVT2, enhvt2, wst,          &
+  !$OMP                           deltarho, N2_1d, ws_1d, LangEnhVT2,                       &
   !$OMP                           BulkRi_1d, zBottomMinusOffset) &
   !$OMP                           shared(G, GV, CS, US, uStar, h, buoy_scale, buoyFlux,     &
   !$OMP                           Temp, Salt, waves, tv, GoRho, u, v, lamult)
@@ -1440,12 +1436,12 @@ subroutine KPP_NonLocalTransport_temp(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h      !< Layer/level thickness [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux  !< Surface flux of temperature
-                                                                      !! [degC H T-1 ~> degC m s-1 or degC kg m-2 s-1]
+                                                                      !! [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   real,                                       intent(in)    :: dt     !< Time-step [T ~> s]
-  type(tracer_type), pointer,                 intent(in)    :: tr_ptr    !< tracer_type has diagnostic ids on it
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar !< temperature [degC]
+  type(tracer_type), pointer,                 intent(in)    :: tr_ptr !< tracer_type has diagnostic ids on it
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar !< temperature [C ~> degC]
   real,                                       intent(in)    :: C_p    !< Seawater specific heat capacity
-                                                                      !! [Q degC-1 ~> J kg-1 degC-1]
+                                                                      !! [Q C-1 ~> J kg-1 degC-1]
 
   call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &
                              tr_ptr, scalar)
@@ -1461,9 +1457,9 @@ subroutine KPP_NonLocalTransport_saln(CS, G, GV, h, nonLocalTrans, surfFlux, dt,
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h             !< Layer/level thickness [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in)   :: nonLocalTrans !< Non-local transport [nondim]
   real, dimension(SZI_(G),SZJ_(G)),           intent(in)    :: surfFlux      !< Surface flux of salt
-                                                                           !! [ppt H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
+                                                                             !! [S H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
   real,                                       intent(in)    :: dt            !< Time-step [T ~> s]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Salinity [ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: scalar        !< Salinity [S ~> ppt]
   type(tracer_type), pointer,                 intent(in)    :: tr_ptr        !< tracer_type has diagnostic ids on it
 
   call KPP_NonLocalTransport(CS, G, GV, h, nonLocalTrans, surfFlux, dt, CS%diag, &

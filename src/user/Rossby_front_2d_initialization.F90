@@ -10,7 +10,6 @@ use MOM_grid, only : ocean_grid_type
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_type
 use regrid_consts, only : coordinateMode, DEFAULT_COORDINATE_MODE
 use regrid_consts, only : REGRIDDING_LAYER, REGRIDDING_ZSTAR
 use regrid_consts, only : REGRIDDING_RHO, REGRIDDING_SIGMA
@@ -106,13 +105,14 @@ end subroutine Rossby_front_initialize_thickness
 
 
 !> Initialization of temperature and salinity in the Rossby front test
-subroutine Rossby_front_initialize_temperature_salinity(T, S, h, G, GV, &
+subroutine Rossby_front_initialize_temperature_salinity(T, S, h, G, GV, US, &
                    param_file, just_read)
   type(ocean_grid_type),                     intent(in)  :: G  !< Grid structure
   type(verticalGrid_type),                   intent(in)  :: GV !< The ocean's vertical grid structure.
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T  !< Potential temperature [degC]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S  !< Salinity [ppt]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: T  !< Potential temperature [C ~> degC]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: S  !< Salinity [S ~> ppt]
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(in)  :: h  !< Thickness [H ~> m or kg m-2]
+  type(unit_scale_type),                     intent(in)  :: US !< A dimensional unit scaling type
   type(param_file_type),                     intent(in)  :: param_file   !< Parameter file handle
   logical,                                   intent(in)  :: just_read !< If true, this call will
                                                       !! only read parameters without changing T & S.
@@ -120,20 +120,19 @@ subroutine Rossby_front_initialize_temperature_salinity(T, S, h, G, GV, &
   integer   :: i, j, k, is, ie, js, je, nz
   real      :: T_ref, S_ref ! Reference salinity and temerature within surface layer
   real      :: T_range      ! Range of salinities and temperatures over the vertical
-  real      :: y, zc, zi, dTdz
+  real      :: zc, zi, dTdz
   character(len=40) :: verticalCoordinate
-  real      :: PI                   ! 3.1415926... calculated as 4*atan(1)
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   call get_param(param_file, mdl,"REGRIDDING_COORDINATE_MODE", verticalCoordinate, &
             default=DEFAULT_COORDINATE_MODE, do_not_log=just_read)
   call get_param(param_file, mdl, "S_REF", S_ref, 'Reference salinity', &
-                 default=35.0, units='1e-3', do_not_log=just_read)
-  call get_param(param_file, mdl,"T_REF",T_ref,'Reference temperature',units='C',&
-                 fail_if_missing=.not.just_read, do_not_log=just_read)
+                 default=35.0, units='1e-3', scale=US%ppt_to_S, do_not_log=just_read)
+  call get_param(param_file, mdl,"T_REF",T_ref,'Reference temperature', &
+                 units='C', scale=US%degC_to_C, fail_if_missing=.not.just_read, do_not_log=just_read)
   call get_param(param_file, mdl,"T_RANGE",T_range,'Initial temperature range',&
-                 units='C', default=0.0, do_not_log=just_read)
+                 units='C', default=0.0, scale=US%degC_to_C, do_not_log=just_read)
 
   if (just_read) return ! All run-time parameters have been read, so return.
 
@@ -170,7 +169,6 @@ subroutine Rossby_front_initialize_velocity(u, v, h, G, GV, US, param_file, just
   logical,                    intent(in)  :: just_read !< If present and true, this call will only
                                                 !! read parameters without setting u & v.
 
-  real    :: y            ! Non-dimensional coordinate across channel, 0..pi
   real    :: T_range      ! Range of salinities and temperatures over the vertical
   real    :: dUdT         ! Factor to convert dT/dy into dU/dz, g*alpha/f [L2 Z-1 T-1 degC-1 ~> m s-1 degC-1]
   real    :: dRho_dT      ! The partial derivative of density with temperature [R degC-1 ~> kg m-3 degC-1]
@@ -219,7 +217,7 @@ real function yPseudo( G, lat )
   type(ocean_grid_type), intent(in) :: G   !< Grid structure
   real,                  intent(in) :: lat !< Latitude
   ! Local
-  real :: y, PI
+  real :: PI
 
   PI = 4.0 * atan(1.0)
   yPseudo = ( ( lat - G%south_lat ) / G%len_lat ) - 0.5 ! -1/2 .. 1/.2

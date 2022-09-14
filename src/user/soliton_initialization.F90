@@ -10,7 +10,6 @@ use MOM_grid, only : ocean_grid_type
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
-use MOM_EOS, only : calculate_density, calculate_density_derivs, EOS_type
 use regrid_consts, only : coordinateMode, DEFAULT_COORDINATE_MODE
 use regrid_consts, only : REGRIDDING_LAYER, REGRIDDING_ZSTAR
 use regrid_consts, only : REGRIDDING_RHO, REGRIDDING_SIGMA
@@ -40,7 +39,6 @@ subroutine soliton_initialize_thickness(h, depth_tot, G, GV, US)
   integer :: i, j, k, is, ie, js, je, nz
   real    :: x, y, x0, y0
   real    :: val1, val2, val3, val4
-  character(len=40) :: verticalCoordinate
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 

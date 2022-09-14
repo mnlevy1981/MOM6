@@ -33,8 +33,8 @@ type, public :: MESO_surface_forcing_CS ; private
   real :: gust_const         !< A constant unresolved background gustiness
                              !! that contributes to ustar [R L Z T-1 ~> Pa]
   real, dimension(:,:), pointer :: &
-    T_Restore(:,:) => NULL(), & !< The temperature to restore the SST toward [degC].
-    S_Restore(:,:) => NULL(), & !< The salinity to restore the sea surface salnity toward [ppt]
+    T_Restore(:,:) => NULL(), & !< The temperature to restore the SST toward [C ~> degC].
+    S_Restore(:,:) => NULL(), & !< The salinity to restore the sea surface salnity toward [S ~> ppt]
     PmE(:,:) => NULL(), &       !< The prescribed precip minus evap [Z T-1 ~> m s-1].
     Solar(:,:) => NULL()        !< The shortwave forcing into the ocean [Q R Z T-1 ~> W m-2].
   real, dimension(:,:), pointer :: Heat(:,:) => NULL() !< The prescribed longwave, latent and sensible
@@ -77,10 +77,8 @@ subroutine MESO_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
 !  are in W m-2 and positive for heat going into the ocean.  All fresh water
 !  fluxes are in kg m-2 s-1 and positive for water moving into the ocean.
 
-  real :: Temp_restore   ! The temperature that is being restored toward [degC].
-  real :: Salin_restore  ! The salinity that is being restored toward [ppt]
   real :: density_restore  ! The potential density that is being restored toward [R ~> kg m-3].
-  real :: rhoXcp ! The mean density times the heat capacity [Q R degC-1 ~> J m-3 degC-1].
+  real :: rhoXcp ! The mean density times the heat capacity [Q R C-1 ~> J m-3 degC-1].
   real :: buoy_rest_const  ! A constant relating density anomalies to the
                            ! restoring buoyancy flux [L2 T-3 R-1 ~> m5 s-3 kg-1].
 
@@ -122,9 +120,9 @@ subroutine MESO_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
     call safe_alloc_ptr(CS%Solar, isd, ied, jsd, jed)
 
     call MOM_read_data(trim(CS%inputdir)//trim(CS%SSTrestore_file), "SST", &
-             CS%T_Restore(:,:), G%Domain)
+             CS%T_Restore(:,:), G%Domain, scale=US%degC_to_C)
     call MOM_read_data(trim(CS%inputdir)//trim(CS%salinityrestore_file), "SAL", &
-             CS%S_Restore(:,:), G%Domain)
+             CS%S_Restore(:,:), G%Domain, scale=US%ppt_to_S)
     call MOM_read_data(trim(CS%inputdir)//trim(CS%heating_file), "Heat", &
              CS%Heat(:,:), G%Domain, scale=US%W_m2_to_QRZ_T)
     call MOM_read_data(trim(CS%inputdir)//trim(CS%PmE_file), "PmE", &
@@ -172,7 +170,7 @@ subroutine MESO_buoyancy_forcing(sfc_state, fluxes, day, dt, G, US, CS)
       do j=js,je ; do i=is,ie
         !   Set Temp_restore and Salin_restore to the temperature (in degC) and
         ! salinity (in ppt or PSU) that are being restored toward.
-        if (G%mask2dT(i,j) > 0) then
+        if (G%mask2dT(i,j) > 0.0) then
           fluxes%heat_added(i,j) = G%mask2dT(i,j) * &
               ((CS%T_Restore(i,j) - sfc_state%SST(i,j)) * rhoXcp * CS%Flux_const)
           fluxes%vprec(i,j) = - (CS%Rho0 * CS%Flux_const) * &

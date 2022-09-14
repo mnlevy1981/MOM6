@@ -41,6 +41,8 @@ implicit none ; private
 public set_axes_info, post_data, register_diag_field, time_type
 public post_product_u, post_product_sum_u, post_product_v, post_product_sum_v
 public set_masks_for_axes
+! post_data_1d_k is a deprecated interface that can be replaced by a call to post_data, but
+! it is being retained for backward compatibility to older versions of the ocean_BGC code.
 public post_data_1d_k
 public safe_alloc_ptr, safe_alloc_alloc
 public enable_averaging, enable_averages, disable_averaging, query_averaging_enabled
@@ -307,8 +309,8 @@ type, public :: diag_ctrl
 
   ! Pointer to H, G and T&S needed for remapping
   real, dimension(:,:,:), pointer :: h => null() !< The thicknesses needed for remapping [H ~> m or kg m-2]
-  real, dimension(:,:,:), pointer :: T => null() !< The temperatures needed for remapping [degC]
-  real, dimension(:,:,:), pointer :: S => null() !< The salinities needed for remapping [ppt]
+  real, dimension(:,:,:), pointer :: T => null() !< The temperatures needed for remapping [C ~> degC]
+  real, dimension(:,:,:), pointer :: S => null() !< The salinities needed for remapping [S ~> ppt]
   type(EOS_type),  pointer :: eqn_of_state => null() !< The equation of state type
   type(ocean_grid_type), pointer :: G => null()  !< The ocean grid type
   type(verticalGrid_type), pointer :: GV => null()  !< The model's vertical ocean grid
@@ -349,7 +351,7 @@ subroutine set_axes_info(G, GV, US, param_file, diag_cs, set_vertical)
   ! Local variables
   integer :: id_xq, id_yq, id_zl, id_zi, id_xh, id_yh, id_null
   integer :: id_zl_native, id_zi_native
-  integer :: i, j, k, nz
+  integer :: i, j, nz
   real :: zlev(GV%ke), zinter(GV%ke+1)
   logical :: set_vert
   real, allocatable, dimension(:) :: IaxB,iax
@@ -587,7 +589,7 @@ subroutine set_axes_info_dsamp(G, GV, param_file, diag_cs, id_zl_native, id_zi_n
 
   ! Local variables
   integer :: id_xq, id_yq, id_zl, id_zi, id_xh, id_yh
-  integer :: i, j, k, nz, dl
+  integer :: i, j, nz, dl
   real, dimension(:), pointer :: gridLonT_dsamp =>NULL()
   real, dimension(:), pointer :: gridLatT_dsamp =>NULL()
   real, dimension(:), pointer :: gridLonB_dsamp =>NULL()
@@ -755,7 +757,7 @@ subroutine set_masks_for_axes(G, diag_cs)
   type(diag_ctrl),               pointer    :: diag_cs !< A pointer to a type with many variables
                                                        !! used for diagnostics
   ! Local variables
-  integer :: c, nk, i, j, k, ii, jj
+  integer :: c, nk, i, j, k
   type(axes_grp), pointer :: axes => NULL(), h_axes => NULL() ! Current axes, for convenience
 
   do c=1, diag_cs%num_diag_coords
@@ -853,9 +855,8 @@ subroutine set_masks_for_axes_dsamp(G, diag_cs)
   type(diag_ctrl),               pointer    :: diag_cs !< A pointer to a type with many variables
                                                        !! used for diagnostics
   ! Local variables
-  integer :: c, nk, i, j, k, ii, jj
-  integer :: dl
-  type(axes_grp), pointer :: axes => NULL(), h_axes => NULL() ! Current axes, for convenience
+  integer :: c, dl
+  type(axes_grp), pointer :: axes => NULL() ! Current axes, for convenience
 
   !Each downsampled axis needs both downsampled and non-downsampled mask
   !The downsampled mask is needed for sending out the diagnostics output via diag_manager
@@ -1378,7 +1379,7 @@ subroutine post_data_2d_low(diag, field, diag_cs, is_static, mask)
   character(len=300) :: mesg
   logical :: used, is_stat
   integer :: cszi, cszj, dszi, dszj
-  integer :: isv, iev, jsv, jev, i, j, chksum, isv_o,jsv_o
+  integer :: isv, iev, jsv, jev, i, j, isv_o,jsv_o
   real, dimension(:,:), allocatable, target :: locfield_dsamp
   real, dimension(:,:), allocatable, target :: locmask_dsamp
   integer :: dl
@@ -1523,7 +1524,6 @@ subroutine post_data_3d(diag_field_id, field, diag_cs, is_static, mask, alt_h)
 
   ! Local variables
   type(diag_type), pointer :: diag => null()
-  integer :: nz, i, j, k
   real, dimension(:,:,:), allocatable :: remapped_field
   logical :: staggered_in_x, staggered_in_y
   real, dimension(:,:,:), pointer :: h_diag => NULL()
@@ -1648,7 +1648,6 @@ subroutine post_data_3d_low(diag, field, diag_cs, is_static, mask)
   logical :: is_stat
   integer :: cszi, cszj, dszi, dszj
   integer :: isv, iev, jsv, jev, ks, ke, i, j, k, isv_c, jsv_c, isv_o,jsv_o
-  integer :: chksum
   real, dimension(:,:,:), allocatable, target :: locfield_dsamp
   real, dimension(:,:,:), allocatable, target :: locmask_dsamp
   integer :: dl
@@ -2235,7 +2234,7 @@ integer function register_diag_field(module_name, field_name, axes_in, init_time
 
     ! Register the native diagnostic
     if (associated(axes_d2)) then
-       active = register_diag_field_expand_cmor(dm_id, new_module_name, field_name, axes_d2, &
+      active = register_diag_field_expand_cmor(dm_id, new_module_name, field_name, axes_d2, &
                 init_time, long_name=long_name, units=units, missing_value=MOM_missing_value, &
                 range=range, mask_variant=mask_variant, standard_name=standard_name, &
                 verbose=verbose, do_not_log=do_not_log, err_msg=err_msg, &
@@ -2775,7 +2774,7 @@ end subroutine attach_cell_methods
 function register_scalar_field(module_name, field_name, init_time, diag_cs, &
             long_name, units, missing_value, range, standard_name, &
             do_not_log, err_msg, interp_method, cmor_field_name, &
-            cmor_long_name, cmor_units, cmor_standard_name)
+            cmor_long_name, cmor_units, cmor_standard_name, conversion)
   integer :: register_scalar_field !< An integer handle for a diagnostic array.
   character(len=*), intent(in) :: module_name !< Name of this module, usually "ocean_model"
                                               !! or "ice_shelf_model"
@@ -2796,6 +2795,7 @@ function register_scalar_field(module_name, field_name, init_time, diag_cs, &
   character(len=*), optional, intent(in) :: cmor_long_name !< CMOR long name of a field
   character(len=*), optional, intent(in) :: cmor_units !< CMOR units of a field
   character(len=*), optional, intent(in) :: cmor_standard_name !< CMOR standardized name associated with a field
+  real,             optional, intent(in) :: conversion !< A value to multiply data by before writing to file
 
   ! Local variables
   real :: MOM_missing_value
@@ -2826,6 +2826,7 @@ function register_scalar_field(module_name, field_name, init_time, diag_cs, &
     call assert(associated(diag), 'register_scalar_field: diag allocation failed')
     diag%fms_diag_id = fms_id
     diag%debug_str = trim(module_name)//"-"//trim(field_name)
+    if (present(conversion)) diag%conversion_factor = conversion
   endif
 
   if (present(cmor_field_name)) then
@@ -2856,6 +2857,7 @@ function register_scalar_field(module_name, field_name, init_time, diag_cs, &
       call alloc_diag_with_id(dm_id, diag_cs, cmor_diag)
       cmor_diag%fms_diag_id = fms_id
       cmor_diag%debug_str = trim(module_name)//"-"//trim(cmor_field_name)
+      if (present(conversion)) cmor_diag%conversion_factor = conversion
     endif
   endif
 
@@ -2912,7 +2914,7 @@ function register_static_field(module_name, field_name, axes, &
   real :: MOM_missing_value
   type(diag_ctrl), pointer :: diag_cs => null()
   type(diag_type), pointer :: diag => null(), cmor_diag => null()
-  integer :: dm_id, fms_id, cmor_id
+  integer :: dm_id, fms_id
   character(len=256) :: posted_cmor_units, posted_cmor_standard_name, posted_cmor_long_name
   character(len=9) :: axis_name
 
@@ -3142,7 +3144,15 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
   ! Local variables
   integer :: ios, i, new_unit
   logical :: opened, new_file
-  logical :: answers_2018, default_2018_answers
+  logical :: remap_answers_2018   ! If true, use the order of arithmetic and expressions that
+                                  ! recover the remapping answers from 2018.  If false, use more
+                                  ! robust forms of the same remapping expressions.
+  integer :: remap_answer_date    ! The vintage of the order of arithmetic and expressions to use
+                                  ! for remapping.  Values below 20190101 recover the remapping
+                                  ! answers from 2018, while higher values use more robust
+                                  ! forms of the same remapping expressions.
+  integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
+  logical :: default_2018_answers ! The default setting for the various 2018_ANSWERS flags.
   character(len=8)   :: this_pe
   character(len=240) :: doc_file, doc_file_dflt, doc_path
   character(len=240), allocatable :: diag_coords(:)
@@ -3169,13 +3179,26 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
                  'The number of diagnostic vertical coordinates to use. '//&
                  'For each coordinate, an entry in DIAG_COORDS must be provided.', &
                  default=1)
+  call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
+                 "This sets the default value for the various _ANSWER_DATE parameters.", &
+                 default=99991231)
   call get_param(param_file, mdl, "DEFAULT_2018_ANSWERS", default_2018_answers, &
                  "This sets the default value for the various _2018_ANSWERS parameters.", &
-                 default=.false.)
-  call get_param(param_file, mdl, "REMAPPING_2018_ANSWERS", answers_2018, &
+                 default=(default_answer_date<20190101))
+  call get_param(param_file, mdl, "REMAPPING_2018_ANSWERS", remap_answers_2018, &
                  "If true, use the order of arithmetic and expressions that recover the "//&
                  "answers from the end of 2018.  Otherwise, use updated and more robust "//&
                  "forms of the same expressions.", default=default_2018_answers)
+  ! Revise inconsistent default answer dates for remapping.
+  if (remap_answers_2018 .and. (default_answer_date >= 20190101)) default_answer_date = 20181231
+  if (.not.remap_answers_2018 .and. (default_answer_date < 20190101)) default_answer_date = 20190101
+  call get_param(param_file, mdl, "REMAPPING_ANSWER_DATE", remap_answer_date, &
+                 "The vintage of the expressions and order of arithmetic to use for remapping.  "//&
+                 "Values below 20190101 result in the use of older, less accurate expressions "//&
+                 "that were in use at the end of 2018.  Higher values result in the use of more "//&
+                 "robust and accurate forms of mathematically equivalent expressions.  "//&
+                 "If both REMAPPING_2018_ANSWERS and REMAPPING_ANSWER_DATE are specified, the "//&
+                 "latter takes precedence.", default=default_answer_date)
   call get_param(param_file, mdl, 'USE_GRID_SPACE_DIAGNOSTIC_AXES', diag_cs%grid_space_axes, &
                  'If true, use a grid index coordinate convention for diagnostic axes. ',&
                  default=.false.)
@@ -3198,7 +3221,7 @@ subroutine diag_mediator_init(G, GV, US, nz, param_file, diag_cs, doc_file_dir)
     allocate(diag_cs%diag_remap_cs(diag_cs%num_diag_coords))
     ! Initialize each diagnostic vertical coordinate
     do i=1, diag_cs%num_diag_coords
-      call diag_remap_init(diag_cs%diag_remap_cs(i), diag_coords(i), answers_2018=answers_2018)
+      call diag_remap_init(diag_cs%diag_remap_cs(i), diag_coords(i), answer_date=remap_answer_date)
     enddo
     deallocate(diag_coords)
   endif
@@ -3336,8 +3359,8 @@ end subroutine diag_mediator_init
 !> Set pointers to the default state fields used to remap diagnostics.
 subroutine diag_set_state_ptrs(h, T, S, eqn_of_state, diag_cs)
   real, dimension(:,:,:), target, intent(in   ) :: h !< the model thickness array [H ~> m or kg m-2]
-  real, dimension(:,:,:), target, intent(in   ) :: T !< the model temperature array
-  real, dimension(:,:,:), target, intent(in   ) :: S !< the model salinity array
+  real, dimension(:,:,:), target, intent(in   ) :: T !< the model temperature array [C ~> degC]
+  real, dimension(:,:,:), target, intent(in   ) :: S !< the model salinity array [S ~> ppt]
   type(EOS_type),         target, intent(in   ) :: eqn_of_state !< Equation of state structure
   type(diag_ctrl),                intent(inout) :: diag_cs !< diag mediator control structure
 
@@ -3357,9 +3380,9 @@ subroutine diag_update_remap_grids(diag_cs, alt_h, alt_T, alt_S, update_intensiv
   real, target, optional, intent(in   ) :: alt_h(:,:,:) !< Used if remapped grids should be something other than
                                                         !! the current thicknesses [H ~> m or kg m-2]
   real, target, optional, intent(in   ) :: alt_T(:,:,:) !< Used if remapped grids should be something other than
-                                                        !! the current temperatures
+                                                        !! the current temperatures [C ~> degC]
   real, target, optional, intent(in   ) :: alt_S(:,:,:) !< Used if remapped grids should be something other than
-                                                        !! the current salinity
+                                                        !! the current salinity [S ~> ppt]
   logical, optional,      intent(in   ) :: update_intensive !< If true (default), update the grids used for
                                                             !! intensive diagnostics
   logical, optional,      intent(in   ) :: update_extensive !< If true (not default), update the grids used for
@@ -3367,7 +3390,8 @@ subroutine diag_update_remap_grids(diag_cs, alt_h, alt_T, alt_S, update_intensiv
   ! Local variables
   integer :: i
   real, dimension(:,:,:), pointer :: h_diag => NULL() ! The layer thickneses for diagnostics [H ~> m or kg m-2]
-  real, dimension(:,:,:), pointer :: T_diag => NULL(), S_diag => NULL()
+  real, dimension(:,:,:), pointer :: T_diag => NULL() ! The layer temperatures for diagnostics [C ~> degC]
+  real, dimension(:,:,:), pointer :: S_diag => NULL() ! The layer salinities for diagnostics [S ~> ppt]
   logical :: update_intensive_local, update_extensive_local
 
   ! Set values based on optional input arguments
@@ -3729,7 +3753,7 @@ subroutine log_available_diag(used, module_name, field_name, cell_methods_string
     mesg = '"'//trim(field_name)//'"  [Unused]'
   endif
   if (len(trim((comment)))>0) then
-    write(diag_CS%available_diag_doc_unit, '(a,x,"(",a,")")') trim(mesg),trim(comment)
+    write(diag_CS%available_diag_doc_unit, '(a,1x,"(",a,")")') trim(mesg),trim(comment)
   else
     write(diag_CS%available_diag_doc_unit, '(a)') trim(mesg)
   endif
@@ -3751,7 +3775,7 @@ subroutine log_chksum_diag(docunit, description, chksum)
   character(len=*), intent(in) :: description !< Name of the diagnostic module
   integer,          intent(in) :: chksum      !< chksum of the diagnostic
 
-  write(docunit, '(a,x,i9.8)') description, chksum
+  write(docunit, '(a,1x,i9.8)') description, chksum
   flush(docunit)
 
 end subroutine log_chksum_diag
@@ -3856,7 +3880,7 @@ end subroutine diag_restore_grids
 subroutine diag_grid_storage_end(grid_storage)
   type(diag_grid_storage), intent(inout) :: grid_storage !< Structure containing a snapshot of the target grids
   ! Local variables
-  integer :: m, nz
+  integer :: m
 
   ! Don't do anything else if there are no remapped coordinates
   if (grid_storage%num_diag_coords < 1) return
@@ -3879,7 +3903,7 @@ subroutine downsample_diag_masks_set(G, nz, diag_cs)
   type(diag_ctrl),               pointer    :: diag_cs !< A pointer to a type with many variables
                                                        !! used for diagnostics
   ! Local variables
-  integer :: i,j,k,ii,jj,dl
+  integer :: k, dl
 
 !print*,'original c extents ',G%isc,G%iec,G%jsc,G%jec
 !print*,'original c extents ',G%iscb,G%iecb,G%jscb,G%jecb
@@ -4295,7 +4319,6 @@ subroutine downsample_field_2d(field_in, field_out, dl, method, mask, diag_cs, d
   character(len=240) :: mesg
   integer :: i,j,ii,jj,i0,j0,f1,f2,f_in1,f_in2
   real :: ave, total_weight, weight
-  real :: epsilon = 1.0e-20  ! A negligibly small count of weights [nondim]
   real :: eps_area  ! A negligibly small area [L2 ~> m2]
   real :: eps_len   ! A negligibly small horizontal length [L ~> m]
 
