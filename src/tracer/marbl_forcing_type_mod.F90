@@ -18,6 +18,7 @@ use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
 use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
 use tracer_forcing_utils_mod, only : map_model_time_to_forcing_time
 use marbl_constants_mod,      only : molw_Fe
+use MOM_forcing_type,         only : forcing
 
 implicit none ; private
 
@@ -47,31 +48,6 @@ type, private :: marbl_forcing_diag_ids
   integer :: dic_riv_flux          !< DIC riverine flux
   integer :: dic_alt_co2_riv_flux  !< DIC (alternate CO2) riverine flux
 end type marbl_forcing_diag_ids
-
-!> Contains pointers to the forcing fields needed to drive MARBL
-type, public :: marbl_forcing_type
-  real, pointer, dimension(:,:) :: noy_dep => NULL() !< NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
-  real, pointer, dimension(:,:) :: nhx_dep => NULL() !< NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
-  real, pointer, dimension(:,:) :: dust_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
-  real, pointer, dimension(:,:) :: iron_flux => NULL() !< Flux of dust into the ocean [m2 m-2]
-  real, pointer, dimension(:,:) :: ice_fraction => NULL() !< Fraction of ocean cell under seaice [m2 m-2]
-  real, pointer, dimension(:,:) :: u10_sqr => NULL() !< 10m wind speed squared [L2 T-2 ~> m2 s-2]
-
-  real, pointer, dimension(:,:) :: no3_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: po4_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: sio3_riv_flux => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: fe_riv_flux   => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: alk_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: doc_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: docr_riv_flux => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: don_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: donr_riv_flux => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dop_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dopr_riv_flux => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dic_riv_flux  => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: alk_alt_co2_riv_flux => NULL() !< [mmol / m^2 / s]
-  real, pointer, dimension(:,:) :: dic_alt_co2_riv_flux => NULL() !< [mmol / m^2 / s]
-end type marbl_forcing_type
 
 !> Control structure for this module
 type, public :: marbl_forcing_CS
@@ -113,30 +89,18 @@ type, public :: marbl_forcing_CS
 
 end type marbl_forcing_CS
 
-!> Contains pointers to IOB fields that are used to compute MARBL forcing
-type, public :: marbl_ice_ocean_boundary_type
-  real, pointer, dimension(:,:) :: atm_fine_dust_flux   => NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: atm_coarse_dust_flux => NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: seaice_dust_flux     => NULL() !< Dust flux from seaice [kg/m^2/s]
-  real, pointer, dimension(:,:) :: atm_bc_flux          => NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: seaice_bc_flux       => NULL() !< Black carbon flux from seaice [kg/m^2/s]
-  real, pointer, dimension(:,:) :: ice_fraction         => NULL() !< Fraction of ocn covered with ice
-  real, pointer, dimension(:,:) :: u10_sqr              => NULL() !< 10m wind speed squared (m^2/s^2)
-end type marbl_ice_ocean_boundary_type
-
 public :: marbl_forcing_init
-public :: marbl_forcing_type_init
-public :: marbl_iob_allocate
 public :: convert_marbl_IOB_to_forcings
 
 contains
 
-  subroutine marbl_forcing_init(G, param_file, diag, day, inputdir, CS)
+  subroutine marbl_forcing_init(G, param_file, diag, day, inputdir, use_marbl, CS)
     type(ocean_grid_type),           intent(in)    :: G           !< The ocean's grid structure
     type(param_file_type),           intent(in)    :: param_file  !< A structure to parse for run-time parameters
     type(diag_ctrl), target,         intent(in)    :: diag        !< Structure used to regulate diagnostic output.
     type(time_type), target,         intent(in)    :: day         !< Time of the start of the run.
     character(len=*),                intent(in)    :: inputdir    !< Directory containing input files
+    logical,                         intent(in)    :: use_marbl   !< Is MARBL tracer package active?
     type(marbl_forcing_CS), pointer, intent(inout) :: CS          !< A pointer that is set to point to control
                                                                   !! structure for MARBL forcing
 
@@ -157,13 +121,12 @@ contains
     allocate(CS)
     CS%diag => diag
 
-    call get_param(param_file, mdl, "USE_MARBL_TRACERS", CS%use_marbl_tracers, &
-         "A local copy of USE_MARBL_TRACERS to help define READ_NDEP default", &
-         do_not_log=.true.)
     CS%use_marbl_tracers = .true.
-    if (.not. CS%use_marbl_tracers) then
+    if (.not. use_marbl) then
+      CS%use_marbl_tracers = .false.
       return
     end if
+
     ! TODO: just use DIN_LOC_ROOT
     call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir2, default="/glade/work/mlevy/cesm_inputdata")
 
@@ -367,98 +330,27 @@ contains
 
   end subroutine marbl_forcing_init
 
-  subroutine marbl_forcing_type_init(isd,ied,jsd,jed,MARBL_forcing, CS)
-    integer,                           intent(in)    :: isd            !< start of i-indices for current block
-    integer,                           intent(in)    :: ied            !< end of i-indices for current block
-    integer,                           intent(in)    :: jsd            !< start of j-indices for current block
-    integer,                           intent(in)    :: jed            !< end of j-indices for current block
-    type(marbl_forcing_type), pointer, intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
-    type(marbl_forcing_CS), pointer,   intent(in)    :: CS          !< A pointer that is set to point to control
+  ! Note: ice fraction and u10_sqr are handled in mom_surface_forcing because of CFCs
+  subroutine convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
+                                           seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
+                                           Time, G, US, i0, j0, fluxes, CS)
 
-    if (associated(MARBL_forcing)) then
-      call MOM_error(WARNING, "marbl_forcing_type_init called with an associated "// &
-                              "marbl forcing structure.")
-      return
-    endif
-
-    if (.not. CS%use_marbl_tracers) return
-
-    allocate(MARBL_forcing)
-
-    ! Fields from coupler
-    call safe_alloc_ptr(MARBL_forcing%noy_dep,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%nhx_dep,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%dust_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%iron_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%ice_fraction,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%u10_sqr,isd,ied,jsd,jed)
-
-    ! Fields read from file
-    call safe_alloc_ptr(MARBL_forcing%no3_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%po4_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%sio3_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%fe_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%alk_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%doc_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%docr_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%don_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%donr_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%dop_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%dopr_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%dic_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%alk_alt_co2_riv_flux,isd,ied,jsd,jed)
-    call safe_alloc_ptr(MARBL_forcing%dic_alt_co2_riv_flux,isd,ied,jsd,jed)
-
-  end subroutine marbl_forcing_type_init
-
-  subroutine marbl_iob_allocate(isc, iec, jsc, jec, MARBL_IOB)
-
-    integer,                                      intent(in) :: isc        !< start of i-indices for current block
-    integer,                                      intent(in) :: iec        !< end of i-indices for current block
-    integer,                                      intent(in) :: jsc        !< start of j-indices for current block
-    integer,                                      intent(in) :: jec        !< end of j-indices for current block
-    type(marbl_ice_ocean_boundary_type), pointer             :: MARBL_IOB  !< MARBL-specific ice-ocean boundary type
-
-    if (associated(MARBL_IOB)) then
-      call MOM_error(WARNING, "marbl_iob_allocate called with an associated "// &
-                              "ice-ocean boundary structure.")
-      return
-    endif
-
-    allocate(MARBL_IOB)
-    allocate(MARBL_IOB% atm_fine_dust_flux (isc:iec,jsc:jec),  &
-             MARBL_IOB% atm_coarse_dust_flux (isc:iec,jsc:jec),&
-             MARBL_IOB% seaice_dust_flux (isc:iec,jsc:jec),    &
-             MARBL_IOB% atm_bc_flux (isc:iec,jsc:jec),         &
-             MARBL_IOB% seaice_bc_flux (isc:iec,jsc:jec),      &
-             MARBL_IOB% ice_fraction (isc:iec,jsc:jec),        &
-             MARBL_IOB% u10_sqr (isc:iec,jsc:jec))
-
-    MARBL_IOB%atm_fine_dust_flux(:,:)   = 0.0
-    MARBL_IOB%atm_coarse_dust_flux(:,:) = 0.0
-    MARBL_IOB%seaice_dust_flux(:,:)     = 0.0
-    MARBL_IOB%atm_bc_flux(:,:)          = 0.0
-    MARBL_IOB%seaice_bc_flux(:,:)       = 0.0
-    MARBL_IOB%ice_fraction(:,:)         = 0.0
-    MARBL_IOB%u10_sqr(:,:)              = 0.0
-
-  end subroutine marbl_iob_allocate
-
-  subroutine convert_marbl_IOB_to_forcings(MARBL_IOB, Time, G, US, i0, j0, MARBL_forcing, CS)
-
-    type(marbl_ice_ocean_boundary_type), pointer, intent(in)    :: MARBL_IOB      !< MARBL-specific ice-ocean boundary
-                                                                                  !! type
-    type(time_type),                              intent(in)    :: Time           !< The time of the fluxes, used for
-                                                                                  !! interpolating the salinity to the
-                                                                                  !! right time, when it is being
-                                                                                  !! restored.
-    type(ocean_grid_type),                        intent(in)    :: G              !< The ocean's grid structure
-    type(unit_scale_type),                        intent(in)    :: US             !< A dimensional unit scaling type
-    integer,                                      intent(in)    :: i0             !< i index offset
-    integer,                                      intent(in)    :: j0             !< j index offset
-    type(marbl_forcing_type),                     intent(inout) :: MARBL_forcing  !< MARBL-specific forcing fields
-    type(marbl_forcing_CS), pointer,              intent(inout) :: CS             !< A pointer that is set to point to
-                                                                                  !! control structure for MARBL forcing
+    real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
+    real, dimension(:,:),   pointer, intent(in)    :: atm_coarse_dust_flux !< atmosphere coarse dust flux from IOB
+    real, dimension(:,:),   pointer, intent(in)    :: seaice_dust_flux     !< sea ice dust flux from IOB
+    real, dimension(:,:),   pointer, intent(in)    :: atm_bc_flux          !< atmosphere black carbon flux from IOB
+    real, dimension(:,:),   pointer, intent(in)    :: seaice_bc_flux       !< sea ice black carbon flux from IOB
+    type(time_type),                 intent(in)    :: Time                 !< The time of the fluxes, used for
+                                                                           !! interpolating the salinity to the
+                                                                           !! right time, when it is being
+                                                                           !! restored.
+    type(ocean_grid_type),           intent(in)    :: G                    !< The ocean's grid structure
+    type(unit_scale_type),           intent(in)    :: US                   !< A dimensional unit scaling type
+    integer,                         intent(in)    :: i0                   !< i index offset
+    integer,                         intent(in)    :: j0                   !< j index offset
+    type(forcing),                   intent(inout) :: fluxes        !< MARBL-specific forcing fields
+    type(marbl_forcing_CS), pointer, intent(inout) :: CS                   !< A pointer that is set to point to
+                                                                           !! control structure for MARBL forcing
 
     ! These are Fortran parameters in POP
     real, parameter :: DONriv_refract = 0.1
@@ -487,160 +379,153 @@ contains
     time_varying_data(:,:) = 1.
     if (CS%diag_ids%atm_fine_dust > 0) &
       call post_data(CS%diag_ids%atm_fine_dust, &
-                     US%kg_m2s_to_RZ_T * MARBL_IOB%atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     US%kg_m2s_to_RZ_T * atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_coarse_dust > 0) &
       call post_data(CS%diag_ids%atm_coarse_dust, &
-                     US%kg_m2s_to_RZ_T * MARBL_IOB%atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+                     US%kg_m2s_to_RZ_T * atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_bc > 0) &
-      call post_data(CS%diag_ids%atm_bc, US%kg_m2s_to_RZ_T * MARBL_IOB%atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%atm_bc, US%kg_m2s_to_RZ_T * atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_dust > 0) &
-      call post_data(CS%diag_ids%ice_dust, US%kg_m2s_to_RZ_T * MARBL_IOB%seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%ice_dust, US%kg_m2s_to_RZ_T * seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_bc > 0) &
-      call post_data(CS%diag_ids%ice_bc, US%kg_m2s_to_RZ_T * MARBL_IOB%seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
+      call post_data(CS%diag_ids%ice_bc, US%kg_m2s_to_RZ_T * seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
 
     do j=js,je ; do i=is,ie
-      if (associated(MARBL_IOB%atm_fine_dust_flux)) then
+      if (associated(atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
-        MARBL_forcing%dust_flux(i,j) = (G%mask2dT(i,j) * dust_flux_conversion) * &
-                                       (MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
-                                        MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) + &
-                                        MARBL_IOB%seaice_dust_flux(i-i0,j-j0))
+        fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * dust_flux_conversion) * &
+                                       (atm_fine_dust_flux(i-i0,j-j0) + &
+                                        atm_coarse_dust_flux(i-i0,j-j0) + &
+                                        seaice_dust_flux(i-i0,j-j0))
       end if
 
-      if (associated(MARBL_IOB%atm_bc_flux)) then
+      if (associated(atm_bc_flux)) then
         ! TODO: abort if atm_fine_dust_flux and atm_coarse_dust_flux are not associated?
         ! Contribution of atmospheric dust to iron flux
-        if (MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) < &
-            CS%dust_ratio_thres * MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0)) then
+        if (atm_coarse_dust_flux(i-i0,j-j0) < &
+            CS%dust_ratio_thres * atm_fine_dust_flux(i-i0,j-j0)) then
           atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset + CS%dust_ratio_to_fe_bioavail_frac * &
-            (CS%dust_ratio_thres - MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0) / MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0))
+            (CS%dust_ratio_thres - atm_coarse_dust_flux(i-i0,j-j0) / atm_fine_dust_flux(i-i0,j-j0))
         else
           atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset
         end if
         ! Contribution of atmospheric dust to iron flux
-        MARBL_forcing%iron_flux(i,j) = (atm_fe_bioavail_frac * &
-                                 (CS%iron_frac_in_atm_fine_dust * MARBL_IOB%atm_fine_dust_flux(i-i0,j-j0) + &
-                                  CS%iron_frac_in_atm_coarse_dust * MARBL_IOB%atm_coarse_dust_flux(i-i0,j-j0)))
+        fluxes%iron_flux(i,j) = (atm_fe_bioavail_frac * &
+                                 (CS%iron_frac_in_atm_fine_dust * atm_fine_dust_flux(i-i0,j-j0) + &
+                                  CS%iron_frac_in_atm_coarse_dust * atm_coarse_dust_flux(i-i0,j-j0)))
         ! Contribution of atmospheric black carbon to iron flux
-        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
-                                 (CS%atm_fe_to_bc_ratio * MARBL_IOB%atm_bc_flux(i-i0,j-j0)))
+        fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
+                                 (CS%atm_fe_to_bc_ratio * atm_bc_flux(i-i0,j-j0)))
 
         seaice_fe_bioavail_frac = atm_fe_bioavail_frac
         ! Contribution of seaice dust to iron flux
-        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (seaice_fe_bioavail_frac * &
-                                 (CS%iron_frac_in_seaice_dust * MARBL_IOB%seaice_dust_flux(i-i0,j-j0)))
+        fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (seaice_fe_bioavail_frac * &
+                                 (CS%iron_frac_in_seaice_dust * seaice_dust_flux(i-i0,j-j0)))
         ! Contribution of seaice black carbon to iron flux
-        MARBL_forcing%iron_flux(i,j) = MARBL_forcing%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
-                                 (CS%seaice_fe_to_bc_ratio * MARBL_IOB%seaice_bc_flux(i-i0,j-j0)))
+        fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
+                                 (CS%seaice_fe_to_bc_ratio * seaice_bc_flux(i-i0,j-j0)))
 
         ! Unit conversion (kg / m^2 / s -> nmol / cm^2 / s)
-        MARBL_forcing%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * MARBL_forcing%iron_flux(i,j)
+        fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
 
       end if
 
-      if (associated(MARBL_IOB%ice_fraction)) then
-        MARBL_forcing%ice_fraction(i,j) = G%mask2dT(i,j) * MARBL_IOB%ice_fraction(i-i0,j-j0)
-      end if
-
-      if (associated(MARBL_IOB%u10_sqr)) then
-        MARBL_forcing%u10_sqr(i,j) = G%mask2dT(i,j) * US%m_s_to_L_T**2 * MARBL_IOB%u10_sqr(i-i0,j-j0)
-      end if
     enddo; enddo
 
     if (CS%read_ndep) then
       call time_interp_external(CS%id_noydep,Time,time_varying_data)
-      MARBL_forcing%noy_dep = ndep_conversion * time_varying_data
+      fluxes%noy_dep = ndep_conversion * time_varying_data
       call time_interp_external(CS%id_nhxdep,Time,time_varying_data)
-      MARBL_forcing%nhx_dep = ndep_conversion * time_varying_data
+      fluxes%nhx_dep = ndep_conversion * time_varying_data
       do j=js,je ; do i=is,ie
-        MARBL_forcing%noy_dep(i,j) = G%mask2dT(i,j) * MARBL_forcing%noy_dep(i,j)
-        MARBL_forcing%nhx_dep(i,j) = G%mask2dT(i,j) * MARBL_forcing%nhx_dep(i,j)
+        fluxes%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%noy_dep(i,j)
+        fluxes%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%nhx_dep(i,j)
       enddo; enddo
     else
       ! This is temporary while I test the file we created
-      MARBL_forcing%noy_dep(:,:) = 0.
-      MARBL_forcing%nhx_dep(:,:) = 0.
+      fluxes%noy_dep(:,:) = 0.
+      fluxes%nhx_dep(:,:) = 0.
     endif
 
     ! River fluxes
-    MARBL_forcing%alk_riv_flux(:,:) = 0.
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = 0.
+    fluxes%alk_riv_flux(:,:) = 0.
+    fluxes%alk_alt_co2_riv_flux(:,:) = 0.
 
     ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
     Time_riv_flux = map_model_time_to_forcing_time(Time, CS%riv_flux_dataset)
 
     call time_interp_external(CS%id_din_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%no3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
-    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) - time_varying_data(:,:)
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) - time_varying_data(:,:)
+    fluxes%no3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    fluxes%alk_riv_flux(:,:) = fluxes%alk_riv_flux(:,:) - time_varying_data(:,:)
+    fluxes%alk_alt_co2_riv_flux(:,:) = fluxes%alk_alt_co2_riv_flux(:,:) - time_varying_data(:,:)
 
     call time_interp_external(CS%id_dip_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%po4_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    fluxes%po4_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
     call time_interp_external(CS%id_don_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%don_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DONriv_refract) * &
+    fluxes%don_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DONriv_refract) * &
                                       time_varying_data(:,:)
-    MARBL_forcing%donr_riv_flux(:,:) = G%mask2dT(:,:) * DONriv_refract * &
+    fluxes%donr_riv_flux(:,:) = G%mask2dT(:,:) * DONriv_refract * &
                                        time_varying_data(:,:)
 
     call time_interp_external(CS%id_dop_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%dop_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOPriv_refract) * &
+    fluxes%dop_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOPriv_refract) * &
                                       time_varying_data(:,:)
-    MARBL_forcing%dopr_riv_flux(:,:) = G%mask2dT(:,:) * DOPriv_refract * &
+    fluxes%dopr_riv_flux(:,:) = G%mask2dT(:,:) * DOPriv_refract * &
                                        time_varying_data(:,:)
 
     call time_interp_external(CS%id_dsi_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%sio3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    fluxes%sio3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
     call time_interp_external(CS%id_dfe_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%fe_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    fluxes%fe_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
     call time_interp_external(CS%id_dic_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%dic_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
-    MARBL_forcing%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    fluxes%dic_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+    fluxes%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
     call time_interp_external(CS%id_alk_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%alk_riv_flux(:,:) = MARBL_forcing%alk_riv_flux(:,:) + time_varying_data(:,:)
-    MARBL_forcing%alk_alt_co2_riv_flux(:,:) = MARBL_forcing%alk_alt_co2_riv_flux(:,:) + time_varying_data(:,:)
+    fluxes%alk_riv_flux(:,:) = fluxes%alk_riv_flux(:,:) + time_varying_data(:,:)
+    fluxes%alk_alt_co2_riv_flux(:,:) = fluxes%alk_alt_co2_riv_flux(:,:) + time_varying_data(:,:)
 
     call time_interp_external(CS%id_doc_riv,Time_riv_flux,time_varying_data)
-    MARBL_forcing%doc_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOCriv_refract) * time_varying_data(:,:)
-    MARBL_forcing%docr_riv_flux(:,:) = G%mask2dT(:,:) * DOCriv_refract * time_varying_data(:,:)
+    fluxes%doc_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOCriv_refract) * time_varying_data(:,:)
+    fluxes%docr_riv_flux(:,:) = G%mask2dT(:,:) * DOCriv_refract * time_varying_data(:,:)
 
     ! Post to diags
     if (CS%diag_ids%no3_riv_flux > 0) &
-      call post_data(CS%diag_ids%no3_riv_flux, MARBL_forcing%no3_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%no3_riv_flux, fluxes%no3_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%po4_riv_flux > 0) &
-      call post_data(CS%diag_ids%po4_riv_flux, MARBL_forcing%po4_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%po4_riv_flux, fluxes%po4_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%don_riv_flux > 0) &
-      call post_data(CS%diag_ids%don_riv_flux, MARBL_forcing%don_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%don_riv_flux, fluxes%don_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%donr_riv_flux > 0) &
-      call post_data(CS%diag_ids%donr_riv_flux, MARBL_forcing%donr_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%donr_riv_flux, fluxes%donr_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%dop_riv_flux > 0) &
-      call post_data(CS%diag_ids%dop_riv_flux, MARBL_forcing%dop_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%dop_riv_flux, fluxes%dop_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%dopr_riv_flux > 0) &
-      call post_data(CS%diag_ids%dopr_riv_flux, MARBL_forcing%dopr_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%dopr_riv_flux, fluxes%dopr_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%sio3_riv_flux > 0) &
-      call post_data(CS%diag_ids%sio3_riv_flux, MARBL_forcing%sio3_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%sio3_riv_flux, fluxes%sio3_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%fe_riv_flux > 0) &
-      call post_data(CS%diag_ids%fe_riv_flux, MARBL_forcing%fe_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%fe_riv_flux, fluxes%fe_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%doc_riv_flux > 0) &
-      call post_data(CS%diag_ids%doc_riv_flux, MARBL_forcing%doc_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%doc_riv_flux, fluxes%doc_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%docr_riv_flux > 0) &
-      call post_data(CS%diag_ids%docr_riv_flux, MARBL_forcing%docr_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%docr_riv_flux, fluxes%docr_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%alk_riv_flux > 0) &
-      call post_data(CS%diag_ids%alk_riv_flux, MARBL_forcing%alk_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%alk_riv_flux, fluxes%alk_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%alk_alt_co2_riv_flux > 0) &
-      call post_data(CS%diag_ids%alk_alt_co2_riv_flux, MARBL_forcing%alk_alt_co2_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%alk_alt_co2_riv_flux, fluxes%alk_alt_co2_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%dic_riv_flux > 0) &
-      call post_data(CS%diag_ids%dic_riv_flux, MARBL_forcing%dic_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%dic_riv_flux, fluxes%dic_riv_flux(:,:), CS%diag)
     if (CS%diag_ids%dic_alt_co2_riv_flux > 0) &
-      call post_data(CS%diag_ids%dic_alt_co2_riv_flux, MARBL_forcing%dic_alt_co2_riv_flux(:,:), CS%diag)
+      call post_data(CS%diag_ids%dic_alt_co2_riv_flux, fluxes%dic_alt_co2_riv_flux(:,:), CS%diag)
 
   end subroutine convert_marbl_IOB_to_forcings
 

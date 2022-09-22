@@ -22,8 +22,6 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : surface, thermo_var_ptrs
 use MOM_verticalGrid,  only : verticalGrid_type
 
-use marbl_forcing_type_mod, only : marbl_forcing_type
-
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -175,8 +173,6 @@ type, public :: forcing
   real, pointer, dimension(:,:) :: shelf_sfc_mass_flux => NULL() !< Ice shelf surface mass flux
                                  !! deposition from the atmosphere. [R Z T-1 ~> kg m-2 s-1]
 
-  type(marbl_forcing_type), pointer :: MARBL_forcing => NULL() !< forcing fields needed if MARBL is active
-
   ! Scalars set by surface forcing modules
   real :: vPrecGlobalAdj = 0.     !< adjustment to restoring vprec to zero out global net [kg m-2 s-1]
   real :: saltFluxGlobalAdj = 0.  !< adjustment to restoring salt flux to zero out global net [kgSalt m-2 s-1]
@@ -198,9 +194,35 @@ type, public :: forcing
   ! CFC-related arrays needed in the MOM_CFC_cap module
   real, pointer, dimension(:,:) :: &
     cfc11_flux    => NULL(), &  !< flux of cfc_11 into the ocean [CU R Z T-1 ~> mol m-2 s-1]
-    cfc12_flux    => NULL(), &  !< flux of cfc_12 into the ocean [CU R Z T-1 ~> mol m-2 s-1]
+    cfc12_flux    => NULL()     !< flux of cfc_12 into the ocean [CU R Z T-1 ~> mol m-2 s-1]
+
+  ! Forcing fields required for gas fluxes
+  real, pointer, dimension(:,:) :: &
     ice_fraction  => NULL(), &  !< fraction of sea ice coverage at h-cells, from 0 to 1 [nondim].
     u10_sqr       => NULL()     !< wind magnitude at 10 m squared [L2 T-2 ~> m2 s-2]
+
+  ! Forcing fields required for MARBL
+  real, pointer, dimension(:,:) :: &
+    noy_dep => NULL(),               & !< NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
+    nhx_dep => NULL(),               & !< NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
+    dust_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
+    iron_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
+    no3_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    po4_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    sio3_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
+    fe_riv_flux  => NULL(),          & !< [mmol / m^2 / s]
+    alk_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    doc_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    docr_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
+    don_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    donr_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
+    dop_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    dopr_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
+    dic_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
+    alk_alt_co2_riv_flux  => NULL(), & !< [mmol / m^2 / s]
+    dic_alt_co2_riv_flux  => NULL()    !< [mmol / m^2 / s]
+
+  ! ADD MCOG RELATED VARS HERE
 
   real, pointer, dimension(:,:) :: &
     lamult => NULL()            !< Langmuir enhancement factor [nondim]
@@ -2980,8 +3002,8 @@ end subroutine forcing_diagnostics
 
 !> Conditionally allocate fields within the forcing type
 subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
-                                  shelf, iceberg, salt, fix_accum_bug, cfc, waves, &
-                                  shelf_sfc_accumulation, lamult, hevap)
+                                  shelf, iceberg, salt, fix_accum_bug, cfc, marbl, &
+                                  waves, shelf_sfc_accumulation, lamult, hevap)
   type(ocean_grid_type), intent(in) :: G       !< Ocean grid structure
   type(forcing),      intent(inout) :: fluxes  !< A structure containing thermodynamic forcing fields
   logical, optional,     intent(in) :: water   !< If present and true, allocate water fluxes
@@ -2994,6 +3016,7 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   logical, optional,     intent(in) :: fix_accum_bug !< If present and true, avoid using a bug in
                                                !! accumulation of ustar_gustless
   logical, optional,     intent(in) :: cfc     !< If present and true, allocate cfc fluxes
+  logical, optional,     intent(in) :: marbl   !< If present and true, allocate MARBL fluxes
   logical, optional,     intent(in) :: waves   !< If present and true, allocate wave fields
   logical, optional,     intent(in) :: shelf_sfc_accumulation !< If present and true, and shelf is true,
                                                !! then allocate surface flux deposition from the atmosphere
@@ -3072,6 +3095,28 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   call myAlloc(fluxes%cfc12_flux,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%u10_sqr,isd,ied,jsd,jed, cfc)
+
+  !These fields should only on allocated when USE_MARBL is activated.
+  call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%u10_sqr,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%noy_dep,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%nhx_dep,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%dust_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%iron_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%no3_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%po4_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%sio3_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%fe_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%alk_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%doc_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%docr_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%don_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%donr_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%dop_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%dopr_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%dic_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%alk_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%dic_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
 
   !These fields should only on allocated when wave coupling is activated.
   call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, waves)

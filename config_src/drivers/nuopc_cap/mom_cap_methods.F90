@@ -308,8 +308,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   call state_getimport(importState, 'Si_ifrac',  &
        isc, iec, jsc, jec, ice_ocean_boundary%ice_fraction, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
-  ! Field is also used by MARBL
-  ice_ocean_boundary%MARBL_IOB%ice_fraction(:,:) = ice_ocean_boundary%ice_fraction(:,:)
 
   !----
   ! 10m wind squared
@@ -318,8 +316,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   call state_getimport(importState, 'So_duu10n',  &
        isc, iec, jsc, jec, ice_ocean_boundary%u10_sqr, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
-  ! Field is also used by MARBL
-  ice_ocean_boundary%MARBL_IOB%u10_sqr(:,:) = ice_ocean_boundary%u10_sqr(:,:)
 
   !----
   ! Langmuir enhancement factor
@@ -422,16 +418,16 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ! fine dust flux from atmosphere
   !----
-  ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:) = 0._ESMF_KIND_R8
+  ice_ocean_boundary%atm_fine_dust_flux(:,:) = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Faxa_dstwet', &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:), &
+       isc, iec, jsc, jec, ice_ocean_boundary%atm_fine_dust_flux(:,:), &
        areacor=med2mod_areacor, do_sum=.true., esmf_ind=1, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
   call state_getimport(importState, 'Faxa_dstdry',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_fine_dust_flux(:,:), &
+       isc, iec, jsc, jec, ice_ocean_boundary%atm_fine_dust_flux(:,:), &
        areacor=med2mod_areacor, do_sum=.true., esmf_ind=1, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
@@ -441,17 +437,17 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ! coarse dust flux from atmosphere
   !----
-  ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:) = 0._ESMF_KIND_R8
+  ice_ocean_boundary%atm_coarse_dust_flux(:,:) = 0._ESMF_KIND_R8
   do esmf_ind=2,4
     call state_getimport(importState, 'Faxa_dstwet',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:), &
+         isc, iec, jsc, jec, ice_ocean_boundary%atm_coarse_dust_flux(:,:), &
          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
          file=__FILE__)) &
          return  ! bail out
     call state_getimport(importState, 'Faxa_dstdry',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_coarse_dust_flux(:,:), &
+         isc, iec, jsc, jec, ice_ocean_boundary%atm_coarse_dust_flux(:,:), &
          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
@@ -462,9 +458,9 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ! dust flux from sea ice
   !----
-  ice_ocean_boundary%MARBL_IOB%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
+  ice_ocean_boundary%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Fioi_flxdst',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_dust_flux, &
+       isc, iec, jsc, jec, ice_ocean_boundary%seaice_dust_flux, &
        areacor=med2mod_areacor, rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
@@ -474,10 +470,10 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ! black carbon flux from atmosphere
   !----
-  ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:) = 0._ESMF_KIND_R8
+  ice_ocean_boundary%atm_bc_flux(:,:) = 0._ESMF_KIND_R8
   do esmf_ind=1,3
     call state_getimport(importState, 'Faxa_bcph',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%atm_bc_flux(:,:), &
+         isc, iec, jsc, jec, ice_ocean_boundary%atm_bc_flux(:,:), &
          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
          line=__LINE__, &
@@ -488,16 +484,16 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   !----
   ! black carbon flux from sea ice
   !----
-  ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:) = 0._ESMF_KIND_R8
+  ice_ocean_boundary%seaice_bc_flux(:,:) = 0._ESMF_KIND_R8
   call state_getimport(importState, 'Fioi_bcpho',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:), &
+       isc, iec, jsc, jec, ice_ocean_boundary%seaice_bc_flux(:,:), &
        areacor=med2mod_areacor, do_sum=.true., rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
   call state_getimport(importState, 'Fioi_bcphi',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%MARBL_IOB%seaice_bc_flux(:,:), &
+       isc, iec, jsc, jec, ice_ocean_boundary%seaice_bc_flux(:,:), &
        areacor=med2mod_areacor, do_sum=.true., rc=rc)
   if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
        line=__LINE__, &

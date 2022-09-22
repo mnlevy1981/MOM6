@@ -12,7 +12,7 @@ use mpp_domains_mod,          only: domain2d, mpp_get_compute_domain, mpp_get_co
 use mpp_domains_mod,          only: mpp_get_ntile_count, mpp_get_pelist, mpp_get_global_domain
 use mpp_domains_mod,          only: mpp_get_domain_npes
 use mpp_io_mod,               only: mpp_open, MPP_RDONLY, MPP_ASCII, MPP_OVERWR, MPP_APPEND, mpp_close, MPP_SINGLE
-use mpp_mod,                  only: stdlog, stdout, mpp_root_pe, mpp_clock_id
+use mpp_mod,                  only: stdlog, mpp_root_pe, mpp_clock_id
 use mpp_mod,                  only: mpp_clock_begin, mpp_clock_end, MPP_CLOCK_SYNC
 use mpp_mod,                  only: MPP_CLOCK_DETAILED, CLOCK_COMPONENT, MAXPES
 use time_manager_mod,         only: set_calendar_type, time_type, increment_date
@@ -44,7 +44,6 @@ use shr_file_mod,             only: shr_file_setLogUnit, shr_file_getLogUnit
 use shr_mpi_mod,              only : shr_mpi_min, shr_mpi_max
 #endif
 use time_utils_mod,           only: esmf2fms_time
-use marbl_forcing_type_mod,   only: marbl_iob_allocate
 
 use, intrinsic :: iso_fortran_env, only: output_unit
 
@@ -437,6 +436,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
                                                                  ! (same as restartfile if single restart file)
   character(len=*), parameter            :: subname='(MOM_cap:InitializeAdvertise)'
   character(len=32)                      :: calendar
+  logical                                :: i2o_per_cat
+  integer                                :: ice_ncat
 !--------------------------------
 
   rc = ESMF_SUCCESS
@@ -542,6 +543,35 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   if (is_root_pe()) then
     write(logunit,*) subname//'start time: y,m,d-',year,month,day,'h,m,s=',hour,minute,second
   endif
+
+  !-----------------
+  ! optional input from cice columns due to ice thickness categories
+  !-----------------
+
+  ! Note that flds_i2o_per_cat is set by the env_run.xml variable CPL_I2O_PER_CAT
+  ! This xml variable is set by MOM_interface's buildnml script; it has the same
+  ! value as USE_MARBL in the case
+  call NUOPC_CompAttributeGet(gcomp, name='flds_i2o_per_cat', value=cvalue, rc=rc)
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
+  read(cvalue,*) i2o_per_cat
+  if (is_root_pe()) then
+      write(logunit,*) 'i2o_per_cat = ',i2o_per_cat
+  end if
+
+  ! Note that ice_ncat is set by the env_run.xml variable ICE_NCAT which is set
+  ! by the ice component (default is 1)
+  call NUOPC_CompAttributeGet(gcomp, name='ice_ncat', value=cvalue, rc=rc)
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
+  read(cvalue,*) ice_ncat
+  if (is_root_pe()) then
+      write(logunit,*) 'ice_ncat = ',ice_ncat
+  end if
+
+  if (i2o_per_cat) then
+    Ice_ocean_boundary%ice_ncat = ice_ncat+1
+  else
+    Ice_ocean_boundary%ice_ncat = 1
+  end if
 
   ! rsd need to figure out how to get this without share code
   !call shr_nuopc_get_component_instance(gcomp, inst_suffix, inst_index)
@@ -679,6 +709,11 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% mi (isc:iec,jsc:jec),              &
              Ice_ocean_boundary% ice_fraction (isc:iec,jsc:jec),    &
              Ice_ocean_boundary% u10_sqr (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
+             Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
+             Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
+             Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
              Ice_ocean_boundary% p (isc:iec,jsc:jec),               &
              Ice_ocean_boundary% lrunoff (isc:iec,jsc:jec),         &
              Ice_ocean_boundary% frunoff (isc:iec,jsc:jec))
@@ -738,8 +773,6 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   ! Consider adding this:
   ! if (.not.use_waves) Ice_ocean_boundary%num_stk_bands = 0
 
-  call marbl_iob_allocate(isc, iec, jsc, jec, Ice_ocean_boundary%MARBL_IOB)
-
   ocean_internalstate%ptr%ocean_state_type_ptr => ocean_state
   call ESMF_GridCompSetInternalState(gcomp, ocean_internalstate, rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -779,6 +812,16 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcpho"                 , "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_fresh_water_to_ocean_rate", "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "net_heat_flx_to_ocn"        , "will provide")
+
+  if (Ice_ocean_boundary%ice_ncat > 1) then
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Sf_afrac", "will provide")
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Sf_afracr", "will provide")
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_swnet_afracr", "will provide")
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_swpen_ifrac_n", "will provide", &
+                      ungridded_lbound=1, ungridded_ubound=ice_ncat)
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac_n", "will provide", &
+                      ungridded_lbound=1, ungridded_ubound=ice_ncat)
+  end if
 
   if (cesm_coupled) then
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_lprec", "will provide")

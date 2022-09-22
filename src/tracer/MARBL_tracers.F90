@@ -855,10 +855,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%sss_ind > 0) MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
       if (CS%sst_ind > 0) MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%MARBL_forcing%ice_fraction(i,j)
+        MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
       ! MARBL wants u10_sqr in (cm/s)^2
       if (CS%u10_sqr_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%MARBL_forcing%u10_sqr(i,j) * &
+        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * &
                                                                             (US%L_t_to_m_s * cm_per_m)**2
       ! mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
@@ -873,17 +873,17 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%dust_flux(i,j)
+        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%dust_flux(i,j)
 
       if (CS%fe_dep_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%MARBL_forcing%iron_flux(i,j)
+        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j)
 
       !       These are read from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc
       if (CS%nox_flux_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%noy_dep(i,j) * &
+        MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * &
                                                                              (ndep_conversion * CS%ndep_scale_factor)
       if (CS%nhy_flux_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%MARBL_forcing%nhx_dep(i,j) * &
+        MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * &
                                                                              (ndep_conversion * CS%ndep_scale_factor)
 
       !     * tracers at surface
@@ -925,33 +925,33 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   end do
   ! Add River Fluxes to STF
   if (CS%tracer_inds%no3_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = fluxes%MARBL_forcing%no3_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = fluxes%no3_riv_flux(:,:)
   if (CS%tracer_inds%po4_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = fluxes%MARBL_forcing%po4_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = fluxes%po4_riv_flux(:,:)
   if (CS%tracer_inds%don_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = fluxes%MARBL_forcing%don_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = fluxes%don_riv_flux(:,:)
   if (CS%tracer_inds%donr_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = fluxes%MARBL_forcing%donr_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = fluxes%donr_riv_flux(:,:)
   if (CS%tracer_inds%dop_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = fluxes%MARBL_forcing%dop_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = fluxes%dop_riv_flux(:,:)
   if (CS%tracer_inds%dopr_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = fluxes%MARBL_forcing%dopr_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = fluxes%dopr_riv_flux(:,:)
   if (CS%tracer_inds%sio3_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = fluxes%MARBL_forcing%sio3_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = fluxes%sio3_riv_flux(:,:)
   if (CS%tracer_inds%fe_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = fluxes%MARBL_forcing%fe_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = fluxes%fe_riv_flux(:,:)
   if (CS%tracer_inds%doc_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = fluxes%MARBL_forcing%doc_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = fluxes%doc_riv_flux(:,:)
   if (CS%tracer_inds%docr_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind) = fluxes%MARBL_forcing%docr_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind) = fluxes%docr_riv_flux(:,:)
   if (CS%tracer_inds%alk_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = fluxes%MARBL_forcing%alk_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = fluxes%alk_riv_flux(:,:)
   if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = fluxes%MARBL_forcing%alk_alt_co2_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = fluxes%alk_alt_co2_riv_flux(:,:)
   if (CS%tracer_inds%dic_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = fluxes%MARBL_forcing%dic_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = fluxes%dic_riv_flux(:,:)
   if (CS%tracer_inds%dic_alt_co2_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = fluxes%MARBL_forcing%dic_alt_co2_riv_flux(:,:)
+    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = fluxes%dic_alt_co2_riv_flux(:,:)
 
   ! (2) Post surface fluxes and their diagnostics (currently all 2D)
   do m=1,CS%ntr
@@ -1043,7 +1043,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       (Same as dust_dep_ind for surface_flux_forcings)
       if (CS%dustflux_ind > 0) &
         MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = &
-            fluxes%MARBL_forcing%dust_flux(i,j)
+            fluxes%dust_flux(i,j)
 
       !        TODO: Support PAR (currently just using single subcolumn)
       !              (Look for Pen_sw_bnd?)

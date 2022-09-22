@@ -38,9 +38,8 @@ use MOM_variables,        only : surface
 use user_revise_forcing,  only : user_alter_forcing, user_revise_forcing_init
 use user_revise_forcing,  only : user_revise_forcing_CS
 use iso_fortran_env,          only : int64
-
-use marbl_forcing_type_mod,   only : marbl_forcing_CS, marbl_forcing_init, marbl_forcing_type_init
-use marbl_forcing_type_mod,   only : marbl_ice_ocean_boundary_type, convert_marbl_IOB_to_forcings
+use marbl_forcing_type_mod,   only : marbl_forcing_CS, marbl_forcing_init
+use marbl_forcing_type_mod,   only : convert_marbl_IOB_to_forcings
 
 implicit none ; private
 
@@ -82,6 +81,7 @@ type, public :: surface_forcing_CS ; private
                                 !! pressure limited by max_p_surf instead of the
                                 !! full atmospheric pressure.  The default is true.
   logical :: use_CFC            !< enables the MOM_CFC_cap tracer package.
+  logical :: use_marbl_tracers  !< enables the MARBL tracer package.
   logical :: enthalpy_cpl       !< Controls if enthalpy terms are provided by the coupler or computed
                                 !! internally.
   real :: gust_const            !< constant unresolved background gustiness for ustar [R L Z T-1 ~> Pa]
@@ -195,6 +195,11 @@ type, public :: ice_ocean_boundary_type
                                                               !< on ocean surface [Pa]
   real, pointer, dimension(:,:) :: ice_fraction      =>NULL() !< fractional ice area [nondim]
   real, pointer, dimension(:,:) :: u10_sqr           =>NULL() !< wind speed squared at 10m [m2/s2]
+  real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_bc_flux          =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_bc_flux       =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
   real, pointer, dimension(:,:) :: mi                =>NULL() !< mass of ice [kg/m2]
   real, pointer, dimension(:,:) :: ice_rigidity      =>NULL() !< rigidity of the sea ice, sea-ice and
                                                               !! ice-shelves, expressed as a coefficient
@@ -218,8 +223,9 @@ type, public :: ice_ocean_boundary_type
                                                               !! model is providing.  Otherwise, the value from
                                                               !! the surface_forcing_CS is used.
 
-  type(marbl_ice_ocean_boundary_type), pointer :: MARBL_IOB => NULL() !< Structure containing IOB fields
-                                                                      !! (only needed by MARBL)
+  ! Forcing when receiving multiple ice categories from CMEPS
+  integer                                      :: ice_ncat            !< Number of ice categories coming from coupler
+                                                                      !! (1 => not using separate categories)
 end type ice_ocean_boundary_type
 
 integer :: id_clock_forcing
@@ -308,10 +314,12 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! allocation and initialization if this is the first time that this
   ! flux type has been used.
+  ! TODO: allocate MARBL forcing here!
   if (fluxes%dt_buoy_accum < 0) then
     call allocate_forcing_type(G, fluxes, water=.true., heat=.true., ustar=.true., &
                                press=.true., fix_accum_bug=CS%fix_ustar_gustless_bug, &
-                               cfc=CS%use_CFC, hevap=CS%enthalpy_cpl)
+                               cfc=CS%use_CFC, marbl=CS%use_marbl_tracers, &
+                               hevap=CS%enthalpy_cpl)
 
     call safe_alloc_ptr(fluxes%sw_vis_dir,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%sw_vis_dif,isd,ied,jsd,jed)
@@ -344,8 +352,6 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     enddo ; enddo
 
     if (restore_temp) call safe_alloc_ptr(fluxes%heat_added,isd,ied,jsd,jed)
-
-    call marbl_forcing_type_init(isd,ied,jsd,jed,fluxes%MARBL_forcing, CS%marbl_forcing_CSp)
 
   endif   ! endif for allocation and initialization
 
@@ -576,8 +582,11 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   enddo ; enddo
 
-  ! Copy MARBL-specific IOB fields into fluxes%MARBL_forcing
-  call convert_marbl_IOB_to_forcings(IOB%MARBL_IOB, Time, G, US, i0, j0, fluxes%MARBL_forcing, CS%marbl_forcing_CSp)
+  ! Copy MARBL-specific IOB fields into fluxes; also set some MARBL-specific forcings to other values
+  ! (constants, values from netCDF, etc)
+  call convert_marbl_IOB_to_forcings(IOB%atm_fine_dust_flux, IOB%atm_coarse_dust_flux, &
+                                     IOB%seaice_dust_flux, IOB%atm_bc_flux, IOB%seaice_bc_flux, &
+                                     Time, G, US, i0, j0, fluxes, CS%marbl_forcing_CSp)
 
   ! wave to ocean coupling
   if ( associated(IOB%lamult)) then
@@ -1227,6 +1236,9 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   call get_param(param_file, mdl, "USE_CFC_CAP", CS%use_CFC, &
                  default=.false., do_not_log=.true.)
 
+  call get_param(param_file, mdl, "USE_MARBL_TRACERS", CS%use_marbl_tracers, &
+                 default=.false., do_not_log=.true.)
+
   call get_param(param_file, mdl, "ENTHALPY_FROM_COUPLER", CS%enthalpy_cpl, &
                  "If True, the heat (enthalpy) associated with mass entering/leaving the "//&
                  "ocean is provided via coupler.", default=.false.)
@@ -1407,7 +1419,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   endif
 
   ! Set up MARBL forcing control structure
-  call marbl_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%marbl_forcing_CSp)
+  call marbl_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
 
   if (present(restore_salt)) then ; if (restore_salt) then
     salt_file = trim(CS%inputdir) // trim(CS%salt_restore_file)
