@@ -37,9 +37,9 @@ use MOM_unit_scaling,     only : unit_scale_type
 use MOM_variables,        only : surface
 use user_revise_forcing,  only : user_alter_forcing, user_revise_forcing_init
 use user_revise_forcing,  only : user_revise_forcing_CS
-use iso_fortran_env,          only : int64
-use marbl_forcing_type_mod,   only : marbl_forcing_CS, marbl_forcing_init
-use marbl_forcing_type_mod,   only : convert_marbl_IOB_to_forcings
+use iso_fortran_env,      only : int64
+use marbl_forcing_mod,    only : marbl_forcing_CS, marbl_forcing_init
+use marbl_forcing_mod,    only : convert_marbl_IOB_to_forcings
 
 implicit none ; private
 

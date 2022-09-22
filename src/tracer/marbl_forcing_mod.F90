@@ -1,6 +1,6 @@
 !> This module provides a common datatype to provide forcing for MARBL tracers
 !! regardless of driver
-module marbl_forcing_type_mod
+module marbl_forcing_mod
 
 !! This module exists to house code used by multiple drivers in config_src/
 !! for passing forcing fields to MARBL
@@ -529,4 +529,4 @@ contains
 
   end subroutine convert_marbl_IOB_to_forcings
 
-end module marbl_forcing_type_mod
+end module marbl_forcing_mod
