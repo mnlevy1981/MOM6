@@ -200,6 +200,11 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_bc_flux          =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_bc_flux       =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: afrac                =>NULL()
+  real, pointer, dimension(:,:) :: afracr               =>NULL()
+  real, pointer, dimension(:,:) :: swnet_afracr         =>NULL()
+  real, pointer, dimension(:,:,:) :: swpen_ifrac_n      =>NULL()
+  real, pointer, dimension(:,:,:) :: ifrac_n            =>NULL()
   real, pointer, dimension(:,:) :: mi                =>NULL() !< mass of ice [kg/m2]
   real, pointer, dimension(:,:) :: ice_rigidity      =>NULL() !< rigidity of the sea ice, sea-ice and
                                                               !! ice-shelves, expressed as a coefficient

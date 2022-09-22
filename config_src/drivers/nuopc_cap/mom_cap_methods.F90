@@ -500,6 +500,51 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
        file=__FILE__)) &
        return  ! bail out
 
+  ! Fields coming from coupler per ice category
+  if (ice_ocean_boundary%ice_ncat > 1) then
+    call state_getimport(importState, 'sf_afrac',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%afrac(:,:), &
+        areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    call state_getimport(importState, 'sf_afracr',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%afracr(:,:), &
+        areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    call state_getimport(importState, 'Foxx_swnet_afracr',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%swnet_afracr(:,:), &
+        areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    call state_getimport(importState, 'Fioi_swpen_ifrac_n',  &
+        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
+        ice_ocean_boundary%swpen_ifrac_n(:,:,:), &
+        areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    call state_getimport(importState, 'Si_ifrac_n',  &
+        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
+        ice_ocean_boundary%ifrac_n(:,:,:), &
+        areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+  end if ! multiple ice categories
+
 end subroutine mom_import
 
 !> Maps outgoing ocean data to ESMF State

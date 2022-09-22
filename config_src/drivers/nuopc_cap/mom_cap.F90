@@ -739,6 +739,20 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   Ice_ocean_boundary%lrunoff         = 0.0
   Ice_ocean_boundary%frunoff         = 0.0
 
+  ! Allocate memory for fields coming from multiple ice categories
+  if (Ice_ocean_boundary%ice_ncat > 1) then
+    allocate ( Ice_ocean_boundary% afrac(isc:iec,jsc:jec),        &
+               Ice_ocean_boundary% afracr(isc:iec,jsc:jec),       &
+               Ice_ocean_boundary% swnet_afracr(isc:iec,jsc:jec), &
+               Ice_ocean_boundary% swpen_ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat), &
+               Ice_ocean_boundary% ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat))
+    Ice_ocean_boundary%afrac          = 0.0
+    Ice_ocean_boundary%afracr         = 0.0
+    Ice_ocean_boundary%swnet_afracr   = 0.0
+    Ice_ocean_boundary%swpen_ifrac_n  = 0.0
+    Ice_ocean_boundary%ifrac_n        = 0.0
+  end if
+
   if (cesm_coupled) then
     allocate (Ice_ocean_boundary% hrain (isc:iec,jsc:jec),           &
               Ice_ocean_boundary% hsnow (isc:iec,jsc:jec),           &
