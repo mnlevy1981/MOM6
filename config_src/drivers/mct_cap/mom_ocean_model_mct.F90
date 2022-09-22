@@ -501,7 +501,6 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
   if (OS%fluxes%fluxes_used) then
 
     ! GMM, is enable_averaging needed now?
-    ! MNL: YES! Necessary for averaging some MARBL forcing fields!
     call enable_averaging(dt_coupling, OS%Time + Ocean_coupling_time_step, OS%diag)
 
     if (do_thermo) &
