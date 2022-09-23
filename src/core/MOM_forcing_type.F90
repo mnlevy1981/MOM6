@@ -52,6 +52,12 @@ interface allocate_mech_forcing
   module procedure allocate_mech_forcing_from_ref
 end interface allocate_mech_forcing
 
+!> Allocate arrays if optional flag is present and true (works for 2D and 3D)
+interface myAlloc
+  module procedure myAlloc_2d
+  module procedure myAlloc_3d
+end interface myAlloc
+
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
 ! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
@@ -222,7 +228,13 @@ type, public :: forcing
     alk_alt_co2_riv_flux  => NULL(), & !< [mmol / m^2 / s]
     dic_alt_co2_riv_flux  => NULL()    !< [mmol / m^2 / s]
 
-  ! ADD MCOG RELATED VARS HERE
+  ! Control over using multiple ice categories
+  logical :: use_ice_category_fields = .false.   !< enable running with multiple ice categories?
+  integer :: ice_ncat = 0                        !< number of ice categories (should not be 0 if above logical is true)
+  real, pointer, dimension(:,:,:) :: &
+    fracr_cat   => NULL(),           & !< per-category ice fraction
+    qsw_raw_cat => NULL(),           & !< per-category raw shortwave
+    qsw_cat     => NULL()              !< per-category shortwave
 
   real, pointer, dimension(:,:) :: &
     lamult => NULL()            !< Langmuir enhancement factor [nondim]
@@ -3003,7 +3015,8 @@ end subroutine forcing_diagnostics
 !> Conditionally allocate fields within the forcing type
 subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
                                   shelf, iceberg, salt, fix_accum_bug, cfc, marbl, &
-                                  waves, shelf_sfc_accumulation, lamult, hevap)
+                                  waves, shelf_sfc_accumulation, lamult, hevap, &
+                                  ice_cats, ice_ncat)
   type(ocean_grid_type), intent(in) :: G       !< Ocean grid structure
   type(forcing),      intent(inout) :: fluxes  !< A structure containing thermodynamic forcing fields
   logical, optional,     intent(in) :: water   !< If present and true, allocate water fluxes
@@ -3025,14 +3038,29 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   logical, optional,     intent(in) :: hevap   !< If present and true, allocate heat content evap.
                                                !! This field must be allocated when enthalpy is provided
                                                !! via coupler.
+  logical, optional,     intent(in) :: ice_cats !< if present and true, allocate per-categories fields
+                                               !! (requires fluxes%ice_ncat > 0)
+  integer, optional,     intent(in) :: ice_ncat !< number of ice categories (copied to fluxes%ice_ncat if present)
 
   ! Local variables
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   logical :: shelf_sfc_acc, enthalpy_mom
+  logical :: use_ice_cats
 
   ! if true, allocate fluxes needed to calculate enthalpy terms in MOM6
   enthalpy_mom = .true.
   if (present (hevap)) enthalpy_mom = .not. hevap
+
+  ! if true, allocate per-category fields (requires ice_ncat > 0)
+  use_ice_cats = .false.
+  if (present(ice_cats)) use_ice_cats = ice_cats
+
+  ! Store number of ice categories, abort if ice_ncat = 0 but ice_cats is true
+  if (use_ice_cats) then
+    if (present (ice_ncat)) fluxes%ice_ncat = ice_ncat
+    if (fluxes%ice_ncat < 1) &
+      call MOM_error(FATAL, "ice_cats is True but ice_ncat = 0")
+  endif
 
   isd  = G%isd   ; ied  = G%ied    ; jsd  = G%jsd   ; jed  = G%jed
   IsdB = G%IsdB  ; IedB = G%IedB   ; JsdB = G%JsdB  ; JedB = G%JedB
@@ -3085,18 +3113,24 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
     if (shelf_sfc_acc) call myAlloc(fluxes%shelf_sfc_mass_flux,isd,ied,jsd,jed, shelf_sfc_acc)
   endif; endif
 
-  !These fields should only on allocated when iceberg area is being passed through the coupler.
+  !These fields should only be allocated when iceberg area is being passed through the coupler.
   call myAlloc(fluxes%ustar_berg,isd,ied,jsd,jed, iceberg)
   call myAlloc(fluxes%area_berg,isd,ied,jsd,jed, iceberg)
   call myAlloc(fluxes%mass_berg,isd,ied,jsd,jed, iceberg)
 
-  !These fields should only on allocated when USE_CFC_CAP is activated.
+  !These fields should only be allocated when USE_CFC_CAP is activated.
   call myAlloc(fluxes%cfc11_flux,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%cfc12_flux,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, cfc)
   call myAlloc(fluxes%u10_sqr,isd,ied,jsd,jed, cfc)
 
-  !These fields should only on allocated when USE_MARBL is activated.
+  !These fields should only be allocated when wave coupling is activated.
+  call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, waves)
+  call myAlloc(fluxes%lamult,isd,ied,jsd,jed, lamult)
+
+  if (present(fix_accum_bug)) fluxes%gustless_accum_bug = .not.fix_accum_bug
+
+  !These fields should only be allocated when USE_MARBL is activated.
   call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%u10_sqr,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%noy_dep,isd,ied,jsd,jed, marbl)
@@ -3118,11 +3152,11 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   call myAlloc(fluxes%alk_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%dic_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
 
-  !These fields should only on allocated when wave coupling is activated.
-  call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, waves)
-  call myAlloc(fluxes%lamult,isd,ied,jsd,jed, lamult)
+  ! These fields should only be allocated when receiving multiple ice categories
+  call myAlloc(fluxes%fracr_cat,isd,ied,jsd,jed,1,fluxes%ice_ncat+1, use_ice_cats)
+  call myAlloc(fluxes%qsw_raw_cat,isd,ied,jsd,jed,1,fluxes%ice_ncat+1, use_ice_cats)
+  call myAlloc(fluxes%qsw_cat,isd,ied,jsd,jed,1,fluxes%ice_ncat+1, use_ice_cats)
 
-  if (present(fix_accum_bug)) fluxes%gustless_accum_bug = .not.fix_accum_bug
 end subroutine allocate_forcing_by_group
 
 
@@ -3306,7 +3340,7 @@ end subroutine get_mech_forcing_groups
 
 
 !> Allocates and zeroes-out array.
-subroutine myAlloc(array, is, ie, js, je, flag)
+subroutine myAlloc_2d(array, is, ie, js, je, flag)
   real, dimension(:,:), pointer :: array !< Array to be allocated
   integer,           intent(in) :: is !< Start i-index
   integer,           intent(in) :: ie !< End i-index
@@ -3317,7 +3351,22 @@ subroutine myAlloc(array, is, ie, js, je, flag)
   if (present(flag)) then ; if (flag) then ; if (.not.associated(array)) then
     allocate(array(is:ie,js:je), source=0.0)
   endif ; endif ; endif
-end subroutine myAlloc
+end subroutine myAlloc_2d
+
+subroutine myAlloc_3d(array, is, ie, js, je, ks, ke, flag)
+  real, dimension(:,:,:), pointer :: array !< Array to be allocated
+  integer,             intent(in) :: is !< Start i-index
+  integer,             intent(in) :: ie !< End i-index
+  integer,             intent(in) :: js !< Start j-index
+  integer,             intent(in) :: je !< End j-index
+  integer,             intent(in) :: ks !< Start k-index
+  integer,             intent(in) :: ke !< End k-index
+  logical, optional,   intent(in) :: flag !< Flag to indicate to allocate
+
+  if (present(flag)) then ; if (flag) then ; if (.not.associated(array)) then
+    allocate(array(is:ie,js:je,ks:ke), source=0.0)
+  endif ; endif ; endif
+end subroutine myAlloc_3d
 
 !> Deallocate the forcing type
 subroutine deallocate_forcing_type(fluxes)
@@ -3373,6 +3422,9 @@ subroutine deallocate_forcing_type(fluxes)
   if (associated(fluxes%u10_sqr))              deallocate(fluxes%u10_sqr)
   if (associated(fluxes%cfc11_flux))           deallocate(fluxes%cfc11_flux)
   if (associated(fluxes%cfc12_flux))           deallocate(fluxes%cfc12_flux)
+  if (associated(fluxes%fracr_cat))            deallocate(fluxes%fracr_cat)
+  if (associated(fluxes%qsw_raw_cat))          deallocate(fluxes%qsw_raw_cat)
+  if (associated(fluxes%qsw_cat))              deallocate(fluxes%qsw_cat)
 
   call coupler_type_destructor(fluxes%tr_fluxes)
 

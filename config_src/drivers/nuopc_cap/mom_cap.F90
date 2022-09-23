@@ -568,9 +568,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   end if
 
   if (i2o_per_cat) then
-    Ice_ocean_boundary%ice_ncat = ice_ncat+1
+    Ice_ocean_boundary%ice_ncat = ice_ncat
   else
-    Ice_ocean_boundary%ice_ncat = 1
+    Ice_ocean_boundary%ice_ncat = 0
   end if
 
   ! rsd need to figure out how to get this without share code
@@ -740,12 +740,12 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   Ice_ocean_boundary%frunoff         = 0.0
 
   ! Allocate memory for fields coming from multiple ice categories
-  if (Ice_ocean_boundary%ice_ncat > 1) then
+  if (Ice_ocean_boundary%ice_ncat > 0) then
     allocate ( Ice_ocean_boundary% afrac(isc:iec,jsc:jec),        &
                Ice_ocean_boundary% afracr(isc:iec,jsc:jec),       &
                Ice_ocean_boundary% swnet_afracr(isc:iec,jsc:jec), &
-               Ice_ocean_boundary% swpen_ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat), &
-               Ice_ocean_boundary% ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat))
+               Ice_ocean_boundary% swpen_ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat+1), &
+               Ice_ocean_boundary% ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat+1))
     Ice_ocean_boundary%afrac          = 0.0
     Ice_ocean_boundary%afracr         = 0.0
     Ice_ocean_boundary%swnet_afracr   = 0.0
@@ -827,14 +827,14 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_fresh_water_to_ocean_rate", "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "net_heat_flx_to_ocn"        , "will provide")
 
-  if (Ice_ocean_boundary%ice_ncat > 1) then
+  if (Ice_ocean_boundary%ice_ncat > 0) then
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Sf_afrac", "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Sf_afracr", "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_swnet_afracr", "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_swpen_ifrac_n", "will provide", &
-                      ungridded_lbound=1, ungridded_ubound=ice_ncat)
+                      ungridded_lbound=1, ungridded_ubound=ice_ncat+1)
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac_n", "will provide", &
-                      ungridded_lbound=1, ungridded_ubound=ice_ncat)
+                      ungridded_lbound=1, ungridded_ubound=ice_ncat+1)
   end if
 
   if (cesm_coupled) then

@@ -501,7 +501,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
        return  ! bail out
 
   ! Fields coming from coupler per ice category
-  if (ice_ocean_boundary%ice_ncat > 1) then
+  if (ice_ocean_boundary%ice_ncat > 0) then
     call state_getimport(importState, 'sf_afrac',  &
         isc, iec, jsc, jec, ice_ocean_boundary%afrac(:,:), &
         areacor=med2mod_areacor, rc=rc)
@@ -527,7 +527,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
         return  ! bail out
 
     call state_getimport(importState, 'Fioi_swpen_ifrac_n',  &
-        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
+        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat+1, &
         ice_ocean_boundary%swpen_ifrac_n(:,:,:), &
         areacor=med2mod_areacor, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
@@ -536,7 +536,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
         return  ! bail out
 
     call state_getimport(importState, 'Si_ifrac_n',  &
-        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
+        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat+1, &
         ice_ocean_boundary%ifrac_n(:,:,:), &
         areacor=med2mod_areacor, rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &

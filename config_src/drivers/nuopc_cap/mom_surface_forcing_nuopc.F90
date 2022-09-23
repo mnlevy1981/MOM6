@@ -319,12 +319,11 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! allocation and initialization if this is the first time that this
   ! flux type has been used.
-  ! TODO: allocate MARBL forcing here!
   if (fluxes%dt_buoy_accum < 0) then
     call allocate_forcing_type(G, fluxes, water=.true., heat=.true., ustar=.true., &
                                press=.true., fix_accum_bug=CS%fix_ustar_gustless_bug, &
-                               cfc=CS%use_CFC, marbl=CS%use_marbl_tracers, &
-                               hevap=CS%enthalpy_cpl)
+                               cfc=CS%use_CFC, marbl=CS%use_marbl_tracers, hevap=CS%enthalpy_cpl, &
+                               ice_cats=fluxes%use_ice_category_fields, ice_ncat=IOB%ice_ncat)
 
     call safe_alloc_ptr(fluxes%sw_vis_dir,isd,ied,jsd,jed)
     call safe_alloc_ptr(fluxes%sw_vis_dif,isd,ied,jsd,jed)
