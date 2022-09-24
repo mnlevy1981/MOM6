@@ -209,7 +209,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
-  integer :: m, nz, marbl_settings_in, read_error
+  integer :: m, nz, marbl_settings_in, read_error, ice_ncat
+  logical :: use_ice_category_fields
   nz = GV%ke
   marbl_settings_in = 615
 
@@ -229,7 +230,16 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
                  default=1., units="m")
+  call get_param(param_file, mdl, "USE_ICE_CATEGORIES", use_ice_category_fields, &
+       "If true, allocate memory for shortwave and ice fraction split by ice thickness category.", &
+       default=.false.)
+  call get_param(param_file, mdl, "ICE_NCAT", ice_ncat, &
+       "Number of ice thickness categories in shortwave and ice fraction forcings.", &
+       default=0)
   CS%bfmt_r = 1. / CS%bot_flux_mix_thickness
+
+  if (use_ice_category_fields .and. (ice_ncat == 0)) &
+    call MOM_error(FATAL, "Can not configure MARBL to use multiple ice categories without ice_ncat present")
 
   ! (2) Read marbl settings file and call put_setting()
 
@@ -283,7 +293,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   !       out of init anyway because MOM updates them every time step / every column
   call MARBL_instances%init(&
                             gcm_num_levels = nz, &
-                            gcm_num_PAR_subcols = 1, &
+                            gcm_num_PAR_subcols = ice_ncat + 1, &
                             gcm_num_elements_surface_flux = 1, & ! FIXME: change to number of grid cells on MPI task
                             gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
                             gcm_zw = GV%sInterface(2:nz+1), &
@@ -339,7 +349,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
     end select
   end do
 
-  !     ii. store all surface forcing indices
+  !     ii. store all interior forcing indices
   CS%dustflux_ind = -1
   CS%PAR_col_frac_ind = -1
   CS%surf_shortwave_ind = -1
@@ -1049,8 +1059,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !              (Look for Pen_sw_bnd?)
       if (CS%PAR_col_frac_ind > 0) then
         ! second index is num_subcols, not depth
-        MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = 0
-        MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,1) = 1
+        MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = fluxes%fracr_cat(i,j,:)
       end if
       if (CS%surf_shortwave_ind > 0) then
         ! second index is num_subcols, not depth

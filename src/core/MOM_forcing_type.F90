@@ -228,9 +228,6 @@ type, public :: forcing
     alk_alt_co2_riv_flux  => NULL(), & !< [mmol / m^2 / s]
     dic_alt_co2_riv_flux  => NULL()    !< [mmol / m^2 / s]
 
-  ! Control over using multiple ice categories
-  logical :: use_ice_category_fields = .false.   !< enable running with multiple ice categories?
-  integer :: ice_ncat = 0                        !< number of ice categories (should not be 0 if above logical is true)
   real, pointer, dimension(:,:,:) :: &
     fracr_cat   => NULL(),           & !< per-category ice fraction
     qsw_raw_cat => NULL(),           & !< per-category raw shortwave
@@ -3016,7 +3013,7 @@ end subroutine forcing_diagnostics
 subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
                                   shelf, iceberg, salt, fix_accum_bug, cfc, marbl, &
                                   waves, shelf_sfc_accumulation, lamult, hevap, &
-                                  ice_cats, ice_ncat)
+                                  ice_ncat)
   type(ocean_grid_type), intent(in) :: G       !< Ocean grid structure
   type(forcing),      intent(inout) :: fluxes  !< A structure containing thermodynamic forcing fields
   logical, optional,     intent(in) :: water   !< If present and true, allocate water fluxes
@@ -3038,29 +3035,15 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   logical, optional,     intent(in) :: hevap   !< If present and true, allocate heat content evap.
                                                !! This field must be allocated when enthalpy is provided
                                                !! via coupler.
-  logical, optional,     intent(in) :: ice_cats !< if present and true, allocate per-categories fields
-                                               !! (requires fluxes%ice_ncat > 0)
-  integer, optional,     intent(in) :: ice_ncat !< number of ice categories (copied to fluxes%ice_ncat if present)
+  integer, optional,     intent(in) :: ice_ncat !< number of ice categories
 
   ! Local variables
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB
   logical :: shelf_sfc_acc, enthalpy_mom
-  logical :: use_ice_cats
 
   ! if true, allocate fluxes needed to calculate enthalpy terms in MOM6
   enthalpy_mom = .true.
   if (present (hevap)) enthalpy_mom = .not. hevap
-
-  ! if true, allocate per-category fields (requires ice_ncat > 0)
-  use_ice_cats = .false.
-  if (present(ice_cats)) use_ice_cats = ice_cats
-
-  ! Store number of ice categories, abort if ice_ncat = 0 but ice_cats is true
-  if (use_ice_cats) then
-    if (present (ice_ncat)) fluxes%ice_ncat = ice_ncat
-    if (fluxes%ice_ncat < 1) &
-      call MOM_error(FATAL, "ice_cats is True but ice_ncat = 0")
-  endif
 
   isd  = G%isd   ; ied  = G%ied    ; jsd  = G%jsd   ; jed  = G%jed
   IsdB = G%IsdB  ; IedB = G%IedB   ; JsdB = G%JsdB  ; JedB = G%JedB
@@ -3153,9 +3136,11 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   call myAlloc(fluxes%dic_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
 
   ! These fields should only be allocated when receiving multiple ice categories
-  call myAlloc(fluxes%fracr_cat,isd,ied,jsd,jed,1,fluxes%ice_ncat+1, use_ice_cats)
-  call myAlloc(fluxes%qsw_raw_cat,isd,ied,jsd,jed,1,fluxes%ice_ncat+1, use_ice_cats)
-  call myAlloc(fluxes%qsw_cat,isd,ied,jsd,jed,1,fluxes%ice_ncat+1, use_ice_cats)
+  if (present(ice_ncat)) then
+    call myAlloc(fluxes%fracr_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat.gt.0)
+    call myAlloc(fluxes%qsw_raw_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat.gt.0)
+    call myAlloc(fluxes%qsw_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat.gt.0)
+  endif
 
 end subroutine allocate_forcing_by_group
 

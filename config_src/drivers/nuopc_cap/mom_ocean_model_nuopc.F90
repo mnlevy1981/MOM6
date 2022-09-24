@@ -379,9 +379,6 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
                  default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "USE_WAVES", OS%Use_Waves, &
        "If true, enables surface wave modules.", default=.false.)
-  call get_param(param_file, mdl, "USE_ICE_CATEGORIES", OS%fluxes%use_ice_category_fields, &
-       "If true, some parameterizations will use shortwave and ice fraction split by ice thickness category.", &
-       default=.false.)
 
   !   Consider using a run-time flag to determine whether to do the diagnostic
   ! vertical integrals, since the related 3-d sums are not negligible in cost.
