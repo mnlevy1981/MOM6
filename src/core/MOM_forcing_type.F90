@@ -230,7 +230,6 @@ type, public :: forcing
 
   real, pointer, dimension(:,:,:) :: &
     fracr_cat   => NULL(),           & !< per-category ice fraction
-    qsw_raw_cat => NULL(),           & !< per-category raw shortwave
     qsw_cat     => NULL()              !< per-category shortwave
 
   real, pointer, dimension(:,:) :: &
@@ -3137,9 +3136,8 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
 
   ! These fields should only be allocated when receiving multiple ice categories
   if (present(ice_ncat)) then
-    call myAlloc(fluxes%fracr_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat.gt.0)
-    call myAlloc(fluxes%qsw_raw_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat.gt.0)
-    call myAlloc(fluxes%qsw_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat.gt.0)
+    call myAlloc(fluxes%fracr_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat > 0)
+    call myAlloc(fluxes%qsw_cat,isd,ied,jsd,jed,1,ice_ncat+1, ice_ncat > 0)
   endif
 
 end subroutine allocate_forcing_by_group
@@ -3408,7 +3406,6 @@ subroutine deallocate_forcing_type(fluxes)
   if (associated(fluxes%cfc11_flux))           deallocate(fluxes%cfc11_flux)
   if (associated(fluxes%cfc12_flux))           deallocate(fluxes%cfc12_flux)
   if (associated(fluxes%fracr_cat))            deallocate(fluxes%fracr_cat)
-  if (associated(fluxes%qsw_raw_cat))          deallocate(fluxes%qsw_raw_cat)
   if (associated(fluxes%qsw_cat))              deallocate(fluxes%qsw_cat)
 
   call coupler_type_destructor(fluxes%tr_fluxes)

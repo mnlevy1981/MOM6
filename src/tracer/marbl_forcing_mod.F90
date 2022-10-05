@@ -333,6 +333,7 @@ contains
   ! Note: ice fraction and u10_sqr are handled in mom_surface_forcing because of CFCs
   subroutine convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                            seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
+                                           afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
                                            Time, G, US, i0, j0, fluxes, CS)
 
     real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
@@ -340,6 +341,10 @@ contains
     real, dimension(:,:),   pointer, intent(in)    :: seaice_dust_flux     !< sea ice dust flux from IOB
     real, dimension(:,:),   pointer, intent(in)    :: atm_bc_flux          !< atmosphere black carbon flux from IOB
     real, dimension(:,:),   pointer, intent(in)    :: seaice_bc_flux       !< sea ice black carbon flux from IOB
+    real, dimension(:,:),   pointer, intent(in)    :: afracr               !< open ocean fraction
+    real, dimension(:,:),   pointer, intent(in)    :: swnet_afracr         !< shortwave flux * open ocean fraction
+    real, dimension(:,:,:), pointer, intent(in)    :: ifrac_n              !< per-category ice fraction
+    real, dimension(:,:,:), pointer, intent(in)    :: swpen_ifrac_n        !< per-category shortwave flux * ice fraction
     type(time_type),                 intent(in)    :: Time                 !< The time of the fluxes, used for
                                                                            !! interpolating the salinity to the
                                                                            !! right time, when it is being
@@ -359,7 +364,7 @@ contains
 
     real, dimension(SZI_(G),SZJ_(G)) :: time_varying_data  !< The field read in from forcing file with time dimension
     type(time_type) :: Time_riv_flux  !< For reading river flux fields, we use a modified version of Time
-    integer :: i, j, is, ie, js, je
+    integer :: i, j, is, ie, js, je, m
     real :: atm_fe_bioavail_frac     !< TODO: define this (local) term
     real :: seaice_fe_bioavail_frac  !< TODO: define this (local) term
     real :: dust_flux_conversion     !< TODO: define this (local) term
@@ -434,6 +439,25 @@ contains
         fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
 
       end if
+
+      ! Per ice-category forcings
+      ! If the cap receives per-category fields, memory should be allocated in fluxes
+      if (associated(ifrac_n)) then
+        fluxes%fracr_cat(i,j,1) = min(1., afracr(i-i0,j-j0))
+        fluxes%qsw_cat(i,j,1) = swnet_afracr(i-i0,j-j0)
+        do m=1,size(ifrac_n, 3)
+          fluxes%fracr_cat(i,j,m+1) = min(1., ifrac_n(i-i0,j-j0,m))
+          fluxes%qsw_cat(i,j,m+1)   = swpen_ifrac_n(i-i0,j-j0,m)
+        end do
+        where (fluxes%fracr_cat(i,j,:) > 1.e-5)
+          fluxes%qsw_cat(i,j,:) = fluxes%qsw_cat(i,j,:) / fluxes%fracr_cat(i,j,:)
+        elsewhere
+          fluxes%fracr_cat(i,j,:) = 0.
+          fluxes%qsw_cat(i,j,:) = 0.
+        endwhere
+        fluxes%fracr_cat(i,j,:) = G%mask2dT(i,j) * fluxes%fracr_cat(i,j,:)
+        fluxes%qsw_cat(i,j,:)   = G%mask2dT(i,j) * fluxes%qsw_cat(i,j,:)
+      endif
 
     enddo; enddo
 

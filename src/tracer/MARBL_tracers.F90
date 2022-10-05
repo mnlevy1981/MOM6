@@ -98,6 +98,8 @@ end type MARBL_tracer_data
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
+  logical :: use_ice_category_fields    !< Forcing will include multiple ice categories for ice_frac and shortwave
+  integer :: ice_ncat                   !< Number of ice categories when use_ice_category_fields = True
   character(len=200) :: IC_file !< The file in which the age-tracer initial values cam be found.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
   type(MARBL_tracer_data), dimension(:), allocatable :: tracer_data  !< type containing tracer data and pointer
@@ -148,6 +150,8 @@ type, public :: MARBL_tracers_CS ; private
   type(temp_MARBL_diag), allocatable :: interior_tendency_out_zint_100m(:)  !< vertical integral of interior tendencies
                                                                             !! (top 100m)
   integer :: bot_flux_to_tend_id  !< register_diag index for BOT_FLUX_TO_TEND
+  integer, allocatable :: fracr_cat_id(:) !< register_diag index for per-category ice fraction
+  integer, allocatable :: qsw_cat_id(:)   !< register_diag index for per-category shortwave
 
   real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
                                   !! [conc m/s]
@@ -209,8 +213,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
-  integer :: m, nz, marbl_settings_in, read_error, ice_ncat
-  logical :: use_ice_category_fields
+  integer :: m, nz, marbl_settings_in, read_error
   nz = GV%ke
   marbl_settings_in = 615
 
@@ -230,15 +233,15 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
                  default=1., units="m")
-  call get_param(param_file, mdl, "USE_ICE_CATEGORIES", use_ice_category_fields, &
+  call get_param(param_file, mdl, "USE_ICE_CATEGORIES", CS%use_ice_category_fields, &
        "If true, allocate memory for shortwave and ice fraction split by ice thickness category.", &
        default=.false.)
-  call get_param(param_file, mdl, "ICE_NCAT", ice_ncat, &
+  call get_param(param_file, mdl, "ICE_NCAT", CS%ice_ncat, &
        "Number of ice thickness categories in shortwave and ice fraction forcings.", &
        default=0)
   CS%bfmt_r = 1. / CS%bot_flux_mix_thickness
 
-  if (use_ice_category_fields .and. (ice_ncat == 0)) &
+  if (CS%use_ice_category_fields .and. (CS%ice_ncat == 0)) &
     call MOM_error(FATAL, "Can not configure MARBL to use multiple ice categories without ice_ncat present")
 
   ! (2) Read marbl settings file and call put_setting()
@@ -293,7 +296,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   !       out of init anyway because MOM updates them every time step / every column
   call MARBL_instances%init(&
                             gcm_num_levels = nz, &
-                            gcm_num_PAR_subcols = ice_ncat + 1, &
+                            gcm_num_PAR_subcols = CS%ice_ncat + 1, &
                             gcm_num_elements_surface_flux = 1, & ! FIXME: change to number of grid cells on MPI task
                             gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
                             gcm_zw = GV%sInterface(2:nz+1), &
@@ -642,6 +645,32 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
     end if
   end do
 
+  ! Register diagnostics for per-category forcing fields
+  if (CS%ice_ncat > 0) then
+    allocate(CS%fracr_cat_id(CS%ice_ncat+1))
+    allocate(CS%qsw_cat_id(CS%ice_ncat+1))
+    do m=1,CS%ice_ncat+1
+      write(name, "(A,I0)") "FRACR_CAT_", m
+      write(longname, "(A,I0)") "Fraction of area in ice category ", m
+      units = "fraction"
+      CS%fracr_cat_id(m) = register_diag_field("ocean_model", &
+                                               trim(name), &
+                                               diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
+                                               day, &
+                                               trim(longname), &
+                                               trim(units))
+      write(name, "(A,I0)") "QSW_CAT_", m
+      write(longname, "(A,I0)") "Shortwave penetrating through ice category ", m
+      units = "TODO: set units"
+      CS%qsw_cat_id(m) = register_diag_field("ocean_model", &
+                                             trim(name), &
+                                             diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
+                                             day, &
+                                             trim(longname), &
+                                             trim(units))
+    enddo
+  endif
+
   ! Read initial fesedflux and feventflux fields
   ! (1) get vertical dimension
   !     -- comes from fesedflux_file, assume same dimension in feventflux
@@ -913,8 +942,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (MARBL_instances%StatusLog%labort_marbl) then
         call MARBL_instances%StatusLog%log_error_trace("MARBL_instances%surface_flux_compute()", &
                                                        "MARBL_tracers_column_physics")
-        call print_marbl_log(MARBL_instances%StatusLog)
       end if
+      call print_marbl_log(MARBL_instances%StatusLog)
+      call MARBL_instances%StatusLog%erase()
 
       ! iv. Copy output that MOM6 needs to hold on to
       !     * saved state
@@ -1059,12 +1089,23 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !              (Look for Pen_sw_bnd?)
       if (CS%PAR_col_frac_ind > 0) then
         ! second index is num_subcols, not depth
-        MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = fluxes%fracr_cat(i,j,:)
+        !MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = fluxes%fracr_cat(i,j,:)
+        ! TODO: if using multiple ice categories, ensure sum of fraction is within tolerance of 1
+        !       (or does this check belong in MARBL? interior_tendency_compute() could call check_forcing(),
+        !        which would abort if ice fraction is too far from 1)
+        if (CS%use_ice_category_fields) then
+          MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = fluxes%fracr_cat(i,j,:)
+        else
+          MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,1) = 1
+        end if
       end if
       if (CS%surf_shortwave_ind > 0) then
         ! second index is num_subcols, not depth
-        MARBL_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,:) = 0
-        MARBL_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,1) = fluxes%sw(i,j)
+        if (CS%use_ice_category_fields) then
+          MARBL_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,:) = fluxes%qsw_cat(i,j,:)
+        else
+          MARBL_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,1) = fluxes%sw(i,j)
+        end if
       end if
 
       !        TODO: In POP, pressure comes from a function in state_mod.F90; I don't see a similar function here
@@ -1108,8 +1149,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (MARBL_instances%StatusLog%labort_marbl) then
         call MARBL_instances%StatusLog%log_error_trace("MARBL_instances%interior_tendency_compute()", &
                                                        "MARBL_tracers_column_physics")
-        call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
       end if
+      call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
+      call MARBL_instances%StatusLog%erase()
 
       ! v. Apply tendencies immediately
       !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
@@ -1177,6 +1219,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   ! (5) Post diagnostics from our buffer
   !     i. Interior tendency diagnostics (mix of 2D and 3D)
   !     ii. Interior tendencies themselves
+  !     iii. Forcing fields
   if (CS%bot_flux_to_tend_id > 0) &
     call post_data(CS%bot_flux_to_tend_id, bot_flux_to_tend(:, :, :), CS%diag)
 
@@ -1212,6 +1255,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       call post_data(CS%interior_tendency_out_zint_100m(m)%id, CS%interior_tendency_out_zint_100m(m)%field_2d(:,:), &
                      CS%diag)
   end do
+  if (CS%ice_ncat > 0) then
+    do m=1,CS%ice_ncat+1
+      call post_data(CS%fracr_cat_id(m), fluxes%fracr_cat(:,:,m), CS%diag)
+      call post_data(CS%qsw_cat_id(m),   fluxes%qsw_cat(:,:,m),   CS%diag)
+    end do
+  endif
 
 
 end subroutine MARBL_tracers_column_physics
