@@ -110,6 +110,7 @@ type, public :: surface_forcing_CS ; private
                              !! Dates before 20190101 use original answers.
                              !! Dates after 20190101 use a form of the gyre wind stresses that are
                              !! rotationally invariant and more likely to be the same between compilers.
+  logical :: use_marbl_tracers              !< If true, allocate memory for forcing needed by MARBL
   logical :: fix_ustar_gustless_bug         !< If true correct a bug in the time-averaging of the
                                             !! gustless wind friction velocity.
   ! if WIND_CONFIG=='scurves' then use the following to define a piecewise scurve profile
@@ -249,7 +250,8 @@ subroutine set_forcing(sfc_state, forces, fluxes, day_start, day_interval, G, US
     ! Allocate memory for the mechanical and thermodynamic forcing fields.
     call allocate_mech_forcing(G, forces, stress=.true., ustar=.true., press=.true.)
 
-    call allocate_forcing_type(G, fluxes, ustar=.true., fix_accum_bug=CS%fix_ustar_gustless_bug)
+    call allocate_forcing_type(G, fluxes, ustar=.true., marbl=CS%use_marbl_tracers, &
+                               fix_accum_bug=CS%fix_ustar_gustless_bug)
     if (trim(CS%buoy_config) /= "NONE") then
       if ( CS%use_temperature ) then
         call allocate_forcing_type(G, fluxes, water=.true., heat=.true., press=.true.)
@@ -1660,7 +1662,6 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
                  "The file with the surface salinity toward which to "//&
                  "restore in the variable given by SSS_RESTORE_VAR.", &
                  fail_if_missing=.true.)
-
     if (CS%archaic_OMIP_file) then
       CS%SST_restore_var = "TEMP" ; CS%SSS_restore_var = "SALT"
     else
@@ -1863,6 +1864,8 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
     call MOM_read_data(filename,'gustiness',CS%gust,G%domain, timelevel=1, &
                    scale=Pa_to_RLZ_T2) ! units in file should be Pa
   endif
+  call get_param(param_file, mdl, "USE_MARBL_TRACERS", CS%use_marbl_tracers, &
+                  default=.false., do_not_log=.true.)
 
 !  All parameter settings are now known.
 
