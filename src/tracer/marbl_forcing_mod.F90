@@ -449,7 +449,7 @@ contains
           fluxes%fracr_cat(i,j,m+1) = min(1., ifrac_n(i-i0,j-j0,m))
           fluxes%qsw_cat(i,j,m+1)   = swpen_ifrac_n(i-i0,j-j0,m)
         end do
-        where (fluxes%fracr_cat(i,j,:) > 1.e-5)
+        where (fluxes%fracr_cat(i,j,:) > 0.)
           fluxes%qsw_cat(i,j,:) = fluxes%qsw_cat(i,j,:) / fluxes%fracr_cat(i,j,:)
         elsewhere
           fluxes%fracr_cat(i,j,:) = 0.
