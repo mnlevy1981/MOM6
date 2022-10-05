@@ -1257,8 +1257,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   end do
   if (CS%ice_ncat > 0) then
     do m=1,CS%ice_ncat+1
-      call post_data(CS%fracr_cat_id(m), fluxes%fracr_cat(:,:,m), CS%diag)
-      call post_data(CS%qsw_cat_id(m),   fluxes%qsw_cat(:,:,m),   CS%diag)
+      if (CS%fracr_cat_id(m) > 0) call post_data(CS%fracr_cat_id(m), fluxes%fracr_cat(:,:,m), CS%diag)
+      if (CS%qsw_cat_id(m) > 0) call post_data(CS%qsw_cat_id(m), fluxes%qsw_cat(:,:,m), CS%diag)
     end do
   endif
 
