@@ -273,6 +273,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
     call MARBL_instances%put_setting(marbl_in_line(1))
   end do
   ! iv. (TEMPORARY) don't set tracer restoring
+  !     TODO: fix this
   call MARBL_instances%put_setting("tracer_restore_vars(1) = ''")
   call MARBL_instances%put_setting("tracer_restore_vars(2) = ''")
   call MARBL_instances%put_setting("tracer_restore_vars(3) = ''")
@@ -907,9 +908,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
                                                                                ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * &
                                                                                 atm_per_Pa)
         else
-          MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf(i,j) * &
-                                                                               ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * &
-                                                                                atm_per_Pa)
+          ! hardcode value of 1 atm (can't figure out how to get this from solo_driver)
+          MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = 1 * (US%R_to_kg_m3 * US%L_T_to_m_s**2)
         endif
       endif
       !       These are okay, but need option to come in from coupler
