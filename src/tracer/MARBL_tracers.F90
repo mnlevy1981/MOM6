@@ -444,7 +444,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** FESEDFLUX
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
                  "The file in which the iron sediment flux forcing field can be found.", &
-                 default="fesedflux_total_reduce_oxic_tx0.66v1.c211020.nc")
+                 default="fesedflux_total_reduce_oxic_tx0.66v1.c211109.nc")
   if (scan(CS%fesedflux_file,'/') == 0) then
     ! Add the directory if CS%fesedflux_file is not already a complete path.
     CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
@@ -453,7 +453,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** FEVENTFLUX
   call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
                  "The file in which the iron vent flux forcing field can be found.", &
-                 default="feventflux_5gmol_tx0.66v1.c211020.nc")
+                 default="feventflux_5gmol_tx0.66v1.c211109.nc")
   if (scan(CS%feventflux_file,'/') == 0) then
     ! Add the directory if CS%feventflux_file is not already a complete path.
     CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
