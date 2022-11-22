@@ -155,8 +155,8 @@ type, public :: MARBL_tracers_CS ; private
 
   real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
                                   !! [conc m/s]
-  real, allocatable :: RIV_FLUXES(:,:,:) !< river flux forcing for applyTracerBoundaryFluxesInOut (dims: i, j, tracer)
-                                         !! [conc m/s]
+  real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
+                                         !! (dims: i, j, tracer) [conc m]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -436,7 +436,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** Tracer initial conditions
   call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
                  "The file in which the MARBL tracers initial values can be found.", &
-                 default="ecosys_jan_IC_omip_MOM_tx0.66v1_c211008.nc")
+                 default="ecosys_jan_IC_omip_MOM_tx0.66v1_c221027.nc")
   if (scan(CS%IC_file,'/') == 0) then
     ! Add the directory if CS%IC_file is not already a complete path.
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
@@ -445,7 +445,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** FESEDFLUX
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
                  "The file in which the iron sediment flux forcing field can be found.", &
-                 default="fesedflux_total_reduce_oxic_tx0.66v1.c211020.nc")
+                 default="fesedflux_total_reduce_oxic_tx0.66v1.c211109.nc")
   if (scan(CS%fesedflux_file,'/') == 0) then
     ! Add the directory if CS%fesedflux_file is not already a complete path.
     CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
@@ -454,7 +454,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** FEVENTFLUX
   call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
                  "The file in which the iron vent flux forcing field can be found.", &
-                 default="feventflux_5gmol_tx0.66v1.c211020.nc")
+                 default="feventflux_5gmol_tx0.66v1.c211109.nc")
   if (scan(CS%feventflux_file,'/') == 0) then
     ! Add the directory if CS%feventflux_file is not already a complete path.
     CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
@@ -998,6 +998,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = fluxes%dic_riv_flux(:,:)
   if (CS%tracer_inds%dic_alt_co2_ind > 0) &
     CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = fluxes%dic_alt_co2_riv_flux(:,:)
+  ! fluxes%*_riv_flux are conc m/s, in_flux_optional expects time-integrated flux (conc m)
+  CS%RIV_FLUXES(:,:,:) = CS%RIV_FLUXES(:,:,:) * dt
 
   ! (2) Post surface fluxes and their diagnostics (currently all 2D)
   do m=1,CS%ntr
