@@ -54,6 +54,8 @@ type, public :: marbl_forcing_CS
   logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
                                             !! This is temporary, we will always read NDEP
   character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
+  logical :: read_riv_fluxes                !< If true, use river fluxes supplied from an input file.
+                                            !! This is temporary, we will always read river fluxes
   type(forcing_timeseries_dataset) :: riv_flux_dataset !< File and time axis information for river fluxes
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                              !! regulate the timing of diagnostic output.
@@ -169,46 +171,51 @@ contains
     end if
 
     ! ** River fluxes
-    call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
-                   "The file in which the river fluxes can be found", &
-                   default="riv_nut.gnews_gnm.JRA025m_to_tx0.66v1_nnsm_e333r100_190910.20210405.nc")
-    ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
-    if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
-      ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
-      CS%riv_flux_dataset%file_name = trim(slasher(inputdir2)) // trim(CS%riv_flux_dataset%file_name)
-      call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
-    end if
-    call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
-                   ".true. for time-varying forcing, .false. for static forcing", default=.false.)
-    if (CS%riv_flux_dataset%l_time_varying) then
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
-                     "Time coordinate of earliest date in RIV_FLUX_FILE", default=1900)
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
-                     "Time coordinate of earliest date in RIV_FLUX_FILE", default=1999)
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
-                     "Time coordinate of latest date in RIV_FLUX_FILE", default=1900)
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
-                     "Time coordinate of latest date in RIV_FLUX_FILE",  default=1900)
-    else
-      call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
-                     "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
-    end if
-    call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
-                                               riv_flux_file_end_year, &
-                                               riv_flux_file_data_ref_year, &
-                                               riv_flux_file_model_ref_year, &
-                                               riv_flux_forcing_year, &
-                                               CS%riv_flux_dataset)
+    call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
+        "If true, use nitrogen deposition supplied from "//&
+        "an input file", default=.true.)
+    if (CS%read_riv_fluxes) then
+      call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
+                    "The file in which the river fluxes can be found", &
+                    default="riv_nut.gnews_gnm.JRA025m_to_tx0.66v1_nnsm_e333r100_190910.20210405.nc")
+      ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
+      if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
+        ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
+        CS%riv_flux_dataset%file_name = trim(slasher(inputdir2)) // trim(CS%riv_flux_dataset%file_name)
+        call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
+      end if
+      call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
+                    ".true. for time-varying forcing, .false. for static forcing", default=.false.)
+      if (CS%riv_flux_dataset%l_time_varying) then
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
+                      "Time coordinate of earliest date in RIV_FLUX_FILE", default=1900)
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
+                      "Time coordinate of earliest date in RIV_FLUX_FILE", default=1999)
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
+                      "Time coordinate of latest date in RIV_FLUX_FILE", default=1900)
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
+                      "Time coordinate of latest date in RIV_FLUX_FILE",  default=1900)
+      else
+        call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
+                      "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
+      end if
+      call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
+                                                riv_flux_file_end_year, &
+                                                riv_flux_file_data_ref_year, &
+                                                riv_flux_file_model_ref_year, &
+                                                riv_flux_forcing_year, &
+                                                CS%riv_flux_dataset)
 
-    CS%id_din_riv = init_external_field(CS%riv_flux_dataset%file_name, 'din_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_don_riv = init_external_field(CS%riv_flux_dataset%file_name, 'don_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dip_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dip_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dop_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dop_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dsi_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dfe_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dic_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dic_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_alk_riv = init_external_field(CS%riv_flux_dataset%file_name, 'alk_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_doc_riv = init_external_field(CS%riv_flux_dataset%file_name, 'doc_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_din_riv = init_external_field(CS%riv_flux_dataset%file_name, 'din_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_don_riv = init_external_field(CS%riv_flux_dataset%file_name, 'don_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dip_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dip_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dop_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dop_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dsi_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dfe_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dic_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dic_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_alk_riv = init_external_field(CS%riv_flux_dataset%file_name, 'alk_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_doc_riv = init_external_field(CS%riv_flux_dataset%file_name, 'doc_riv_flux', domain=G%Domain%mpp_domain)
+    endif
 
     ! Register diagnostic fields for outputing forcing values
     CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", &
@@ -477,49 +484,66 @@ contains
     endif
 
     ! River fluxes
-    fluxes%alk_riv_flux(:,:) = 0.
-    fluxes%alk_alt_co2_riv_flux(:,:) = 0.
+    if (CS%read_riv_fluxes) then
+      fluxes%alk_riv_flux(:,:) = 0.
+      fluxes%alk_alt_co2_riv_flux(:,:) = 0.
 
-    ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
-    Time_riv_flux = map_model_time_to_forcing_time(Time, CS%riv_flux_dataset)
+      ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
+      Time_riv_flux = map_model_time_to_forcing_time(Time, CS%riv_flux_dataset)
 
-    call time_interp_external(CS%id_din_riv,Time_riv_flux,time_varying_data)
-    fluxes%no3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
-    fluxes%alk_riv_flux(:,:) = fluxes%alk_riv_flux(:,:) - time_varying_data(:,:)
-    fluxes%alk_alt_co2_riv_flux(:,:) = fluxes%alk_alt_co2_riv_flux(:,:) - time_varying_data(:,:)
+      call time_interp_external(CS%id_din_riv,Time_riv_flux,time_varying_data)
+      fluxes%no3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+      fluxes%alk_riv_flux(:,:) = fluxes%alk_riv_flux(:,:) - time_varying_data(:,:)
+      fluxes%alk_alt_co2_riv_flux(:,:) = fluxes%alk_alt_co2_riv_flux(:,:) - time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dip_riv,Time_riv_flux,time_varying_data)
-    fluxes%po4_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+      call time_interp_external(CS%id_dip_riv,Time_riv_flux,time_varying_data)
+      fluxes%po4_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_don_riv,Time_riv_flux,time_varying_data)
-    fluxes%don_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DONriv_refract) * &
-                                      time_varying_data(:,:)
-    fluxes%donr_riv_flux(:,:) = G%mask2dT(:,:) * DONriv_refract * &
-                                       time_varying_data(:,:)
+      call time_interp_external(CS%id_don_riv,Time_riv_flux,time_varying_data)
+      fluxes%don_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DONriv_refract) * &
+                                        time_varying_data(:,:)
+      fluxes%donr_riv_flux(:,:) = G%mask2dT(:,:) * DONriv_refract * &
+                                        time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dop_riv,Time_riv_flux,time_varying_data)
-    fluxes%dop_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOPriv_refract) * &
-                                      time_varying_data(:,:)
-    fluxes%dopr_riv_flux(:,:) = G%mask2dT(:,:) * DOPriv_refract * &
-                                       time_varying_data(:,:)
+      call time_interp_external(CS%id_dop_riv,Time_riv_flux,time_varying_data)
+      fluxes%dop_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOPriv_refract) * &
+                                        time_varying_data(:,:)
+      fluxes%dopr_riv_flux(:,:) = G%mask2dT(:,:) * DOPriv_refract * &
+                                        time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dsi_riv,Time_riv_flux,time_varying_data)
-    fluxes%sio3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+      call time_interp_external(CS%id_dsi_riv,Time_riv_flux,time_varying_data)
+      fluxes%sio3_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dfe_riv,Time_riv_flux,time_varying_data)
-    fluxes%fe_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+      call time_interp_external(CS%id_dfe_riv,Time_riv_flux,time_varying_data)
+      fluxes%fe_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_dic_riv,Time_riv_flux,time_varying_data)
-    fluxes%dic_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
-    fluxes%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+      call time_interp_external(CS%id_dic_riv,Time_riv_flux,time_varying_data)
+      fluxes%dic_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
+      fluxes%dic_alt_co2_riv_flux(:,:) = G%mask2dT(:,:) * time_varying_data(:,:)
 
-    call time_interp_external(CS%id_alk_riv,Time_riv_flux,time_varying_data)
-    fluxes%alk_riv_flux(:,:) = fluxes%alk_riv_flux(:,:) + time_varying_data(:,:)
-    fluxes%alk_alt_co2_riv_flux(:,:) = fluxes%alk_alt_co2_riv_flux(:,:) + time_varying_data(:,:)
+      call time_interp_external(CS%id_alk_riv,Time_riv_flux,time_varying_data)
+      fluxes%alk_riv_flux(:,:) = fluxes%alk_riv_flux(:,:) + time_varying_data(:,:)
+      fluxes%alk_alt_co2_riv_flux(:,:) = fluxes%alk_alt_co2_riv_flux(:,:) + time_varying_data(:,:)
 
-    call time_interp_external(CS%id_doc_riv,Time_riv_flux,time_varying_data)
-    fluxes%doc_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOCriv_refract) * time_varying_data(:,:)
-    fluxes%docr_riv_flux(:,:) = G%mask2dT(:,:) * DOCriv_refract * time_varying_data(:,:)
+      call time_interp_external(CS%id_doc_riv,Time_riv_flux,time_varying_data)
+      fluxes%doc_riv_flux(:,:) = G%mask2dT(:,:) * (1. - DOCriv_refract) * time_varying_data(:,:)
+      fluxes%docr_riv_flux(:,:) = G%mask2dT(:,:) * DOCriv_refract * time_varying_data(:,:)
+    else
+      fluxes%no3_riv_flux(:,:) = 0.
+      fluxes%po4_riv_flux(:,:) = 0.
+      fluxes%don_riv_flux(:,:) = 0.
+      fluxes%donr_riv_flux(:,:) = 0.
+      fluxes%dop_riv_flux(:,:) = 0.
+      fluxes%dopr_riv_flux(:,:) = 0.
+      fluxes%sio3_riv_flux(:,:) = 0.
+      fluxes%fe_riv_flux(:,:) = 0.
+      fluxes%doc_riv_flux(:,:) = 0.
+      fluxes%docr_riv_flux(:,:) = 0.
+      fluxes%alk_riv_flux(:,:) = 0.
+      fluxes%alk_alt_co2_riv_flux(:,:) = 0.
+      fluxes%dic_riv_flux(:,:) = 0.
+      fluxes%dic_alt_co2_riv_flux(:,:) = 0.
+    end if
 
     ! Post to diags
     if (CS%diag_ids%no3_riv_flux > 0) &

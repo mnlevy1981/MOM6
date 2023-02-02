@@ -55,6 +55,8 @@ use BFB_surface_forcing,    only : BFB_buoyancy_forcing
 use BFB_surface_forcing,    only : BFB_surface_forcing_init, BFB_surface_forcing_CS
 use dumbbell_surface_forcing,    only : dumbbell_surface_forcing_init, dumbbell_surface_forcing_CS
 use dumbbell_surface_forcing, only    : dumbbell_buoyancy_forcing
+use marbl_forcing_mod,    only : marbl_forcing_CS, marbl_forcing_init
+use marbl_forcing_mod,    only : convert_marbl_IOB_to_forcings
 
 implicit none ; private
 
@@ -211,6 +213,7 @@ type, public :: surface_forcing_CS ; private
   type(MESO_surface_forcing_CS), pointer :: MESO_forcing_CSp => NULL()
   type(idealized_hurricane_CS), pointer :: idealized_hurricane_CSp => NULL()
   type(SCM_CVmix_tests_CS),      pointer :: SCM_CVmix_tests_CSp => NULL()
+  type(marbl_forcing_CS), pointer :: marbl_forcing_CSp => NULL()
   !>@}
 
 end type surface_forcing_CS
@@ -344,6 +347,10 @@ subroutine set_forcing(sfc_state, forces, fluxes, day_start, day_interval, G, US
       call MOM_error(FATAL, &
        "MOM_surface_forcing: Unrecognized buoy config "//trim(CS%buoy_config))
     endif
+  endif
+
+  if (CS%use_marbl_tracers) then
+    call marbl_forcing_from_data_override(fluxes, day_center, G, US, CS)
   endif
 
   if (associated(CS%tracer_flow_CSp)) then
@@ -1477,6 +1484,78 @@ subroutine buoyancy_forcing_linear(sfc_state, fluxes, day, dt, G, US, CS)
   call callTree_leave("buoyancy_forcing_linear")
 end subroutine buoyancy_forcing_linear
 
+
+! Sets the necessary MARBL forcings via the data override facility.
+subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
+  type(forcing),            intent(inout) :: fluxes !< A structure containing thermodynamic forcing fields
+  type(time_type),          intent(in)    :: day    !< The time of the fluxes
+  type(ocean_grid_type),    intent(inout) :: G      !< The ocean's grid structure
+  type(unit_scale_type),    intent(in)    :: US     !< A dimensional unit scaling type
+  type(surface_forcing_CS), pointer       :: CS     !< pointer to control structure returned by
+                                                    !! a previous surface_forcing_init call
+  ! Local variables
+  real, pointer, dimension(:,:) :: ice_fraction         =>NULL() !< fractional ice area [nondim]
+  real, pointer, dimension(:,:) :: u10_sqr              =>NULL() !< wind speed squared at 10m [m2/s2]
+  real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_bc_flux          =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
+  real, pointer, dimension(:,:) :: seaice_bc_flux       =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
+  integer :: isc, iec, jsc, jec
+
+  ! Necessary null pointers for arguments to convert_marbl_IOB_to_forcings()
+  ! Since they are null, MARBL will not use multiple ice categories
+  real, pointer, dimension(:,:)   :: afracr        =>NULL()
+  real, pointer, dimension(:,:)   :: swnet_afracr  =>NULL()
+  real, pointer, dimension(:,:,:) :: swpen_ifrac_n =>NULL()
+  real, pointer, dimension(:,:,:) :: ifrac_n       =>NULL()
+
+  call callTree_enter("marbl_forcing_from_data_override, MOM_surface_forcing.F90")
+
+  if (.not.CS%dataOverrideIsInitialized) then
+    call data_override_init(G%Domain)
+    CS%dataOverrideIsInitialized = .True.
+  endif
+
+  ! Allocate memory for pointers
+  isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec
+  allocate ( ice_fraction (isc:iec,jsc:jec),         &
+             u10_sqr (isc:iec,jsc:jec),              &
+             atm_fine_dust_flux (isc:iec,jsc:jec),   &
+             atm_coarse_dust_flux (isc:iec,jsc:jec), &
+             seaice_dust_flux (isc:iec,jsc:jec),     &
+             atm_bc_flux (isc:iec,jsc:jec),          &
+             seaice_bc_flux (isc:iec,jsc:jec))
+
+  atm_fine_dust_flux(:,:) = 0.0
+  atm_coarse_dust_flux(:,:) = 0.0
+  atm_bc_flux(:,:) = 0.0
+  seaice_dust_flux(:,:) = 0.0
+  seaice_bc_flux(:,:) = 0.0
+
+  call data_override(G%Domain, 'ice_fraction', fluxes%ice_fraction, day)
+  call data_override(G%Domain, 'u10_sqr', fluxes%u10_sqr, day)
+  call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day)
+  call data_override(G%Domain, 'atm_coarse_dust_flux', atm_coarse_dust_flux, day)
+  call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day)
+  call data_override(G%Domain, 'seaice_dust_flux', seaice_dust_flux, day)
+  call data_override(G%Domain, 'seaice_bc_flux', seaice_bc_flux, day)
+
+  call convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
+                                     seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
+                                     afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
+                                     day, G, US, 0, 0, fluxes, CS%marbl_forcing_CSp)
+  deallocate ( ice_fraction,         &
+               u10_sqr,              &
+               atm_fine_dust_flux,   &
+               atm_coarse_dust_flux, &
+               seaice_dust_flux,     &
+               atm_bc_flux,          &
+               seaice_bc_flux)
+
+end subroutine marbl_forcing_from_data_override
+
+
 !> Save a restart file for the forcing fields
 subroutine forcing_save_restart(CS, G, Time, directory, time_stamped, &
                                 filename_suffix)
@@ -1901,6 +1980,9 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
           trim(CS%buoy_config) == "SCM_CVmix_tests") then
     call SCM_CVmix_tests_surface_forcing_init(Time, G, param_file, CS%SCM_CVmix_tests_CSp)
   endif
+
+  ! Set up MARBL forcing control structure
+  call marbl_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
 
   call register_forcing_type_diags(Time, diag, US, CS%use_temperature, CS%handles)
 
