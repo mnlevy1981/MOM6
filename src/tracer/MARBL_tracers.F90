@@ -42,7 +42,7 @@ implicit none ; private
 
 public register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
-public MARBL_tracer_stock, MARBL_tracers_end
+public MARBL_tracer_stock, MARBL_tracers_get_ito, MARBL_tracers_end
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -99,6 +99,7 @@ type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
   logical :: use_ice_category_fields    !< Forcing will include multiple ice categories for ice_frac and shortwave
+  logical :: request_Chl_from_MARBL     !< MARBL can provide Chl to use in set_pen_shortwave()
   integer :: ice_ncat                   !< Number of ice categories when use_ice_category_fields = True
   character(len=200) :: IC_file !< The file in which the age-tracer initial values cam be found.
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
@@ -157,6 +158,8 @@ type, public :: MARBL_tracers_CS ; private
                                   !! [conc m/s]
   real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
                                          !! (dims: i, j, tracer) [conc m]
+  real, allocatable :: interior_tendency_output(:,:,:,:) !< Array of 3D fields returned from MARBL (dims: i, j, k, nflds)
+                                                         !! [units vary based on last dimension]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -169,6 +172,7 @@ type, public :: MARBL_tracers_CS ; private
   integer :: atmpress_ind  !< index of MARBL forcing field array to copy atmospheric pressure into
   integer :: xco2_ind  !< index of MARBL forcing field array to copy CO2 flux into
   integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
+  integer :: chl_ind       !< Index of Chlorophyll in interior_tendency_output
 
   !> Indices for forcing fields required to compute interior tendencies
   integer :: dustflux_ind  !< index of MARBL forcing field array to copy dust flux into
@@ -214,6 +218,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
   integer :: m, nz, marbl_settings_in, read_error
+  logical :: chl_from_file
   nz = GV%ke
   marbl_settings_in = 615
 
@@ -233,6 +238,9 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
                  default=1., units="m")
+  call get_param(param_file, mdl, "CHL_FROM_FILE", chl_from_file, &
+                 "If true, chl_a is read from a file.", default=.true.)
+  CS%request_Chl_from_MARBL = (.not. chl_from_file)
   call get_param(param_file, mdl, "USE_ICE_CATEGORIES", CS%use_ice_category_fields, &
        "If true, allocate memory for shortwave and ice fraction split by ice thickness category.", &
        default=.false.)
@@ -416,7 +424,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=48)  :: units ! The variable's units.
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_MARBL_tracers
-  integer :: isd, ied, jsd, jed, nz, m
+  integer :: isd, ied, jsd, jed, nz, m, ito_cnt
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
@@ -501,6 +509,18 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                          CS%surface_flux_saved_state)
   call setup_saved_state(MARBL_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, &
                          CS%interior_tendency_saved_state)
+
+  ! set up memory for MARBL's output_to_GCM fields
+  ito_cnt = 0
+  if (CS%request_Chl_from_MARBL) then
+    ito_cnt = ito_cnt + 1
+    call MARBL_instances%interior_tendency_output%add_output(num_elements=1,                             &
+                                                             field_name="total_Chl",                     &
+                                                             output_id=CS%chl_ind,                       &
+                                                             marbl_status_log=MARBL_instances%StatusLog, &
+                                                             num_levels=nz)
+  end if
+  allocate(CS%interior_tendency_output(isd:ied,jsd:jed,nz,ito_cnt))
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
@@ -1098,9 +1118,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%PAR_col_frac_ind > 0) then
         ! second index is num_subcols, not depth
         !MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = fluxes%fracr_cat(i,j,:)
-        ! TODO: if using multiple ice categories, ensure sum of fraction is within tolerance of 1
-        !       (or does this check belong in MARBL? interior_tendency_compute() could call check_forcing(),
-        !        which would abort if ice fraction is too far from 1)
         if (CS%use_ice_category_fields) then
           MARBL_instances%interior_tendency_forcings(CS%PAR_col_frac_ind)%field_1d(1,:) = fluxes%fracr_cat(i,j,:)
         else
@@ -1174,6 +1191,14 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         CS%interior_tendency_saved_state(m)%field_3d(i,j,:) = &
             MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1)
       end do
+
+      !     * outputs_for_GCM
+      if (associated(MARBL_instances%interior_tendency_output%outputs_for_GCM)) then
+        do m=1,size(MARBL_instances%interior_tendency_output%outputs_for_GCM)
+          CS%interior_tendency_output(i,j,:,m) = &
+              MARBL_instances%interior_tendency_output%outputs_for_GCM(m)%forcing_field_1d(1,:)
+        end do
+      end if
 
       !     * diagnostics
       do m=1,size(MARBL_instances%interior_tendency_diags%diags)
@@ -1352,6 +1377,25 @@ subroutine MARBL_tracers_surface_state(state, h, G, CS)
   endif
 
 end subroutine MARBL_tracers_surface_state
+
+!> Copy the requested interior tendency output field into an array.
+subroutine MARBL_tracers_get_ito(name,array, CS)
+  character(len=*),         intent(in)  :: name   !< Name of requested tracer.
+  real, dimension(:,:,:),   intent(out) :: array  !< Array filled by this routine.
+  type(MARBL_tracers_CS),   pointer     :: CS     !< Pointer to the control structure for this module.
+
+  character(len=128), parameter :: sub_name = 'MARBL_tracers_get_ito'
+  character(len=128) :: log_message
+
+  select case(trim(name))
+    case ('Chl')
+      array = CS%interior_tendency_output(:,:,:,CS%chl_ind)
+    case DEFAULT
+      write(log_message, "(3A)") "'", trim(name), "' is not a valid interior tendency output field name"
+      call MOM_error(FATAL, log_message)
+  end select
+
+end subroutine MARBL_tracers_get_ito
 
 !> Clean up any allocated memory after the run.
 subroutine MARBL_tracers_end(CS)

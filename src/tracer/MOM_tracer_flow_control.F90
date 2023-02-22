@@ -39,7 +39,7 @@ use ideal_age_example, only : register_ideal_age_tracer, initialize_ideal_age_tr
 use ideal_age_example, only : ideal_age_tracer_column_physics, ideal_age_tracer_surface_state
 use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_tracer_CS
 use MARBL_tracers, only : register_MARBL_tracers, initialize_MARBL_tracers
-use MARBL_tracers, only : MARBL_tracers_column_physics
+use MARBL_tracers, only : MARBL_tracers_column_physics, MARBL_tracers_get_ito
 use MARBL_tracers, only : MARBL_tracers_end, MARBL_tracers_CS
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
@@ -383,6 +383,8 @@ subroutine get_chl_from_model(Chl_array, G, GV, CS)
 
   if (CS%use_MOM_generic_tracer) then
     call MOM_generic_tracer_get('chl', 'field', Chl_array, CS%MOM_generic_tracer_CSp)
+  else if (CS%use_MARBL_tracers) then
+    call MARBL_tracers_get_ito('Chl', Chl_array, CS%MARBL_tracers_CSp)
   else
     call MOM_error(FATAL, "get_chl_from_model was called in a configuration "// &
              "that is unable to provide a sensible model-based value.\n"// &
