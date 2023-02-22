@@ -1,6 +1,8 @@
 !> A non-functioning template of the public structures provided through MARBL interface
 module marbl_interface_public_types
 
+    use marbl_logging, only : marbl_log_type
+
     implicit none
     private ! Only want a few types to be public
 
@@ -64,5 +66,37 @@ module marbl_interface_public_types
         real, allocatable :: zw(:)  !< dummy depths
         real, allocatable :: delta_z(:)  !< dummy thicknesses
     end type marbl_domain_type
+
+    type, public :: marbl_single_output_type
+        ! marbl_single_output :
+        ! a private type, this contains both the metadata and
+        ! the actual data for a single field computed in either
+        ! surface_flux_compute() or interior_tendency_compute()
+        ! that needs to be passed to the GCM / flux coupler.
+        ! Data must be accessed via the marbl_output_for_GCM_type
+        ! data structure.
+        real, allocatable, dimension(:)   :: forcing_field_0d
+        real, allocatable, dimension(:,:) :: forcing_field_1d
+    end type marbl_single_output_type
+
+    type, public :: marbl_output_for_GCM_type
+        type(marbl_single_output_type), dimension(:), pointer :: outputs_for_GCM => NULL()
+    contains
+        procedure, public :: add_output => marbl_output_add
+    end type marbl_output_for_GCM_type
+
+contains
+
+    subroutine marbl_output_add(this, num_elements, field_name, output_id,            &
+                                marbl_status_log, num_levels)
+
+       class(marbl_output_for_GCM_type), intent(inout) :: this
+       character(len=*),     intent(in)    :: field_name
+       integer,              intent(in)    :: num_elements
+       integer,              intent(out)   :: output_id
+       type(marbl_log_type), intent(inout) :: marbl_status_log
+       integer,              optional, intent(in) :: num_levels
+
+    end subroutine marbl_output_add
 
 end module marbl_interface_public_types

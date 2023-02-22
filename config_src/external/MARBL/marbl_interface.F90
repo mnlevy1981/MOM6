@@ -8,6 +8,7 @@ module marbl_interface
     use marbl_interface_public_types, only : marbl_saved_state_type
     use marbl_interface_public_types, only : marbl_diagnostics_type
     use marbl_interface_public_types, only : marbl_domain_type
+    use marbl_interface_public_types, only : marbl_output_for_GCM_type
     implicit none
     private ! Only want marbl_interface_class to be public, not supporting functions
 
@@ -21,10 +22,12 @@ module marbl_interface
         type(marbl_forcing_fields_type), allocatable :: interior_tendency_forcings(:)  !< dummy forcing array
         type(marbl_tracer_metadata_type), allocatable :: tracer_metadata(:)  !< dummy metadata array
         type(marbl_domain_type) :: domain  !< dummy domain
-        type(marbl_saved_state_type) :: surface_flux_saved_state  !< dummy saved state
-        type(marbl_saved_state_type) :: interior_tendency_saved_state  !< dummy saved state
-        type(marbl_diagnostics_type) :: interior_tendency_diags  !< dummy diagnostics
-        type(marbl_diagnostics_type) :: surface_flux_diags  !< dummy diagnostics
+        type(marbl_saved_state_type)    :: surface_flux_saved_state       !< dummy saved state
+        type(marbl_saved_state_type)    :: interior_tendency_saved_state  !< dummy saved state
+        type(marbl_diagnostics_type)    :: surface_flux_diags             !< dummy diagnostics
+        type(marbl_diagnostics_type)    :: interior_tendency_diags        !< dummy diagnostics
+        type(marbl_output_for_GCM_type) :: surface_flux_output            !< dummy output
+        type(marbl_output_for_GCM_type) :: interior_tendency_output       !< dummy output
         real, allocatable :: tracers(:,:)  !< dummy tracer array
         real, allocatable :: tracers_at_surface(:,:)  !< dummy tracer surface array
         real, allocatable :: bot_flux_to_tend(:)      !< dummy array for bot flux to tendency wgts
