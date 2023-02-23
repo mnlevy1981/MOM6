@@ -42,7 +42,7 @@ implicit none ; private
 
 public register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
-public MARBL_tracer_stock, MARBL_tracers_get_ito, MARBL_tracers_end
+public MARBL_tracer_stock, MARBL_tracers_get_output_for_GCM, MARBL_tracers_end
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -158,8 +158,6 @@ type, public :: MARBL_tracers_CS ; private
                                   !! [conc m/s]
   real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
                                          !! (dims: i, j, tracer) [conc m]
-  real, allocatable :: interior_tendency_output(:,:,:,:) !< Array of 3D fields returned from MARBL (dims: i, j, k, nflds)
-                                                         !! [units vary based on last dimension]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -172,7 +170,6 @@ type, public :: MARBL_tracers_CS ; private
   integer :: atmpress_ind  !< index of MARBL forcing field array to copy atmospheric pressure into
   integer :: xco2_ind  !< index of MARBL forcing field array to copy CO2 flux into
   integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
-  integer :: chl_ind       !< Index of Chlorophyll in interior_tendency_output
 
   !> Indices for forcing fields required to compute interior tendencies
   integer :: dustflux_ind  !< index of MARBL forcing field array to copy dust flux into
@@ -424,7 +421,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=48)  :: units ! The variable's units.
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_MARBL_tracers
-  integer :: isd, ied, jsd, jed, nz, m, ito_cnt
+  integer :: isd, ied, jsd, jed, nz, m
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
@@ -509,18 +506,6 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                          CS%surface_flux_saved_state)
   call setup_saved_state(MARBL_instances%interior_tendency_saved_state, HI, GV, restart_CS, CS%tracers_may_reinit, &
                          CS%interior_tendency_saved_state)
-
-  ! set up memory for MARBL's output_to_GCM fields
-  ito_cnt = 0
-  if (CS%request_Chl_from_MARBL) then
-    ito_cnt = ito_cnt + 1
-    call MARBL_instances%interior_tendency_output%add_output(num_elements=1,                             &
-                                                             field_name="total_Chl",                     &
-                                                             output_id=CS%chl_ind,                       &
-                                                             marbl_status_log=MARBL_instances%StatusLog, &
-                                                             num_levels=nz)
-  end if
-  allocate(CS%interior_tendency_output(isd:ied,jsd:jed,nz,ito_cnt))
 
   CS%tr_Reg => tr_Reg
   CS%restart_CSp => restart_CS
@@ -1192,14 +1177,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
             MARBL_instances%interior_tendency_saved_state%state(m)%field_3d(:,1)
       end do
 
-      !     * outputs_for_GCM
-      if (associated(MARBL_instances%interior_tendency_output%outputs_for_GCM)) then
-        do m=1,size(MARBL_instances%interior_tendency_output%outputs_for_GCM)
-          CS%interior_tendency_output(i,j,:,m) = &
-              MARBL_instances%interior_tendency_output%outputs_for_GCM(m)%forcing_field_1d(1,:)
-        end do
-      end if
-
       !     * diagnostics
       do m=1,size(MARBL_instances%interior_tendency_diags%diags)
         if (CS%interior_tendency_diags(m)%id > 0) then
@@ -1379,23 +1356,38 @@ subroutine MARBL_tracers_surface_state(state, h, G, CS)
 end subroutine MARBL_tracers_surface_state
 
 !> Copy the requested interior tendency output field into an array.
-subroutine MARBL_tracers_get_ito(name,array, CS)
-  character(len=*),         intent(in)  :: name   !< Name of requested tracer.
-  real, dimension(:,:,:),   intent(out) :: array  !< Array filled by this routine.
-  type(MARBL_tracers_CS),   pointer     :: CS     !< Pointer to the control structure for this module.
+subroutine MARBL_tracers_get_output_for_GCM(name, nz, array, CS)
 
-  character(len=128), parameter :: sub_name = 'MARBL_tracers_get_ito'
+  use marbl_settings_mod, only : output_for_GCM_iopt_total_Chl_3d
+
+  character(len=*),         intent(in)    :: name   !< Name of requested tracer.
+  integer,                  intent(in)    :: nz     !< Number of levels
+  real, dimension(:,:,:),   intent(inout) :: array  !< Array filled by this routine.
+  type(MARBL_tracers_CS),   pointer       :: CS     !< Pointer to the control structure for this module.
+
+  character(len=128), parameter :: sub_name = 'MARBL_tracers_get_output_for_GCM'
   character(len=128) :: log_message
+  real, dimension(size(CS%tracer_data),nz) :: tracer_local
+  integer :: i,j,m
 
+  array(:,:,:) = 0.0
   select case(trim(name))
     case ('Chl')
-      array = CS%interior_tendency_output(:,:,:,CS%chl_ind)
+      do i=1,size(array, dim=1)
+        do j=1,size(array, dim=2)
+          do m=1,size(CS%tracer_data)
+            tracer_local(m,:) = CS%tracer_data(m)%tr(i,j,:)
+          end do
+          ! if (G%mask2dT(i,j) == 0) cycle
+          array(i,j,:) = MARBL_instances%get_output_for_GCM(tracer_local(:,:), output_for_GCM_iopt_total_Chl_3d)
+        end do
+      end do
     case DEFAULT
       write(log_message, "(3A)") "'", trim(name), "' is not a valid interior tendency output field name"
       call MOM_error(FATAL, log_message)
   end select
 
-end subroutine MARBL_tracers_get_ito
+end subroutine MARBL_tracers_get_output_for_GCM
 
 !> Clean up any allocated memory after the run.
 subroutine MARBL_tracers_end(CS)
