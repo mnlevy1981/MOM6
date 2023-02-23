@@ -27,18 +27,18 @@ module marbl_interface
         type(marbl_diagnostics_type)    :: surface_flux_diags             !< dummy diagnostics
         type(marbl_diagnostics_type)    :: interior_tendency_diags        !< dummy diagnostics
         type(marbl_output_for_GCM_type) :: surface_flux_output            !< dummy output
-        type(marbl_output_for_GCM_type) :: interior_tendency_output       !< dummy output
         real, allocatable :: tracers(:,:)  !< dummy tracer array
         real, allocatable :: tracers_at_surface(:,:)  !< dummy tracer surface array
         real, allocatable :: bot_flux_to_tend(:)      !< dummy array for bot flux to tendency wgts
         real, allocatable :: surface_fluxes(:,:)  !< dummy fluxes
         real, allocatable :: interior_tendencies(:,:)  !< dummy tendencies
        contains
-        procedure, public  :: init  !< dummy routine
-        procedure, public  :: surface_flux_compute  !< dummy surface flux routine
+        procedure, public  :: put_setting                !< dummy put_setting routine
+        procedure, public  :: init                       !< dummy routine
+        procedure, public  :: surface_flux_compute       !< dummy surface flux routine
         procedure, public  :: interior_tendency_compute  !< dummy interior tendency routine
-        procedure, public  :: shutdown  !< dummy shutdown routine
-        procedure, public :: put_setting  !< dummy put_setting routine
+        procedure, public  :: get_output_for_GCM         !< dummy get_output_for_GCM routine
+        procedure, public  :: shutdown                   !< dummy shutdown routine
     end type marbl_interface_class
 
     !> Error message that appears if the dummy interface is called
@@ -93,6 +93,16 @@ contains
         call MOM_error(FATAL, error_msg)
 
     end subroutine interior_tendency_compute
+
+    !> Dummy version of MARBL's get_output_for_GCM() function
+    function get_output_for_GCM(self, field_ind) result(array_out)
+
+        class (marbl_interface_class), intent(inout) :: self
+        integer,                       intent(in)    :: field_ind
+        real, dimension(self%domain%km)              :: array_out
+        call MOM_error(FATAL, error_msg)
+
+    end function get_output_for_GCM
 
     !> Dummy version of MARBL's shutdown() function
     subroutine shutdown(self)

@@ -62,6 +62,7 @@ module marbl_interface_public_types
     !> A non-functioning template of MARBL domain type
     type, public :: marbl_domain_type
         integer :: kmt  !< dummy index
+        integer :: km   !< dummy index
         real, allocatable :: zt(:)  !< dummy depths
         real, allocatable :: zw(:)  !< dummy depths
         real, allocatable :: delta_z(:)  !< dummy thicknesses

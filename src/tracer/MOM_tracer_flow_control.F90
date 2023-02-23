@@ -384,7 +384,7 @@ subroutine get_chl_from_model(Chl_array, G, GV, CS)
   if (CS%use_MOM_generic_tracer) then
     call MOM_generic_tracer_get('chl', 'field', Chl_array, CS%MOM_generic_tracer_CSp)
   else if (CS%use_MARBL_tracers) then
-    call MARBL_tracers_get_output_for_GCM('Chl', GV%ke, Chl_array, CS%MARBL_tracers_CSp)
+    call MARBL_tracers_get_output_for_GCM('Chl', G, GV, Chl_array, CS%MARBL_tracers_CSp)
   else
     call MOM_error(FATAL, "get_chl_from_model was called in a configuration "// &
              "that is unable to provide a sensible model-based value.\n"// &

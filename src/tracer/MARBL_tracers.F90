@@ -1356,32 +1356,35 @@ subroutine MARBL_tracers_surface_state(state, h, G, CS)
 end subroutine MARBL_tracers_surface_state
 
 !> Copy the requested interior tendency output field into an array.
-subroutine MARBL_tracers_get_output_for_GCM(name, nz, array, CS)
+subroutine MARBL_tracers_get_output_for_GCM(name, G, GV, array, CS)
 
   use marbl_settings_mod, only : output_for_GCM_iopt_total_Chl_3d
 
   character(len=*),         intent(in)    :: name   !< Name of requested tracer.
-  integer,                  intent(in)    :: nz     !< Number of levels
-  real, dimension(:,:,:),   intent(inout) :: array  !< Array filled by this routine.
+  type(ocean_grid_type),    intent(in)    :: G      !< The ocean's grid structure.
+  type(verticalGrid_type),  intent(in)    :: GV     !< The ocean's vertical grid structure.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                            intent(inout) :: array  !< Array filled by this routine.
   type(MARBL_tracers_CS),   pointer       :: CS     !< Pointer to the control structure for this module.
 
   character(len=128), parameter :: sub_name = 'MARBL_tracers_get_output_for_GCM'
   character(len=128) :: log_message
-  real, dimension(size(CS%tracer_data),nz) :: tracer_local
-  integer :: i,j,m
+  integer :: i, j, is, ie, js, je, m
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
   array(:,:,:) = 0.0
   select case(trim(name))
     case ('Chl')
-      do i=1,size(array, dim=1)
-        do j=1,size(array, dim=2)
-          do m=1,size(CS%tracer_data)
-            tracer_local(m,:) = CS%tracer_data(m)%tr(i,j,:)
-          end do
-          ! if (G%mask2dT(i,j) == 0) cycle
-          array(i,j,:) = MARBL_instances%get_output_for_GCM(tracer_local(:,:), output_for_GCM_iopt_total_Chl_3d)
+      do j=js,je ; do i=is,ie
+        do m=1,size(CS%tracer_data)
+          MARBL_instances%tracers(m,:) = CS%tracer_data(m)%tr(i,j,:)
         end do
-      end do
+        if (G%mask2dT(i,j) /= 0) then
+          array(i,j,:) = MARBL_instances%get_output_for_GCM(output_for_GCM_iopt_total_Chl_3d)
+          if (MARBL_instances%StatusLog%labort_marbl) &
+            call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
+        end if
+      end do ; end do
     case DEFAULT
       write(log_message, "(3A)") "'", trim(name), "' is not a valid interior tendency output field name"
       call MOM_error(FATAL, log_message)
