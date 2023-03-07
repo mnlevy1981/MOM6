@@ -338,7 +338,7 @@ subroutine tracer_flow_control_init(restart, day, G, GV, US, h, param_file, diag
     call initialize_ideal_age_tracer(restart, day, G, GV, US, h, diag, OBC, CS%ideal_age_tracer_CSp, &
                                      sponge_CSp)
   if (CS%use_MARBL_tracers) &
-    call initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS%MARBL_tracers_CSp, &
+    call initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag, OBC, CS%MARBL_tracers_CSp, &
                                   sponge_CSp)
   if (CS%use_regional_dyes) &
     call initialize_dye_tracer(restart, day, G, GV, h, diag, OBC, CS%dye_tracer_CSp, &

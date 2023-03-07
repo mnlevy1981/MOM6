@@ -24,7 +24,8 @@ use MOM_time_manager,    only : time_type
 use MOM_tracer_registry, only : register_tracer
 use MOM_tracer_types,    only : tracer_type, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
-use MOM_tracer_Z_init,   only : tracer_Z_init, read_Z_edges
+use MOM_tracer_initialization_from_Z, only : MOM_initialize_tracer_from_Z
+use MOM_tracer_Z_init,   only : read_Z_edges
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface, thermo_var_ptrs
 use MOM_verticalGrid,    only : verticalGrid_type
@@ -517,14 +518,15 @@ end function register_MARBL_tracers
 
 !> This subroutine initializes the CS%ntr tracer fields in tr(:,:,:,:)
 !! and it sets up the tracer output.
-subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, sponge_CSp)
+subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag, OBC, CS, sponge_CSp)
   logical,                            intent(in) :: restart !< .true. if the fields have already been
                                                             !! read from a restart file.
   type(time_type), target,            intent(in) :: day  !< Time of the start of the run.
-  type(ocean_grid_type),              intent(in) :: G    !< The ocean's grid structure
+  type(ocean_grid_type),              intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),            intent(in) :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),              intent(in) :: US   !< A dimensional unit scaling type
   real, dimension(NIMEM_,NJMEM_,NKMEM_), intent(in) :: h !< Layer thicknesses [H ~> m or kg m-2]
+  type(param_file_type),              intent(in) :: param_file !< A structure to parse for run-time parameters
   type(diag_ctrl), target,            intent(in) :: diag !< Structure used to regulate diagnostic output.
   type(ocean_OBC_type),               pointer    :: OBC  !< This open boundary condition type specifies
                                                          !! whether, where, and what open boundary
@@ -542,7 +544,6 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
                                   ! years m3 s-1 or years kg s-1.
   character(len=48) :: tracer_name
-  logical :: OK
   logical :: fesedflux_has_edges, fesedflux_use_missing
   real    :: fesedflux_missing
   integer :: i, j, k, kbot, m, diag_size
@@ -636,10 +637,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, diag, OBC, CS, s
     if ((.not. restart) .or. &
         (CS%tracers_may_reinit .and. &
          .not. query_initialized(CS%tracer_data(m)%tr(:,:,:), name, CS%restart_CSp))) then
-      OK = tracer_Z_init(CS%tracer_data(m)%tr(:,:,:), h, CS%IC_file, name, G, GV, US, -1e34)
-      if (.not.OK) call MOM_error(FATAL,"initialize_MARBL_tracers: "//&
-                                  "Unable to read "//trim(name)//" from "//&
-                                  trim(CS%IC_file)//".")
+      call MOM_initialize_tracer_from_Z(h, CS%tracer_data(m)%tr, G, GV, US, param_file, &
+                                        CS%IC_file, name, ongrid=.true.)
       do k=1,GV%ke
         do j=G%jsc, G%jec
           do i=G%isc, G%iec

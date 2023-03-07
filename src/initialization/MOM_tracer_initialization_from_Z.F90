@@ -35,7 +35,7 @@ contains
 !> Initializes a tracer from a z-space data file, including any lateral regridding that is needed.
 subroutine MOM_initialize_tracer_from_Z(h, tr, G, GV, US, PF, src_file, src_var_nam, &
                           src_var_unit_conversion, src_var_record, homogenize, &
-                          useALEremapping, remappingScheme, src_var_gridspec )
+                          useALEremapping, remappingScheme, src_var_gridspec, ongrid )
   type(ocean_grid_type),      intent(inout) :: G   !< Ocean grid structure.
   type(verticalGrid_type),    intent(in)    :: GV  !< Ocean vertical grid structure.
   type(unit_scale_type),      intent(in)    :: US  !< A dimensional unit scaling type
@@ -52,6 +52,9 @@ subroutine MOM_initialize_tracer_from_Z(h, tr, G, GV, US, PF, src_file, src_var_
   character(len=*), optional, intent(in)    :: remappingScheme !< remapping scheme to use.
   character(len=*), optional, intent(in)    :: src_var_gridspec !< Source variable name in a gridspec file.
                                                                 !! This is not implemented yet.
+  logical,          optional, intent(in)    :: ongrid     !< If true, then data are assumed to have been interpolated to
+                                                          !! the model horizontal grid. In this case, only extrapolation
+                                                          !! is performed by horiz_interp_and_extrap_tracer()
   ! Local variables
   real :: land_fill = 0.0
   real               :: convert
@@ -168,7 +171,7 @@ subroutine MOM_initialize_tracer_from_Z(h, tr, G, GV, US, PF, src_file, src_var_
 
   call horiz_interp_and_extrap_tracer(src_file, src_var_nam, convert, recnum, &
        G, tr_z, mask_z, z_in, z_edges_in, missing_value, reentrant_x, tripolar_n, &
-       homog, m_to_Z=US%m_to_Z, answer_date=hor_regrid_answer_date)
+       homog, m_to_Z=US%m_to_Z, answer_date=hor_regrid_answer_date, ongrid=ongrid)
 
   kd = size(z_edges_in,1)-1
   call pass_var(tr_z,G%Domain)
