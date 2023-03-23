@@ -95,14 +95,14 @@ contains
     end subroutine interior_tendency_compute
 
     !> Dummy version of MARBL's get_output_for_GCM() function
-    function get_output_for_GCM(self, field_ind) result(array_out)
+    subroutine get_output_for_GCM(self, field_ind, array_out)
 
-        class (marbl_interface_class), intent(inout) :: self
-        integer,                       intent(in)    :: field_ind
-        real, dimension(self%domain%km)              :: array_out
+        class (marbl_interface_class),   intent(inout) :: self
+        integer,                         intent(in)    :: field_ind
+        real, dimension(self%domain%km), intent(out)   :: array_out
         call MOM_error(FATAL, error_msg)
 
-    end function get_output_for_GCM
+    end subroutine get_output_for_GCM
 
     !> Dummy version of MARBL's shutdown() function
     subroutine shutdown(self)
