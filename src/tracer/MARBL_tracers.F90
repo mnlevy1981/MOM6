@@ -442,7 +442,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** Tracer initial conditions
   call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
                  "The file in which the MARBL tracers initial values can be found.", &
-                 default="ecosys_jan_IC_omip_MOM_tx0.66v1_c221027.nc")
+                 default="ecosys_jan_IC_omip_latlon_1x1_180W_c230317.nc")
   if (scan(CS%IC_file,'/') == 0) then
     ! Add the directory if CS%IC_file is not already a complete path.
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
@@ -637,8 +637,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     if ((.not. restart) .or. &
         (CS%tracers_may_reinit .and. &
          .not. query_initialized(CS%tracer_data(m)%tr(:,:,:), name, CS%restart_CSp))) then
-      call MOM_initialize_tracer_from_Z(h, CS%tracer_data(m)%tr, G, GV, US, param_file, &
-                                        CS%IC_file, name, ongrid=.true.)
+      ! TODO: added the ongrid optional argument, but is there a good way to detect if the file is on grid?
+      call MOM_initialize_tracer_from_Z(h, CS%tracer_data(m)%tr, G, GV, US, param_file, CS%IC_file, name)
       do k=1,GV%ke
         do j=G%jsc, G%jec
           do i=G%isc, G%iec
@@ -1379,7 +1379,7 @@ subroutine MARBL_tracers_get_output_for_GCM(name, G, GV, array, CS)
           MARBL_instances%tracers(m,:) = CS%tracer_data(m)%tr(i,j,:)
         end do
         if (G%mask2dT(i,j) /= 0) then
-          array(i,j,:) = MARBL_instances%get_output_for_GCM(output_for_GCM_iopt_total_Chl_3d)
+          call MARBL_instances%get_output_for_GCM(output_for_GCM_iopt_total_Chl_3d, array(i,j,:))
           if (MARBL_instances%StatusLog%labort_marbl) &
             call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
         end if

@@ -114,10 +114,10 @@ subroutine MOM_initialize_tracer_from_Z(h, tr, G, GV, US, PF, src_file, src_var_
                  "initial conditions.", default=.false.)
   call get_param(PF, mdl, "Z_INIT_ALE_REMAPPING", useALE, &
                  "If True, then remap straight to model coordinate from file.",&
-                 default=.true.)
+                 default=.false.)
   call get_param(PF, mdl, "Z_INIT_REMAPPING_SCHEME", remapScheme, &
                  "The remapping scheme to use if using Z_INIT_ALE_REMAPPING is True.", &
-                 default="PLM")
+                 default="PPM_IH4")
   call get_param(PF, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
                  "This sets the default value for the various _ANSWER_DATE parameters.", &
                  default=99991231)
