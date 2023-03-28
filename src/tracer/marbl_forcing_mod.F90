@@ -51,9 +51,6 @@ end type marbl_forcing_diag_ids
 
 !> Control structure for this module
 type, public :: marbl_forcing_CS
-  logical :: read_ndep                      !< If true, use nitrogen deposition supplied from an input file.
-                                            !! This is temporary, we will always read NDEP
-  character(len=200) :: ndep_file           !< If read_ndep, then this is the file from which to read
   logical :: read_riv_fluxes                !< If true, use river fluxes supplied from an input file.
                                             !! This is temporary, we will always read river fluxes
   type(forcing_timeseries_dataset) :: riv_flux_dataset !< File and time axis information for river fluxes
@@ -74,8 +71,6 @@ type, public :: marbl_forcing_CS
   type(marbl_forcing_diag_ids) :: diag_ids  !< used for registering and posting some MARBL forcing fields as diagnostics
 
 
-  integer :: id_noydep   = -1     !< id number for time_interp_external.
-  integer :: id_nhxdep   = -1     !< id number for time_interp_external.
   integer :: id_din_riv  = -1     !< id number for time_interp_external.
   integer :: id_don_riv  = -1     !< id number for time_interp_external.
   integer :: id_dip_riv  = -1     !< id number for time_interp_external.
@@ -152,23 +147,6 @@ contains
         "Fraction of coarse dust from the atmosphere that is iron", default=0.035)
     call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
         "Fraction of dust from sea ice that is iron", default=0.035)
-
-    call get_param(param_file, mdl, "READ_NDEP", CS%read_ndep, &
-        "If true, use nitrogen deposition supplied from "//&
-        "an input file", default=.true.)
-    if (CS%read_ndep) then
-      call get_param(param_file, mdl, "NDEP_FILE", CS%ndep_file, &
-            "The file in which the nitrogen deposition is found in "//&
-            "variables NOy_deposition and NHx_deposition.", &
-            default='ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc')
-      if (scan(CS%ndep_file,'/') == 0) then
-        ! CS%ndep_file = trim(inputdir) // trim(CS%ndep_file)
-        CS%ndep_file = trim(slasher(inputdir2)) // trim(CS%ndep_file)
-        call log_param(param_file, mdl, "INPUTDIR/NDEP_FILE", CS%ndep_file)
-      end if
-      CS%id_noydep = init_external_field(CS%ndep_file, 'NDEP_NOy_month', domain=G%Domain%mpp_domain)
-      CS%id_nhxdep = init_external_field(CS%ndep_file, 'NDEP_NHx_month', domain=G%Domain%mpp_domain)
-    end if
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
@@ -340,8 +318,8 @@ contains
   ! Note: ice fraction and u10_sqr are handled in mom_surface_forcing because of CFCs
   subroutine convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                            seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
-                                           afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
-                                           Time, G, US, i0, j0, fluxes, CS)
+                                           nhx_dep, noy_dep, afracr, swnet_afracr, ifrac_n, &
+                                           swpen_ifrac_n, Time, G, US, i0, j0, fluxes, CS)
 
     real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
     real, dimension(:,:),   pointer, intent(in)    :: atm_coarse_dust_flux !< atmosphere coarse dust flux from IOB
@@ -349,6 +327,8 @@ contains
     real, dimension(:,:),   pointer, intent(in)    :: atm_bc_flux          !< atmosphere black carbon flux from IOB
     real, dimension(:,:),   pointer, intent(in)    :: seaice_bc_flux       !< sea ice black carbon flux from IOB
     real, dimension(:,:),   pointer, intent(in)    :: afracr               !< open ocean fraction
+    real, dimension(:,:),   pointer, intent(in)    :: nhx_dep              !< NHx flux from atmosphere
+    real, dimension(:,:),   pointer, intent(in)    :: noy_dep              !< NOy flux from atmosphere
     real, dimension(:,:),   pointer, intent(in)    :: swnet_afracr         !< shortwave flux * open ocean fraction
     real, dimension(:,:,:), pointer, intent(in)    :: ifrac_n              !< per-category ice fraction
     real, dimension(:,:,:), pointer, intent(in)    :: swpen_ifrac_n        !< per-category shortwave flux * ice fraction
@@ -360,7 +340,7 @@ contains
     type(unit_scale_type),           intent(in)    :: US                   !< A dimensional unit scaling type
     integer,                         intent(in)    :: i0                   !< i index offset
     integer,                         intent(in)    :: j0                   !< j index offset
-    type(forcing),                   intent(inout) :: fluxes        !< MARBL-specific forcing fields
+    type(forcing),                   intent(inout) :: fluxes               !< MARBL-specific forcing fields
     type(marbl_forcing_CS), pointer, intent(inout) :: CS                   !< A pointer that is set to point to
                                                                            !! control structure for MARBL forcing
 
@@ -377,12 +357,12 @@ contains
     real :: dust_flux_conversion     !< TODO: define this (local) term
     real :: iron_flux_conversion     !< TODO: define this (local) term
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
-                                     !! nitrogen deposition [g(N) m-2 s-1 ~> mol L-2 T-2]
+                                     !! nitrogen deposition [kg(N) m-2 s-1 ~> mol L-2 T-2]
 
     if (.not. CS%use_marbl_tracers) return
 
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
-    ndep_conversion = (1/14.) * ((US%L_to_m)**2 * US%T_to_s)
+    ndep_conversion = (1000./14.) * ((US%L_to_m)**2 * US%T_to_s)
     dust_flux_conversion = US%kg_m2s_to_RZ_T * 0.1            ! kg / m^2 / s -> g / cm^2 / s
     iron_flux_conversion = US%kg_m2s_to_RZ_T * 1.e8 / molw_Fe ! kg / m^2 / s -> nmol / cm^2 / s
 
@@ -408,6 +388,10 @@ contains
                      CS%diag, mask=G%mask2dT(is:ie,js:je))
 
     do j=js,je ; do i=is,ie
+      ! Nitrogen Deposition
+      fluxes%nhx_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * nhx_dep(i-i0,j-j0)
+      fluxes%noy_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * noy_dep(i-i0,j-j0)
+
       if (associated(atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
         fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * dust_flux_conversion) * &
@@ -467,21 +451,6 @@ contains
       endif
 
     enddo; enddo
-
-    if (CS%read_ndep) then
-      call time_interp_external(CS%id_noydep,Time,time_varying_data)
-      fluxes%noy_dep = ndep_conversion * time_varying_data
-      call time_interp_external(CS%id_nhxdep,Time,time_varying_data)
-      fluxes%nhx_dep = ndep_conversion * time_varying_data
-      do j=js,je ; do i=is,ie
-        fluxes%noy_dep(i,j) = G%mask2dT(i,j) * fluxes%noy_dep(i,j)
-        fluxes%nhx_dep(i,j) = G%mask2dT(i,j) * fluxes%nhx_dep(i,j)
-      enddo; enddo
-    else
-      ! This is temporary while I test the file we created
-      fluxes%noy_dep(:,:) = 0.
-      fluxes%nhx_dep(:,:) = 0.
-    endif
 
     ! River fluxes
     if (CS%read_riv_fluxes) then

@@ -416,6 +416,30 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   ! For those fields, we use do_sum = .true.
 
   !----
+  ! nhx deposition
+  !----
+  ice_ocean_boundary%nhx_dep(:,:) = 0._ESMF_KIND_R8
+  call state_getimport(importState, 'Faxa_ndep',  &
+       isc, iec, jsc, jec, ice_ocean_boundary%nhx_dep(:,:), &
+       areacor=med2mod_areacor, esmf_ind=1, rc=rc)
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+       line=__LINE__, &
+       file=__FILE__)) &
+       return  ! bail out
+
+  !----
+  ! noy deposition
+  !----
+  ice_ocean_boundary%noy_dep(:,:) = 0._ESMF_KIND_R8
+  call state_getimport(importState, 'Faxa_ndep',  &
+       isc, iec, jsc, jec, ice_ocean_boundary%noy_dep(:,:), &
+       areacor=med2mod_areacor, esmf_ind=2, rc=rc)
+  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+       line=__LINE__, &
+       file=__FILE__)) &
+       return  ! bail out
+
+  !----
   ! fine dust flux from atmosphere
   !----
   ice_ocean_boundary%atm_fine_dust_flux(:,:) = 0._ESMF_KIND_R8

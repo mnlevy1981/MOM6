@@ -195,6 +195,8 @@ type, public :: ice_ocean_boundary_type
                                                               !< on ocean surface [Pa]
   real, pointer, dimension(:,:) :: ice_fraction      =>NULL() !< fractional ice area [nondim]
   real, pointer, dimension(:,:) :: u10_sqr           =>NULL() !< wind speed squared at 10m [m2/s2]
+  real, pointer, dimension(:,:) :: nhx_dep           =>NULL() !< Nitrogen deposition [g/m^2/s]
+  real, pointer, dimension(:,:) :: noy_dep           =>NULL() !< Nitrogen deposition [g/m^2/s]
   real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
@@ -589,6 +591,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   ! (constants, values from netCDF, etc)
   call convert_marbl_IOB_to_forcings(IOB%atm_fine_dust_flux, IOB%atm_coarse_dust_flux, &
                                      IOB%seaice_dust_flux, IOB%atm_bc_flux, IOB%seaice_bc_flux, &
+                                     IOB%nhx_dep, IOB%noy_dep, &
                                      IOB%afracr, IOB%swnet_afracr, IOB%ifrac_n, IOB%swpen_ifrac_n, &
                                      Time, G, US, i0, j0, fluxes, CS%marbl_forcing_CSp)
 

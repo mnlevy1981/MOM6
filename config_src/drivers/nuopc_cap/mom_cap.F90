@@ -673,6 +673,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% mi (isc:iec,jsc:jec),              &
              Ice_ocean_boundary% ice_fraction (isc:iec,jsc:jec),    &
              Ice_ocean_boundary% u10_sqr (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
              Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
              Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
              Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
@@ -699,6 +701,13 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   Ice_ocean_boundary%mi              = 0.0
   Ice_ocean_boundary%ice_fraction    = 0.0
   Ice_ocean_boundary%u10_sqr         = 0.0
+  Ice_ocean_boundary%nhx_dep         = 0.0
+  Ice_ocean_boundary%noy_dep         = 0.0
+  Ice_ocean_boundary%atm_fine_dust_flux   = 0.0
+  Ice_ocean_boundary%atm_coarse_dust_flux = 0.0
+  Ice_ocean_boundary%seaice_dust_flux     = 0.0
+  Ice_ocean_boundary%atm_bc_flux          = 0.0
+  Ice_ocean_boundary%seaice_bc_flux       = 0.0
   Ice_ocean_boundary%p               = 0.0
   Ice_ocean_boundary%lrunoff         = 0.0
   Ice_ocean_boundary%frunoff         = 0.0
@@ -777,6 +786,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_rofi"                  , "will provide") !-> ice runoff
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac"                   , "will provide") !-> ice fraction
   call fld_list_add(fldsToOcn_num, fldsToOcn, "So_duu10n"                  , "will provide") !-> wind^2 at 10m
+  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_ndep"                  , "will provide", & !-> nitrogen deposition
+                    ungridded_lbound=1, ungridded_ubound=2)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstwet"                , "will provide", &
                     ungridded_lbound=1, ungridded_ubound=4)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstdry"                , "will provide", &
