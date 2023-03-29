@@ -1494,13 +1494,13 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
   type(surface_forcing_CS), pointer       :: CS     !< pointer to control structure returned by
                                                     !! a previous surface_forcing_init call
   ! Local variables
-  real, pointer, dimension(:,:) :: ice_fraction         =>NULL() !< fractional ice area [nondim]
-  real, pointer, dimension(:,:) :: u10_sqr              =>NULL() !< wind speed squared at 10m [m2/s2]
   real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_bc_flux          =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_bc_flux       =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
+  real, pointer, dimension(:,:) :: nhx_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s]
+  real, pointer, dimension(:,:) :: noy_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s]
   integer :: isc, iec, jsc, jec
 
   ! Necessary null pointers for arguments to convert_marbl_IOB_to_forcings()
@@ -1519,19 +1519,21 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
 
   ! Allocate memory for pointers
   isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec
-  allocate ( ice_fraction (isc:iec,jsc:jec),         &
-             u10_sqr (isc:iec,jsc:jec),              &
-             atm_fine_dust_flux (isc:iec,jsc:jec),   &
+  allocate ( atm_fine_dust_flux (isc:iec,jsc:jec),   &
              atm_coarse_dust_flux (isc:iec,jsc:jec), &
              seaice_dust_flux (isc:iec,jsc:jec),     &
              atm_bc_flux (isc:iec,jsc:jec),          &
-             seaice_bc_flux (isc:iec,jsc:jec))
+             seaice_bc_flux (isc:iec,jsc:jec),       &
+             nhx_dep (isc:iec,jsc:jec),              &
+             noy_dep (isc:iec,jsc:jec))
 
   atm_fine_dust_flux(:,:) = 0.0
   atm_coarse_dust_flux(:,:) = 0.0
   atm_bc_flux(:,:) = 0.0
   seaice_dust_flux(:,:) = 0.0
   seaice_bc_flux(:,:) = 0.0
+  nhx_dep(:,:) = 0.0
+  noy_dep(:,:) = 0.0
 
   call data_override(G%Domain, 'ice_fraction', fluxes%ice_fraction, day)
   call data_override(G%Domain, 'u10_sqr', fluxes%u10_sqr, day)
@@ -1540,18 +1542,21 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
   call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day)
   call data_override(G%Domain, 'seaice_dust_flux', seaice_dust_flux, day)
   call data_override(G%Domain, 'seaice_bc_flux', seaice_bc_flux, day)
+  call data_override(G%Domain, 'nhx_dep', nhx_dep, day)
+  call data_override(G%Domain, 'noy_dep', noy_dep, day)
 
   call convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                      seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
+                                     nhx_dep, noy_dep, &
                                      afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
                                      day, G, US, 0, 0, fluxes, CS%marbl_forcing_CSp)
-  deallocate ( ice_fraction,         &
-               u10_sqr,              &
-               atm_fine_dust_flux,   &
+  deallocate ( atm_fine_dust_flux,   &
                atm_coarse_dust_flux, &
                seaice_dust_flux,     &
                atm_bc_flux,          &
-               seaice_bc_flux)
+               seaice_bc_flux,       &
+               nhx_dep,              &
+               noy_dep)
 
 end subroutine marbl_forcing_from_data_override
 

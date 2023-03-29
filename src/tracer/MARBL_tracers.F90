@@ -875,7 +875,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
   integer :: i, j, k, is, ie, js, je, nz, m
-  real :: ndep_conversion
+  real :: ndep_conversion ! mol L-2 T-1 -> mol m-2 s-1
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   ndep_conversion = (US%m_to_L)**2 * US%s_to_T
@@ -927,7 +927,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%fe_dep_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j)
 
-      !       These are read from /glade/work/mlevy/cesm_inputdata/ndep_ocn_1850_w_nhx_emis_MOM_tx0.66v1_c210222.nc
+      !       MARBL wants ndep in (nmol/cm^2/s)
+      !       fluxes%noy_dep and %nhx_dep are in mol L-2 T-1
+      !       ndep_conversion gets us to mol m-2 s-1
+      !       CS%ndep_scale_factor = 1e5 [mol m-2 s-1 -> nmol cm-2 s-1]
+      !       TODO: remove ndep_scale_factor from parameter, combine in ndep_conversion either
+      !             here or in marbl_forcing_mod.F90
       if (CS%nox_flux_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * &
                                                                              (ndep_conversion * CS%ndep_scale_factor)
