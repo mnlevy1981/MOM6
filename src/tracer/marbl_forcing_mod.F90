@@ -357,7 +357,7 @@ contains
     real :: dust_flux_conversion     !< TODO: define this (local) term
     real :: iron_flux_conversion     !< TODO: define this (local) term
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
-                                     !! nitrogen deposition [kg(N) m-2 s-1 ~> mol L-2 T-2]
+                                     !! nitrogen deposition [kg(N) m-2 s-1 ~> mol L-2 T-1]
 
     if (.not. CS%use_marbl_tracers) return
 

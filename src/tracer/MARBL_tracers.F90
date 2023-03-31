@@ -103,6 +103,7 @@ type, public :: MARBL_tracers_CS ; private
   logical :: request_Chl_from_MARBL     !< MARBL can provide Chl to use in set_pen_shortwave()
   integer :: ice_ncat                   !< Number of ice categories when use_ice_category_fields = True
   character(len=200) :: IC_file !< The file in which the age-tracer initial values cam be found.
+  logical :: ongrid                     !< True if IC_file is already interpolated to MOM grid
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
   type(MARBL_tracer_data), dimension(:), allocatable :: tracer_data  !< type containing tracer data and pointer
                                                                      !! into tracer registry
@@ -445,6 +446,11 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
     call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_IC_FILE", CS%IC_file)
   endif
+  call get_param(param_file, mdl, "MARBL_TRACERS_INIT_VERTICAL_REMAP_ONLY", CS%ongrid, &
+                 "If true, initial conditions are on the model horizontal grid. " //&
+                 "Extrapolation over missing ocean values is done using an ICE-9 "//&
+                 "procedure with vertical ALE remapping .", &
+                 default=.false.)
   ! ** FESEDFLUX
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
                  "The file in which the iron sediment flux forcing field can be found.", &
@@ -635,7 +641,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
         (CS%tracers_may_reinit .and. &
          .not. query_initialized(CS%tracer_data(m)%tr(:,:,:), name, CS%restart_CSp))) then
       ! TODO: added the ongrid optional argument, but is there a good way to detect if the file is on grid?
-      call MOM_initialize_tracer_from_Z(h, CS%tracer_data(m)%tr, G, GV, US, param_file, CS%IC_file, name)
+      call MOM_initialize_tracer_from_Z(h, CS%tracer_data(m)%tr, G, GV, US, param_file, &
+                                        CS%IC_file, name, ongrid=CS%ongrid)
       do k=1,GV%ke
         do j=G%jsc, G%jec
           do i=G%isc, G%iec
