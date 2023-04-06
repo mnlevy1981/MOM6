@@ -440,7 +440,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! ** Tracer initial conditions
   call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
                  "The file in which the MARBL tracers initial values can be found.", &
-                 default="ecosys_jan_IC_omip_latlon_1x1_180W_c230317.nc")
+                 default="ecosys_jan_IC_omip_latlon_1x1_180W_c230331.nc")
   if (scan(CS%IC_file,'/') == 0) then
     ! Add the directory if CS%IC_file is not already a complete path.
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
