@@ -21,6 +21,7 @@ use MOM_surface_forcing_nuopc, only: ice_ocean_boundary_type
 use MOM_grid,                  only: ocean_grid_type
 use MOM_domains,               only: pass_var
 use mpp_domains_mod,           only: mpp_get_compute_domain
+use MOM_error_handler,         only: MOM_error, WARNING
 
 ! By default make data private
 implicit none; private
@@ -93,6 +94,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   real(ESMF_KIND_R8), allocatable :: stky1(:,:),stky2(:,:),stky3(:,:)
   real(ESMF_KIND_R8), allocatable :: stkx(:,:,:)
   real(ESMF_KIND_R8), allocatable :: stky(:,:,:)
+  logical                         :: med_has_co2
   character(len=*)  , parameter   :: subname = '(mom_import)'
 
   rc = ESMF_SUCCESS
@@ -438,6 +440,32 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
        line=__LINE__, &
        file=__FILE__)) &
        return  ! bail out
+
+  !----
+  ! atmospheric CO2 concentration
+  ! may not be passed from atmosphere component,
+  ! in which case we nullify the pointer(s)
+  !----
+  if (associated(ice_ocean_boundary%atm_co2_prog)) then
+    ice_ocean_boundary%atm_co2_prog(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Sa_co2prog',  &
+         isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_prog(:,:), &
+         areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+     line=__LINE__, &
+     file=__FILE__)) &
+     return  ! bail out
+  end if
+  if (associated(ice_ocean_boundary%atm_co2_diag)) then
+    ice_ocean_boundary%atm_co2_diag(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Sa_co2diag',  &
+         isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_diag(:,:), &
+         areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+     line=__LINE__, &
+     file=__FILE__)) &
+     return  ! bail out
+  end if
 
   !----
   ! fine dust flux from atmosphere

@@ -197,6 +197,8 @@ type, public :: ice_ocean_boundary_type
   real, pointer, dimension(:,:) :: u10_sqr           =>NULL() !< wind speed squared at 10m [m2/s2]
   real, pointer, dimension(:,:) :: nhx_dep           =>NULL() !< Nitrogen deposition [kg/m^2/s]
   real, pointer, dimension(:,:) :: noy_dep           =>NULL() !< Nitrogen deposition [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_co2_prog      =>NULL() !< Prognostic atmospheric co2 concentration [ppm]
+  real, pointer, dimension(:,:) :: atm_co2_diag      =>NULL() !< Diagnostic atmospheric co2 concentration [ppm]
   real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]

@@ -730,7 +730,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
               Ice_ocean_boundary% hrofl (isc:iec,jsc:jec),           &
               Ice_ocean_boundary% hrofi (isc:iec,jsc:jec),           &
               Ice_ocean_boundary% hevap (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% hcond (isc:iec,jsc:jec))
+              Ice_ocean_boundary% hcond (isc:iec,jsc:jec),           &
+              Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
+              Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec))
 
     Ice_ocean_boundary%hrain           = 0.0
     Ice_ocean_boundary%hsnow           = 0.0
@@ -738,7 +740,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     Ice_ocean_boundary%hrofi           = 0.0
     Ice_ocean_boundary%hevap           = 0.0
     Ice_ocean_boundary%hcond           = 0.0
-  endif
+    Ice_ocean_boundary%atm_co2_prog    = 0.0
+    Ice_ocean_boundary%atm_co2_diag    = 0.0
+    endif
 
   call query_ocean_state(ocean_state, use_waves=use_waves, wave_method=wave_method)
   if (use_waves) then
@@ -816,6 +820,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_cond" , "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_rofl" , "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_rofi" , "will provide")
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Sa_co2prog"        , "will provide") !-> prognostic CO2 from atm
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Sa_co2diag"        , "will provide") !-> diagnostic CO2 from atm
   endif
 
   if (use_waves) then
@@ -1115,7 +1121,8 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
     end do
 
     ! realize the import and export fields using the mesh
-    call MOM_RealizeFields(importState, fldsToOcn_num, fldsToOcn, "Ocn import", mesh=Emesh, rc=rc)
+    call MOM_RealizeFields(importState, fldsToOcn_num, fldsToOcn, "Ocn import", &
+                           ice_ocean_boundary=Ice_ocean_boundary, mesh=Emesh, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
     call MOM_RealizeFields(exportState, fldsFrOcn_num, fldsFrOcn, "Ocn export", mesh=Emesh, rc=rc)
@@ -1406,7 +1413,8 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
 
     gridOut = gridIn ! for now out same as in
 
-    call MOM_RealizeFields(importState, fldsToOcn_num, fldsToOcn, "Ocn import", grid=gridIn, rc=rc)
+    call MOM_RealizeFields(importState, fldsToOcn_num, fldsToOcn, "Ocn import", &
+         ice_ocean_boundary=Ice_ocean_boundary, grid=gridIn, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
     call MOM_RealizeFields(exportState, fldsFrOcn_num, fldsFrOcn, "Ocn export", grid=gridOut, rc=rc)
@@ -2101,16 +2109,17 @@ subroutine State_SetScalar(value, scalar_id, State, mytask, scalar_name, scalar_
 end subroutine State_SetScalar
 
 !> Realize the import and export fields using either a grid or a mesh.
-subroutine MOM_RealizeFields(state, nfields, field_defs, tag, grid, mesh, rc)
-  type(ESMF_State)    , intent(inout)        :: state !< ESMF_State object for
-                                                      !! import/export fields.
-  integer             , intent(in)           :: nfields !< Number of fields.
-  type(fld_list_type) , intent(inout)        :: field_defs(:) !< Structure with field's
-                                                              !! information.
-  character(len=*)    , intent(in)           :: tag !< Import or export.
-  type(ESMF_Grid)     , intent(in), optional :: grid!< ESMF grid.
-  type(ESMF_Mesh)     , intent(in), optional :: mesh!< ESMF mesh.
-  integer             , intent(inout)        :: rc  !< Return code.
+subroutine MOM_RealizeFields(state, nfields, field_defs, tag, ice_ocean_boundary, grid, mesh, rc)
+  type(ESMF_State)             , intent(inout)           :: state !< ESMF_State object for
+                                                                  !! import/export fields.
+  integer                      , intent(in)              :: nfields !< Number of fields.
+  type(fld_list_type)          , intent(inout)           :: field_defs(:) !< Structure with field's
+                                                                          !! information.
+  type(ice_ocean_boundary_type), intent(inout), optional :: ice_ocean_boundary  !< May need to nullify atm_co2
+  character(len=*)             , intent(in)              :: tag !< Import or export.
+  type(ESMF_Grid)              , intent(in)   , optional :: grid!< ESMF grid.
+  type(ESMF_Mesh)              , intent(in)   , optional :: mesh!< ESMF mesh.
+  integer                      , intent(inout)           :: rc  !< Return code.
 
   ! local variables
   integer                     :: i
@@ -2189,6 +2198,18 @@ subroutine MOM_RealizeFields(state, nfields, field_defs, tag, grid, mesh, rc)
 
       call ESMF_LogWrite(subname // tag // " Field "// trim(field_defs(i)%stdname) // " is not connected.", &
         ESMF_LOGMSG_INFO)
+
+      if (present(ice_ocean_boundary)) then
+        if (trim(field_defs(i)%stdname) == 'Sa_co2prog') then
+          if(is_root_pe()) write(stdout,*) subname // tag // " Nullifying ice_ocean_boundary%atm_co2_prog"
+          deallocate(ice_ocean_boundary%atm_co2_prog)
+          nullify(ice_ocean_boundary%atm_co2_prog)
+        elseif (trim(field_defs(i)%stdname) == 'Sa_co2diag') then
+          if(is_root_pe()) write(stdout,*) subname // tag // " Nullifying ice_ocean_boundary%atm_co2_diag"
+          deallocate(ice_ocean_boundary%atm_co2_diag)
+          nullify(ice_ocean_boundary%atm_co2_diag)
+        endif
+      endif
 
       ! remove a not connected Field from State
       call ESMF_StateRemove(state, (/field_defs(i)%shortname/), rc=rc)
