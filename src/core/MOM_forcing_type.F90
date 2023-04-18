@@ -211,6 +211,8 @@ type, public :: forcing
   real, pointer, dimension(:,:) :: &
     noy_dep => NULL(),               & !< NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
     nhx_dep => NULL(),               & !< NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
+    atm_co2 => NULL(),               & !< Atmospheric CO2 Concentration [ppm]
+    atm_alt_co2 => NULL(),           & !< Alternate atmospheric CO2 Concentration [ppm]
     dust_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
     iron_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
     no3_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
@@ -3117,6 +3119,8 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   call myAlloc(fluxes%u10_sqr,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%noy_dep,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%nhx_dep,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%atm_co2,isd,ied,jsd,jed, marbl)
+  call myAlloc(fluxes%atm_alt_co2,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%dust_flux,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%iron_flux,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%no3_riv_flux,isd,ied,jsd,jed, marbl)

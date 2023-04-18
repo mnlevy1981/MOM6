@@ -67,6 +67,9 @@ type, public :: marbl_forcing_CS
   real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
   real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
   real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
+  real    :: atm_co2_const                  !< atmospheric CO2 (if specifying a constant value) [ppm]
+  real    :: atm_alt_co2_const              !< alternate atmospheric CO2 for _ALT_CO2 tracers
+                                            !! (if specifying a constant value) [ppm]
 
   type(marbl_forcing_diag_ids) :: diag_ids  !< used for registering and posting some MARBL forcing fields as diagnostics
 
@@ -147,6 +150,12 @@ contains
         "Fraction of coarse dust from the atmosphere that is iron", default=0.035)
     call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
         "Fraction of dust from sea ice that is iron", default=0.035)
+    call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
+        "Value to send to MARBL as xco2", &
+        default=284.317, units="ppm")
+    call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
+        "Value to send to MARBL as xco2_alt_co2", &
+        default=284.317, units="ppm")
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
@@ -391,6 +400,10 @@ contains
       ! Nitrogen Deposition
       fluxes%nhx_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * nhx_dep(i-i0,j-j0)
       fluxes%noy_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * noy_dep(i-i0,j-j0)
+
+      ! Atmospheric CO2
+      fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
+      fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_alt_co2_const
 
       if (associated(atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here

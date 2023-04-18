@@ -121,8 +121,6 @@ type, public :: MARBL_tracers_CS ; private
   character(len=200) :: fesedflux_file  !< name of [netCDF] file containing iron sediment flux
   character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
-  real :: atm_co2_const  !< atmospheric CO2 (if specifying a constant value)
-  real :: atm_alt_co2_const  !< alternate atmospheric CO2 for _ALT_CO2 tracers (if specifying a constant value)
 
   real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
                                  !! bottom layer of prescribed thickness
@@ -225,12 +223,6 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "MARBL_SETTINGS_FILE", CS%marbl_settings_file, &
                  "The name of a file from which to read the run-time "//&
                  "settings for MARBL.", default="marbl_in")
-  call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
-                 "Value to send to MARBL as xco2", &
-                 default=284.317, units="ppm")
-  call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
-                 "Value to send to MARBL as xco2_alt_co2", &
-                 default=284.317, units="ppm")
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
                  default=1., units="m")
@@ -726,7 +718,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
           CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
           CS%feventflux_in(i,j,k) = 0.
           CS%fesedflux_dz(i,j,k) = 0.
-        else if (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8) then
+        elseif (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8) then
           ! Otherwise, if lower interface is below bathymetry move interface to ocean bottom
           CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z_edges(k)
         end if
@@ -922,8 +914,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         endif
       endif
       !       These are okay, but need option to come in from coupler
-      if (CS%xco2_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = CS%atm_co2_const
-      if (CS%xco2_alt_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = CS%atm_alt_co2_const
+      if (CS%xco2_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = fluxes%atm_co2(i,j)
+      if (CS%xco2_alt_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = fluxes%atm_alt_co2(i,j)
 
       !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) &
@@ -1213,7 +1205,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
             if (zi(k) < 100.) then
               CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
                   CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * MARBL_instances%interior_tendencies(m,k)
-            else if (zi(k-1) < 100.) then
+            elseif (zi(k-1) < 100.) then
               CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
                   CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * &
                                                                         ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * &
@@ -1251,7 +1243,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_2d(:,:), &
                          CS%diag, mask=ref_mask(:,:))
         end if
-      else if (allocated(CS%interior_tendency_diags(m)%field_3d)) then
+      elseif (allocated(CS%interior_tendency_diags(m)%field_3d)) then
         call post_data(CS%interior_tendency_diags(m)%id, CS%interior_tendency_diags(m)%field_3d(:,:,:), CS%diag)
       else
         write(log_message, "(A, I0, A, I0, A)") "Diagnostic number ", m, " post id ", &

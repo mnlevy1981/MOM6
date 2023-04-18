@@ -758,7 +758,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
           zbot(i,j) = ztop(i,j) + h_diag(i,j,k)*GV%H_to_m
           if (zbot(i,j) <= 100.0) then
             frac_under_100m(i,j,k) = 1.0
-          else if (ztop(i,j) < 100.0) then
+          elseif (ztop(i,j) < 100.0) then
             frac_under_100m(i,j,k) = (100.0 - ztop(i,j)) / (zbot(i,j) - ztop(i,j))
           else
             frac_under_100m(i,j,k) = 0.0
