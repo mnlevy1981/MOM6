@@ -1,6 +1,6 @@
 !> This module provides a common datatype to provide forcing for MARBL tracers
 !! regardless of driver
-module marbl_forcing_mod
+module MARBL_forcing_mod
 
 !! This module exists to house code used by multiple drivers in config_src/
 !! for passing forcing fields to MARBL
@@ -8,7 +8,7 @@ module marbl_forcing_mod
 
 use MOM_diag_mediator,        only : safe_alloc_ptr, diag_ctrl, register_diag_field, post_data
 use MOM_time_manager,         only : time_type
-use MOM_error_handler,        only : MOM_error, WARNING
+use MOM_error_handler,        only : MOM_error, WARNING, FATAL
 use MOM_file_parser,          only : get_param, log_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
 use MOM_unit_scaling,         only : unit_scale_type
@@ -86,15 +86,19 @@ type, public :: marbl_forcing_CS
 
   logical :: use_marbl_tracers    !< most functions can return immediately
                                   !! MARBL tracers are turned off
+  logical :: atm_co2_prog         !< If True, use prognostic CO2 from atmosphere
+  logical :: atm_co2_diag         !< If True, use diagnostic CO2 from atmosphere
+  logical :: atm_alt_co2_prog     !< If True, use prognostic CO2 from atmosphere as ALT_CO2
+  logical :: atm_alt_co2_diag     !< If True, use diagnostic CO2 from atmosphere as ALT_CO2
 
 end type marbl_forcing_CS
 
-public :: marbl_forcing_init
+public :: MARBL_forcing_init
 public :: convert_marbl_IOB_to_forcings
 
 contains
 
-  subroutine marbl_forcing_init(G, param_file, diag, day, inputdir, use_marbl, CS)
+  subroutine MARBL_forcing_init(G, param_file, diag, day, inputdir, use_marbl, CS)
     type(ocean_grid_type),           intent(in)    :: G           !< The ocean's grid structure
     type(param_file_type),           intent(in)    :: param_file  !< A structure to parse for run-time parameters
     type(diag_ctrl), target,         intent(in)    :: diag        !< Structure used to regulate diagnostic output.
@@ -105,6 +109,8 @@ contains
                                                                   !! structure for MARBL forcing
 
     character(len=40)  :: mdl = "MOM_forcing_type"  ! This module's name.
+    character(len=15)  :: atm_co2_opt
+    character(len=200) :: err_message
     character(len=200) :: inputdir2 ! The directory where the input files are.
     integer :: riv_flux_file_start_year
     integer :: riv_flux_file_end_year
@@ -150,12 +156,34 @@ contains
         "Fraction of coarse dust from the atmosphere that is iron", default=0.035)
     call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
         "Fraction of dust from sea ice that is iron", default=0.035)
-    call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
-        "Value to send to MARBL as xco2", &
-        default=284.317, units="ppm")
-    call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
-        "Value to send to MARBL as xco2_alt_co2", &
-        default=284.317, units="ppm")
+    call get_param(param_file, mdl, "ATM_CO2_OPT", atm_co2_opt, &
+        "Source of atmospheric CO2 [const, diagnostic, or prognostic]", &
+        default="const")
+    CS%atm_co2_prog = (trim(atm_co2_opt) == "prognostic")
+    CS%atm_co2_diag = (trim(atm_co2_opt) == "diagnostic")
+    if (.not. (CS%atm_co2_prog .or. CS%atm_co2_diag)) then
+      if (trim(atm_co2_opt) /= "const") then
+        write(err_message, "(3A)") "'", trim(atm_co2_opt), "' is not a valid ATM_CO2_OPT value"
+        call MOM_error(FATAL, err_message)
+      end if
+      call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
+          "Value to send to MARBL as xco2", &
+          default=284.317, units="ppm")
+    end if
+    call get_param(param_file, mdl, "ATM_ALT_CO2_OPT", atm_co2_opt, &
+        "Source of alternate atmospheric CO2 [const, diagnostic, or prognostic]", &
+        default="const")
+    CS%atm_alt_co2_prog = (trim(atm_co2_opt) == "prognostic")
+    CS%atm_alt_co2_diag = (trim(atm_co2_opt) == "diagnostic")
+    if (.not. (CS%atm_alt_co2_prog .or. CS%atm_alt_co2_diag)) then
+      if (trim(atm_co2_opt) /= "const") then
+        write(err_message, "(3A)") "'", trim(atm_co2_opt), "' is not a valid ATM_ALT_CO2_OPT value"
+        call MOM_error(FATAL, err_message)
+      end if
+      call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
+          "Value to send to MARBL as xco2_alt_co2", &
+          default=284.317, units="ppm")
+    end if
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
@@ -322,12 +350,13 @@ contains
                                                           "Dissolved Inorganic Carbon Riverine Flux, Alternative CO2", &
                                                           "mmol/m^3 m/s")
 
-  end subroutine marbl_forcing_init
+  end subroutine MARBL_forcing_init
 
   ! Note: ice fraction and u10_sqr are handled in mom_surface_forcing because of CFCs
   subroutine convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                            seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
-                                           nhx_dep, noy_dep, afracr, swnet_afracr, ifrac_n, &
+                                           nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
+                                           afracr, swnet_afracr, ifrac_n, &
                                            swpen_ifrac_n, Time, G, US, i0, j0, fluxes, CS)
 
     real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
@@ -338,6 +367,8 @@ contains
     real, dimension(:,:),   pointer, intent(in)    :: afracr               !< open ocean fraction
     real, dimension(:,:),   pointer, intent(in)    :: nhx_dep              !< NHx flux from atmosphere
     real, dimension(:,:),   pointer, intent(in)    :: noy_dep              !< NOy flux from atmosphere
+    real, dimension(:,:),   pointer, intent(in)    :: atm_co2_prog         !< Prognostic atmospheric CO2 concentration
+    real, dimension(:,:),   pointer, intent(in)    :: atm_co2_diag         !< Diagnostic atmospheric CO2 concentration
     real, dimension(:,:),   pointer, intent(in)    :: swnet_afracr         !< shortwave flux * open ocean fraction
     real, dimension(:,:,:), pointer, intent(in)    :: ifrac_n              !< per-category ice fraction
     real, dimension(:,:,:), pointer, intent(in)    :: swpen_ifrac_n        !< per-category shortwave flux * ice fraction
@@ -402,8 +433,36 @@ contains
       fluxes%noy_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * noy_dep(i-i0,j-j0)
 
       ! Atmospheric CO2
-      fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
-      fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_alt_co2_const
+      if (CS%atm_co2_prog) then
+        if (associated(atm_co2_prog)) then
+          fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
+        else
+          call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+        end if
+      elseif (CS%atm_co2_diag) then
+        if (associated(atm_co2_diag)) then
+          fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
+        else
+          call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+        end if
+      else
+        fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
+      end if
+      if (CS%atm_alt_co2_prog) then
+        if (associated(atm_co2_prog)) then
+          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
+        else
+          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+        end if
+      elseif (CS%atm_alt_co2_diag) then
+        if (associated(atm_co2_diag)) then
+          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
+        else
+          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+        end if
+      else
+        fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_alt_co2_const
+      endif
 
       if (associated(atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
@@ -559,4 +618,4 @@ contains
 
   end subroutine convert_marbl_IOB_to_forcings
 
-end module marbl_forcing_mod
+end module MARBL_forcing_mod

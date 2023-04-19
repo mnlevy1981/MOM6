@@ -38,8 +38,8 @@ use MOM_variables,        only : surface
 use user_revise_forcing,  only : user_alter_forcing, user_revise_forcing_init
 use user_revise_forcing,  only : user_revise_forcing_CS
 use iso_fortran_env,      only : int64
-use marbl_forcing_mod,    only : marbl_forcing_CS, marbl_forcing_init
-use marbl_forcing_mod,    only : convert_marbl_IOB_to_forcings
+use MARBL_forcing_mod,    only : marbl_forcing_CS, MARBL_forcing_init
+use MARBL_forcing_mod,    only : convert_marbl_IOB_to_forcings
 
 implicit none ; private
 
@@ -593,7 +593,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   ! (constants, values from netCDF, etc)
   call convert_marbl_IOB_to_forcings(IOB%atm_fine_dust_flux, IOB%atm_coarse_dust_flux, &
                                      IOB%seaice_dust_flux, IOB%atm_bc_flux, IOB%seaice_bc_flux, &
-                                     IOB%nhx_dep, IOB%noy_dep, &
+                                     IOB%nhx_dep, IOB%noy_dep, IOB%atm_co2_prog, IOB%atm_co2_diag, &
                                      IOB%afracr, IOB%swnet_afracr, IOB%ifrac_n, IOB%swpen_ifrac_n, &
                                      Time, G, US, i0, j0, fluxes, CS%marbl_forcing_CSp)
 
@@ -1428,7 +1428,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   endif
 
   ! Set up MARBL forcing control structure
-  call marbl_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
+  call MARBL_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
 
   if (present(restore_salt)) then ; if (restore_salt) then
     salt_file = trim(CS%inputdir) // trim(CS%salt_restore_file)

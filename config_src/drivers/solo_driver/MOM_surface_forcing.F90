@@ -55,8 +55,8 @@ use BFB_surface_forcing,    only : BFB_buoyancy_forcing
 use BFB_surface_forcing,    only : BFB_surface_forcing_init, BFB_surface_forcing_CS
 use dumbbell_surface_forcing,    only : dumbbell_surface_forcing_init, dumbbell_surface_forcing_CS
 use dumbbell_surface_forcing, only    : dumbbell_buoyancy_forcing
-use marbl_forcing_mod,    only : marbl_forcing_CS, marbl_forcing_init
-use marbl_forcing_mod,    only : convert_marbl_IOB_to_forcings
+use MARBL_forcing_mod,    only : marbl_forcing_CS, MARBL_forcing_init
+use MARBL_forcing_mod,    only : convert_marbl_IOB_to_forcings
 
 implicit none ; private
 
@@ -350,7 +350,7 @@ subroutine set_forcing(sfc_state, forces, fluxes, day_start, day_interval, G, US
   endif
 
   if (CS%use_marbl_tracers) then
-    call marbl_forcing_from_data_override(fluxes, day_center, G, US, CS)
+    call MARBL_forcing_from_data_override(fluxes, day_center, G, US, CS)
   endif
 
   if (associated(CS%tracer_flow_CSp)) then
@@ -1486,7 +1486,7 @@ end subroutine buoyancy_forcing_linear
 
 
 ! Sets the necessary MARBL forcings via the data override facility.
-subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
+subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
   type(forcing),            intent(inout) :: fluxes !< A structure containing thermodynamic forcing fields
   type(time_type),          intent(in)    :: day    !< The time of the fluxes
   type(ocean_grid_type),    intent(inout) :: G      !< The ocean's grid structure
@@ -1494,6 +1494,8 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
   type(surface_forcing_CS), pointer       :: CS     !< pointer to control structure returned by
                                                     !! a previous surface_forcing_init call
   ! Local variables
+  real, pointer, dimension(:,:) :: atm_co2_prog         =>NULL() !< Prognostic atmospheric CO2 concentration [ppm]
+  real, pointer, dimension(:,:) :: atm_co2_diag         =>NULL() !< Diagnostic atmospheric CO2 concentration [ppm]
   real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
   real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
@@ -1510,7 +1512,7 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
   real, pointer, dimension(:,:,:) :: swpen_ifrac_n =>NULL()
   real, pointer, dimension(:,:,:) :: ifrac_n       =>NULL()
 
-  call callTree_enter("marbl_forcing_from_data_override, MOM_surface_forcing.F90")
+  call callTree_enter("MARBL_forcing_from_data_override, MOM_surface_forcing.F90")
 
   if (.not.CS%dataOverrideIsInitialized) then
     call data_override_init(G%Domain)
@@ -1519,7 +1521,9 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
 
   ! Allocate memory for pointers
   isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec
-  allocate ( atm_fine_dust_flux (isc:iec,jsc:jec),   &
+  allocate ( atm_co2_prog   (isc:iec,jsc:jec),       &
+             atm_co2_diag   (isc:iec,jsc:jec),       &
+             atm_fine_dust_flux (isc:iec,jsc:jec),   &
              atm_coarse_dust_flux (isc:iec,jsc:jec), &
              seaice_dust_flux (isc:iec,jsc:jec),     &
              atm_bc_flux (isc:iec,jsc:jec),          &
@@ -1527,6 +1531,8 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
              nhx_dep (isc:iec,jsc:jec),              &
              noy_dep (isc:iec,jsc:jec))
 
+  atm_co2_prog(:,:) = 0.0
+  atm_co2_diag(:,:) = 0.0
   atm_fine_dust_flux(:,:) = 0.0
   atm_coarse_dust_flux(:,:) = 0.0
   atm_bc_flux(:,:) = 0.0
@@ -1537,6 +1543,8 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
 
   call data_override(G%Domain, 'ice_fraction', fluxes%ice_fraction, day)
   call data_override(G%Domain, 'u10_sqr', fluxes%u10_sqr, day)
+  call data_override(G%Domain, 'atm_co2_prog', atm_co2_prog, day)
+  call data_override(G%Domain, 'atm_co2_diag', atm_co2_diag, day)
   call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day)
   call data_override(G%Domain, 'atm_coarse_dust_flux', atm_coarse_dust_flux, day)
   call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day)
@@ -1547,10 +1555,12 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
 
   call convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                      seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
-                                     nhx_dep, noy_dep, &
+                                     nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
                                      afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
                                      day, G, US, 0, 0, fluxes, CS%marbl_forcing_CSp)
-  deallocate ( atm_fine_dust_flux,   &
+  deallocate ( atm_co2_prog,         &
+               atm_co2_diag,         &
+               atm_fine_dust_flux,   &
                atm_coarse_dust_flux, &
                seaice_dust_flux,     &
                atm_bc_flux,          &
@@ -1558,7 +1568,7 @@ subroutine marbl_forcing_from_data_override(fluxes, day, G, US, CS)
                nhx_dep,              &
                noy_dep)
 
-end subroutine marbl_forcing_from_data_override
+end subroutine MARBL_forcing_from_data_override
 
 
 !> Save a restart file for the forcing fields
@@ -1987,7 +1997,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
   endif
 
   ! Set up MARBL forcing control structure
-  call marbl_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
+  call MARBL_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
 
   call register_forcing_type_diags(Time, diag, US, CS%use_temperature, CS%handles)
 
