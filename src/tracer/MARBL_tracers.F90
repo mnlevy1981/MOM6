@@ -193,11 +193,11 @@ type, public :: MARBL_tracers_CS ; private
     fesedflux_dz  !< The thickness of the cell layers in the input data [Z ~> m]
 end type MARBL_tracers_CS
 
-  ! Module parameters
-  real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
-  real, parameter :: g_per_kg = 1000. !< convert from kg -> g (MARBL is cgs)
-  real, parameter :: m_per_cm = 0.01  !< convert from cm -> m
-  real, parameter :: atm_per_Pa = 1./101325.  !< convert from Pa -> atm
+! Module parameters
+real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
+real, parameter :: g_per_kg = 1000. !< convert from kg -> g (MARBL is cgs)
+real, parameter :: m_per_cm = 0.01  !< convert from cm -> m
+real, parameter :: atm_per_Pa = 1./101325.  !< convert from Pa -> atm
 
 contains
 

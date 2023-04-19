@@ -24,6 +24,9 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
+public :: MARBL_forcing_init
+public :: convert_marbl_IOB_to_forcings
+
 !> Data type used to store diagnostic index returned from register_diag_field()
 !! For the forcing fields that can be written via post_data()
 type, private :: marbl_forcing_diag_ids
@@ -86,15 +89,15 @@ type, public :: marbl_forcing_CS
 
   logical :: use_marbl_tracers    !< most functions can return immediately
                                   !! MARBL tracers are turned off
-  logical :: atm_co2_prog         !< If True, use prognostic CO2 from atmosphere
-  logical :: atm_co2_diag         !< If True, use diagnostic CO2 from atmosphere
-  logical :: atm_alt_co2_prog     !< If True, use prognostic CO2 from atmosphere as ALT_CO2
-  logical :: atm_alt_co2_diag     !< If True, use diagnostic CO2 from atmosphere as ALT_CO2
+  integer :: atm_co2_iopt         !< Integer version of atm_co2_opt, which determines source of atm_co2
+  integer :: atm_alt_co2_iopt     !< Integer version of atm_alt_co2_opt, which determines source of atm_alt_co2
 
 end type marbl_forcing_CS
 
-public :: MARBL_forcing_init
-public :: convert_marbl_IOB_to_forcings
+! Module parameters
+integer, parameter :: atm_co2_constant_iopt = 0
+integer, parameter :: atm_co2_prognostic_iopt = 1
+integer, parameter :: atm_co2_diagnostic_iopt = 2
 
 contains
 
@@ -159,13 +162,18 @@ contains
     call get_param(param_file, mdl, "ATM_CO2_OPT", atm_co2_opt, &
         "Source of atmospheric CO2 [const, diagnostic, or prognostic]", &
         default="const")
-    CS%atm_co2_prog = (trim(atm_co2_opt) == "prognostic")
-    CS%atm_co2_diag = (trim(atm_co2_opt) == "diagnostic")
-    if (.not. (CS%atm_co2_prog .or. CS%atm_co2_diag)) then
-      if (trim(atm_co2_opt) /= "const") then
+    select case (trim(atm_co2_opt))
+      case("prognostic")
+        CS%atm_co2_iopt = atm_co2_prognostic_iopt
+      case("diagnostic")
+        CS%atm_co2_iopt = atm_co2_diagnostic_iopt
+      case("const")
+        CS%atm_co2_iopt = atm_co2_constant_iopt
+      case DEFAULT
         write(err_message, "(3A)") "'", trim(atm_co2_opt), "' is not a valid ATM_CO2_OPT value"
         call MOM_error(FATAL, err_message)
-      end if
+    end select
+    if (CS%atm_co2_iopt == atm_co2_constant_iopt) then
       call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
           "Value to send to MARBL as xco2", &
           default=284.317, units="ppm")
@@ -173,13 +181,18 @@ contains
     call get_param(param_file, mdl, "ATM_ALT_CO2_OPT", atm_co2_opt, &
         "Source of alternate atmospheric CO2 [const, diagnostic, or prognostic]", &
         default="const")
-    CS%atm_alt_co2_prog = (trim(atm_co2_opt) == "prognostic")
-    CS%atm_alt_co2_diag = (trim(atm_co2_opt) == "diagnostic")
-    if (.not. (CS%atm_alt_co2_prog .or. CS%atm_alt_co2_diag)) then
-      if (trim(atm_co2_opt) /= "const") then
+    select case (trim(atm_co2_opt))
+      case("prognostic")
+        CS%atm_alt_co2_iopt = atm_co2_prognostic_iopt
+      case("diagnostic")
+        CS%atm_alt_co2_iopt = atm_co2_diagnostic_iopt
+      case("const")
+        CS%atm_alt_co2_iopt = atm_co2_constant_iopt
+      case DEFAULT
         write(err_message, "(3A)") "'", trim(atm_co2_opt), "' is not a valid ATM_ALT_CO2_OPT value"
         call MOM_error(FATAL, err_message)
-      end if
+    end select
+    if (CS%atm_alt_co2_iopt == atm_co2_constant_iopt) then
       call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
           "Value to send to MARBL as xco2_alt_co2", &
           default=284.317, units="ppm")
@@ -433,36 +446,38 @@ contains
       fluxes%noy_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * noy_dep(i-i0,j-j0)
 
       ! Atmospheric CO2
-      if (CS%atm_co2_prog) then
-        if (associated(atm_co2_prog)) then
-          fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
-        else
-          call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
-        end if
-      elseif (CS%atm_co2_diag) then
-        if (associated(atm_co2_diag)) then
-          fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
-        else
-          call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
-        end if
-      else
-        fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
-      end if
-      if (CS%atm_alt_co2_prog) then
-        if (associated(atm_co2_prog)) then
-          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
-        else
-          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
-        end if
-      elseif (CS%atm_alt_co2_diag) then
-        if (associated(atm_co2_diag)) then
-          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
-        else
-          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
-        end if
-      else
-        fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_alt_co2_const
-      endif
+      select case (CS%atm_co2_iopt)
+        case (atm_co2_prognostic_iopt)
+          if (associated(atm_co2_prog)) then
+            fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
+          else
+            call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+          end if
+        case (atm_co2_diagnostic_iopt)
+          if (associated(atm_co2_diag)) then
+            fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
+          else
+            call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+          end if
+        case (atm_co2_constant_iopt)
+          fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
+      end select
+      select case (CS%atm_alt_co2_iopt)
+        case (atm_co2_prognostic_iopt)
+          if (associated(atm_co2_prog)) then
+            fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
+          else
+            call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+          end if
+        case (atm_co2_diagnostic_iopt)
+          if (associated(atm_co2_diag)) then
+            fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
+          else
+            call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+          end if
+        case (atm_co2_constant_iopt)
+          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
+      end select
 
       if (associated(atm_fine_dust_flux)) then
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
