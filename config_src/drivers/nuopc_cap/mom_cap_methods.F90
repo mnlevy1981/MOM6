@@ -859,6 +859,16 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
        isc, iec, jsc, jec, dhdy_rot, ocean_grid, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
+  ! -------
+  ! CO2 Flux
+  ! -------
+  call ESMF_StateGet(exportState, 'Faoo_fco2_ocn', itemFlag, rc=rc)
+  if (itemFlag /= ESMF_STATEITEM_NOTFOUND) then
+    call State_SetExport(exportState, 'Faoo_fco2_ocn', &
+         isc, iec, jsc, jec, ocean_public%ocn_co2, ocean_grid, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+  endif
+
   deallocate(ssh, dhdx, dhdy, dhdx_rot, dhdy_rot)
 
 end subroutine mom_export

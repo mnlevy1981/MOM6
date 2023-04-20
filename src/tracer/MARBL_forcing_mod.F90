@@ -160,14 +160,14 @@ contains
     call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
         "Fraction of dust from sea ice that is iron", default=0.035)
     call get_param(param_file, mdl, "ATM_CO2_OPT", atm_co2_opt, &
-        "Source of atmospheric CO2 [const, diagnostic, or prognostic]", &
-        default="const")
+        "Source of atmospheric CO2 [constant, diagnostic, or prognostic]", &
+        default="constant")
     select case (trim(atm_co2_opt))
       case("prognostic")
         CS%atm_co2_iopt = atm_co2_prognostic_iopt
       case("diagnostic")
         CS%atm_co2_iopt = atm_co2_diagnostic_iopt
-      case("const")
+      case("constant")
         CS%atm_co2_iopt = atm_co2_constant_iopt
       case DEFAULT
         write(err_message, "(3A)") "'", trim(atm_co2_opt), "' is not a valid ATM_CO2_OPT value"
@@ -179,14 +179,14 @@ contains
           default=284.317, units="ppm")
     end if
     call get_param(param_file, mdl, "ATM_ALT_CO2_OPT", atm_co2_opt, &
-        "Source of alternate atmospheric CO2 [const, diagnostic, or prognostic]", &
-        default="const")
+        "Source of alternate atmospheric CO2 [constant, diagnostic, or prognostic]", &
+        default="constant")
     select case (trim(atm_co2_opt))
       case("prognostic")
         CS%atm_alt_co2_iopt = atm_co2_prognostic_iopt
       case("diagnostic")
         CS%atm_alt_co2_iopt = atm_co2_diagnostic_iopt
-      case("const")
+      case("constant")
         CS%atm_alt_co2_iopt = atm_co2_constant_iopt
       case DEFAULT
         write(err_message, "(3A)") "'", trim(atm_co2_opt), "' is not a valid ATM_ALT_CO2_OPT value"

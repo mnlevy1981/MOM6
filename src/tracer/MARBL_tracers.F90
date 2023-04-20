@@ -157,6 +157,8 @@ type, public :: MARBL_tracers_CS ; private
                                   !! [conc m/s]
   real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
                                          !! (dims: i, j, tracer) [conc m]
+  real, allocatable :: SFO(:,:,:)  !< surface flux output returned from MARBL for use in GCM
+                                   !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -180,6 +182,10 @@ type, public :: MARBL_tracers_CS ; private
   integer :: fesedflux_ind  !< index of MARBL forcing field array to copy iron sediment flux into
   integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
   integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
+
+  !> Number of surface flux outputs as well as specific indices for each one
+  integer :: sfo_cnt
+  integer :: flux_co2_ind
 
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
@@ -305,7 +311,17 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call print_marbl_log(MARBL_instances%StatusLog)
   call MARBL_instances%StatusLog%erase()
 
-  ! (4) Initialize forcing fields
+  ! (4) Request fields needed by MOM6
+  CS%sfo_cnt = 0
+
+  ! CO2 Flux to the atmosphere
+  CS%sfo_cnt = CS%sfo_cnt +1
+  call MARBL_instances%surface_flux_output%add_output(num_elements=1, &
+                                                      field_name="flux_co2", &
+                                                      output_id=CS%flux_co2_ind, &
+                                                      marbl_status_log=MARBL_instances%StatusLog)
+
+  ! (5) Initialize forcing fields
   !     i. store all surface forcing indices
   CS%u10_sqr_ind = -1
   CS%sss_ind = -1
@@ -551,8 +567,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   ! Allocate memory for surface tracer fluxes
   allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr))
   allocate(CS%RIV_FLUXES(SZI_(G), SZJ_(G), CS%ntr))
+  allocate(CS%SFO(SZI_(G), SZJ_(G), CS%sfo_cnt))
   CS%STF(:,:,:) = 0.
   CS%RIV_FLUXES(:,:,:) = 0.
+  CS%SFO(:,:,:) = 0.
 
   ! Register diagnostics returned from MARBL (surface flux first, then interior tendency)
   call register_MARBL_diags(MARBL_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
@@ -968,6 +986,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !     * Surface tracer flux
       CS%STF(i,j,:) = MARBL_instances%surface_fluxes(1,:) * m_per_cm
+
+      !     * Surface flux output
+      do m=1,CS%sfo_cnt
+        CS%SFO(i,j,m) = MARBL_instances%surface_flux_output%outputs_for_GCM(m)%forcing_field_0d(1)
+      end do
+
     end do
   end do
   ! Add River Fluxes to STF
@@ -1320,34 +1344,25 @@ end function MARBL_tracer_stock
 
 !> This subroutine extracts the surface fields from this tracer package that
 !! are to be shared with the atmosphere in coupled configurations.
-!! This particular tracer package does not report anything back to the coupler.
-subroutine MARBL_tracers_surface_state(state, h, G, CS)
-  type(ocean_grid_type),  intent(in)    :: G  !< The ocean's grid structure.
-  type(surface),          intent(inout) :: state !< A structure containing fields that
-                                              !! describe the surface state of the ocean.
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)), &
-                          intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2].
-  type(MARBL_tracers_CS),    pointer       :: CS !< The control structure returned by a previous
-                                              !! call to register_MARBL_tracers.
+subroutine MARBL_tracers_surface_state(sfc_state, G, US, CS)
+  type(ocean_grid_type),   intent(in)    :: G   !< The ocean's grid structure.
+  type(surface),           intent(inout) :: sfc_state !< A structure containing fields that
+                                                      !! describe the surface state of the ocean.
+  type(unit_scale_type),   intent(in)    :: US  !< A dimensional unit scaling type
+  type(MARBL_tracers_CS),  pointer       :: CS  !< The control structure returned by a previous
+                                                !! call to register_MARBL_tracers.
 
-  ! This particular tracer package does not report anything back to the coupler.
-  ! The code that is here is just a rough guide for packages that would.
+  ! Local variables
+  integer :: i, j, is, ie, js, je
 
-  integer :: m, is, ie, js, je, isd, ied, jsd, jed
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
 
   if (.not.associated(CS)) return
 
-  if (CS%coupled_tracers) then
-    do m=1,CS%ntr
-      !   This call loads the surface values into the appropriate array in the
-      ! coupler-type structure.
-      call coupler_type_set_data(CS%tracer_data(m)%tr(:,:,1), CS%ind_tr(m), ind_csurf, &
-                   state%tr_fields, idim=(/isd, is, ie, ied/), &
-                   jdim=(/jsd, js, je, jed/) )
-    enddo
-  endif
+  do j=js,je ; do i=is,ie
+    !  nmol/cm^2/s (positive down) to kg CO2/m^2/s (positive down)
+    sfc_state%sfc_co2(i,j) = US%kg_m2s_to_RZ_T * (44.0e-8*CS%SFO(i,j,CS%flux_co2_ind))
+  enddo ; enddo
 
 end subroutine MARBL_tracers_surface_state
 
@@ -1407,6 +1422,20 @@ subroutine MARBL_tracers_end(CS)
       end do
       deallocate(CS%tracer_data)
     end if
+    if (allocated(CS%ind_tr)) &
+      deallocate(CS%ind_tr)
+    if (allocated(CS%id_surface_flux_out)) &
+      deallocate(CS%id_surface_flux_out)
+    if (allocated(CS%fracr_cat_id)) &
+      deallocate(CS%fracr_cat_id)
+    if (allocated(CS%qsw_cat_id)) &
+      deallocate(CS%qsw_cat_id)
+    if (allocated(CS%STF)) &
+      deallocate(CS%STF)
+    if (allocated(CS%RIV_FLUXES)) &
+      deallocate(CS%RIV_FLUXES)
+    if (allocated(CS%SFO)) &
+      deallocate(CS%SFO)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end
