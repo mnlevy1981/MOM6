@@ -1359,10 +1359,12 @@ subroutine MARBL_tracers_surface_state(sfc_state, G, US, CS)
 
   if (.not.associated(CS)) return
 
-  do j=js,je ; do i=is,ie
-    !  nmol/cm^2/s (positive down) to kg CO2/m^2/s (positive down)
-    sfc_state%sfc_co2(i,j) = US%kg_m2s_to_RZ_T * (44.0e-8*CS%SFO(i,j,CS%flux_co2_ind))
-  enddo ; enddo
+  if (allocated(sfc_state%sfc_co2)) then
+    do j=js,je ; do i=is,ie
+      !  nmol/cm^2/s (positive down) to kg CO2/m^2/s (positive down)
+      sfc_state%sfc_co2(i,j) = US%kg_m2s_to_RZ_T * (44.0e-8*CS%SFO(i,j,CS%flux_co2_ind))
+    enddo ; enddo
+  endif
 
 end subroutine MARBL_tracers_surface_state
 
