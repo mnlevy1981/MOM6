@@ -134,7 +134,7 @@ contains
     if (.not. use_marbl) then
       CS%use_marbl_tracers = .false.
       return
-    end if
+    endif
 
     ! TODO: just use DIN_LOC_ROOT
     call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir2, default="/glade/work/mlevy/cesm_inputdata")
@@ -177,7 +177,7 @@ contains
       call get_param(param_file, mdl, "ATM_CO2_CONST", CS%atm_co2_const, &
           "Value to send to MARBL as xco2", &
           default=284.317, units="ppm")
-    end if
+    endif
     call get_param(param_file, mdl, "ATM_ALT_CO2_OPT", atm_co2_opt, &
         "Source of alternate atmospheric CO2 [constant, diagnostic, or prognostic]", &
         default="constant")
@@ -196,7 +196,7 @@ contains
       call get_param(param_file, mdl, "ATM_ALT_CO2_CONST", CS%atm_alt_co2_const, &
           "Value to send to MARBL as xco2_alt_co2", &
           default=284.317, units="ppm")
-    end if
+    endif
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
@@ -211,7 +211,7 @@ contains
         ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
         CS%riv_flux_dataset%file_name = trim(slasher(inputdir2)) // trim(CS%riv_flux_dataset%file_name)
         call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
-      end if
+      endif
       call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
                     ".true. for time-varying forcing, .false. for static forcing", default=.false.)
       if (CS%riv_flux_dataset%l_time_varying) then
@@ -226,7 +226,7 @@ contains
       else
         call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
                       "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
-      end if
+      endif
       call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
                                                 riv_flux_file_end_year, &
                                                 riv_flux_file_data_ref_year, &
@@ -455,7 +455,7 @@ contains
           enddo ; enddo
         else
           call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
-        end if
+        endif
       case (atm_co2_diagnostic_iopt)
         if (associated(atm_co2_diag)) then
           do j=js,je ; do i=is,ie
@@ -463,7 +463,7 @@ contains
           enddo ; enddo
         else
           call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
-        end if
+        endif
       case (atm_co2_constant_iopt)
         do j=js,je ; do i=is,ie
           fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
@@ -479,7 +479,7 @@ contains
           enddo ; enddo
         else
           call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
-        end if
+        endif
       case (atm_co2_diagnostic_iopt)
         if (associated(atm_co2_diag)) then
           do j=js,je ; do i=is,ie
@@ -487,7 +487,7 @@ contains
           enddo ; enddo
         else
           call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
-        end if
+        endif
       case (atm_co2_constant_iopt)
         do j=js,je ; do i=is,ie
           fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
@@ -502,7 +502,7 @@ contains
                                         atm_coarse_dust_flux(i-i0,j-j0) + &
                                         seaice_dust_flux(i-i0,j-j0))
       enddo ; enddo
-    end if
+    endif
 
     if (associated(atm_bc_flux)) then
       do j=js,je ; do i=is,ie
@@ -514,7 +514,7 @@ contains
             (CS%dust_ratio_thres - atm_coarse_dust_flux(i-i0,j-j0) / atm_fine_dust_flux(i-i0,j-j0))
         else
           atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset
-        end if
+        endif
         ! Contribution of atmospheric dust to iron flux
         fluxes%iron_flux(i,j) = (atm_fe_bioavail_frac * &
                                  (CS%iron_frac_in_atm_fine_dust * atm_fine_dust_flux(i-i0,j-j0) + &
@@ -535,7 +535,7 @@ contains
         fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
 
       enddo ; enddo
-    end if
+    endif
 
       ! Per ice-category forcings
       ! If the cap receives per-category fields, memory should be allocated in fluxes
@@ -546,7 +546,7 @@ contains
         do m=1,size(ifrac_n, 3)
           fluxes%fracr_cat(i,j,m+1) = min(1., ifrac_n(i-i0,j-j0,m))
           fluxes%qsw_cat(i,j,m+1)   = swpen_ifrac_n(i-i0,j-j0,m)
-        end do
+        enddo
         where (fluxes%fracr_cat(i,j,:) > 0.)
           fluxes%qsw_cat(i,j,:) = fluxes%qsw_cat(i,j,:) / fluxes%fracr_cat(i,j,:)
         elsewhere
@@ -618,7 +618,7 @@ contains
       fluxes%alk_alt_co2_riv_flux(:,:) = 0.
       fluxes%dic_riv_flux(:,:) = 0.
       fluxes%dic_alt_co2_riv_flux(:,:) = 0.
-    end if
+    endif
 
     ! Post to diags
     if (CS%diag_ids%no3_riv_flux > 0) &

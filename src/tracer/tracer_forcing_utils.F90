@@ -50,7 +50,7 @@ contains
             forcing_dataset%m2d_offset = real_to_time(year_to_sec(data_ref_year - model_ref_year))
         else
             forcing_dataset%data_forcing = real_to_time(year_to_sec(data_forcing_year))
-        end if
+        endif
 
     end subroutine forcing_timeseries_set_time_type_vars
 
@@ -71,7 +71,7 @@ contains
                 map_model_time_to_forcing_time = forcing_dataset%data_end
         else
             map_model_time_to_forcing_time = forcing_dataset%data_forcing
-        end if
+        endif
 
     end function map_model_time_to_forcing_time
 

@@ -614,7 +614,7 @@ subroutine register_tracer_diagnostics(Reg, h, Time, diag, G, GV, US, use_ALE, u
         conversion = GV%H_to_kg_m2
       else
         conversion = Tr%conv_scale
-      end if
+      endif
       ! We actually want conversion=Tr%conv_scale for all tracers, but introducing the local variable
       ! 'conversion' and setting it to GV%H_to_kg_m2 instead of 0.001*GV%H_to_kg_m2 for salt tracers
       ! keeps changes introduced by this refactoring limited to round-off level; as it turns out,

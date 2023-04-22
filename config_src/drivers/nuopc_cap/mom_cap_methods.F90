@@ -455,7 +455,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
      line=__LINE__, &
      file=__FILE__)) &
      return  ! bail out
-  end if
+  endif
   if (associated(ice_ocean_boundary%atm_co2_diag)) then
     ice_ocean_boundary%atm_co2_diag(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Sa_co2diag',  &
@@ -465,7 +465,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
      line=__LINE__, &
      file=__FILE__)) &
      return  ! bail out
-  end if
+  endif
 
   !----
   ! fine dust flux from atmosphere
@@ -585,7 +585,7 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
         line=__LINE__, &
         file=__FILE__)) &
         return  ! bail out
-  end if ! multiple ice categories
+  endif ! multiple ice categories
 
 end subroutine mom_import
 
@@ -975,7 +975,7 @@ subroutine State_GetImport_2d(state, fldname, isc, iec, jsc, jec, output, do_sum
      do_sum_loc = do_sum
   else
      do_sum_loc = .false.
-  end if
+  endif
 
   call ESMF_StateGet(State, trim(fldname), itemFlag, rc=rc)
   if (itemFlag /= ESMF_STATEITEM_NOTFOUND) then
@@ -987,7 +987,7 @@ subroutine State_GetImport_2d(state, fldname, isc, iec, jsc, jec, output, do_sum
          call state_getfldptr(state, trim(fldname), esmf_ind, dataptr1d, rc)
       else
          call state_getfldptr(state, trim(fldname), dataptr1d, rc)
-      end if
+      endif
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
       ! determine output array and apply area correction if present
@@ -1000,13 +1000,13 @@ subroutine State_GetImport_2d(state, fldname, isc, iec, jsc, jec, output, do_sum
                   output(i,j)  = output(i,j) + dataPtr1d(n) * areacor(n)
                else
                   output(i,j)  = output(i,j) + dataPtr1d(n)
-               end if
+               endif
             else
                if (present(areacor)) then
                   output(i,j)  = dataPtr1d(n) * areacor(n)
                else
                   output(i,j)  = dataPtr1d(n)
-               end if
+               endif
             endif
          enddo
       enddo
@@ -1071,7 +1071,7 @@ subroutine State_GetImport_3d(state, fldname, isc, iec, jsc, jec, lbd, ubd, outp
      do_sum_loc = do_sum
   else
      do_sum_loc = .false.
-  end if
+  endif
 
   call ESMF_StateGet(State, trim(fldname), itemFlag, rc=rc)
   if (itemFlag /= ESMF_STATEITEM_NOTFOUND) then
@@ -1093,13 +1093,13 @@ subroutine State_GetImport_3d(state, fldname, isc, iec, jsc, jec, lbd, ubd, outp
                        output(i,j,u)  = output(i,j,u) + dataPtr2d(u,n) * areacor(n)
                     else
                        output(i,j,u)  = output(i,j,u) + dataPtr2d(u,n)
-                    end if
+                    endif
                  else
                     if (present(areacor)) then
                        output(i,j,u)  = dataPtr2d(u,n) * areacor(n)
                     else
                        output(i,j,u)  = dataPtr2d(u,n)
-                    end if
+                    endif
                  endif
               enddo
            enddo
@@ -1170,7 +1170,7 @@ subroutine State_SetExport(state, fldname, isc, iec, jsc, jec, input, ocean_grid
         do n = 1,(size(dataPtr1d))
           dataPtr1d(n) = dataPtr1d(n) * areacor(n)
         enddo
-      end if
+      endif
 
     else if (geomtype == ESMF_GEOMTYPE_GRID) then
 

@@ -275,7 +275,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
   if (isPresent .and. isSet) then
     read(value,*) dbug
-  end if
+  endif
   write(logmsg,'(i6)') dbug
   call ESMF_LogWrite('MOM_cap:dbug = '//trim(logmsg), ESMF_LOGMSG_INFO)
 
@@ -536,7 +536,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   read(cvalue,*) i2o_per_cat
   if (is_root_pe()) then
       write(stdout,*) 'i2o_per_cat = ',i2o_per_cat
-  end if
+  endif
 
   ! Note that ice_ncat is set by the env_run.xml variable ICE_NCAT which is set
   ! by the ice component (default is 1)
@@ -545,13 +545,13 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   read(cvalue,*) ice_ncat
   if (is_root_pe()) then
       write(stdout,*) 'ice_ncat = ',ice_ncat
-  end if
+  endif
 
   if (i2o_per_cat) then
     Ice_ocean_boundary%ice_ncat = ice_ncat
   else
     Ice_ocean_boundary%ice_ncat = 0
-  end if
+  endif
 
   ! rsd need to figure out how to get this without share code
   !call shr_nuopc_get_component_instance(gcomp, inst_suffix, inst_index)
@@ -722,7 +722,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     Ice_ocean_boundary%swnet_afracr   = 0.0
     Ice_ocean_boundary%swpen_ifrac_n  = 0.0
     Ice_ocean_boundary%ifrac_n        = 0.0
-  end if
+  endif
 
   if (cesm_coupled) then
     allocate (Ice_ocean_boundary% hrain (isc:iec,jsc:jec),           &
@@ -742,7 +742,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     Ice_ocean_boundary%hcond           = 0.0
     Ice_ocean_boundary%atm_co2_prog    = 0.0
     Ice_ocean_boundary%atm_co2_diag    = 0.0
-    endif
+  endif
 
   call query_ocean_state(ocean_state, use_waves=use_waves, wave_method=wave_method)
   if (use_waves) then
@@ -811,7 +811,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
                       ungridded_lbound=1, ungridded_ubound=ice_ncat)
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac_n", "will provide", &
                       ungridded_lbound=1, ungridded_ubound=ice_ncat)
-  end if
+  endif
 
   if (cesm_coupled) then
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_lprec", "will provide")
@@ -1106,7 +1106,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
                "EPS_OMESH= ',i8,2(f21.13,3x),2(d21.5))"
         write(err_msg, frmt)n,lonMesh(n),lon(n), diff_lon, eps_omesh
         call MOM_error(FATAL, err_msg)
-      end if
+      endif
       diff_lat = abs(latMesh(n) - lat(n))
       if (diff_lat > eps_omesh) then
         frmt = "('ERROR: Difference between ESMF Mesh and MOM6 domain coords is"//&
@@ -1114,13 +1114,13 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
                "EPS_OMESH= ',i8,2(f21.13,3x),2(d21.5))"
         write(err_msg, frmt)n,latMesh(n),lat(n), diff_lat, eps_omesh
         call MOM_error(FATAL, err_msg)
-      end if
+      endif
       if (abs(maskMesh(n) - mask(n)) > 0) then
         frmt = "('ERROR: ESMF mesh and MOM6 domain masks are inconsistent! - "//&
                "MOM n, maskMesh(n), mask(n) = ',3(i8,2x))"
         write(err_msg, frmt)n,maskMesh(n),mask(n)
         call MOM_error(FATAL, err_msg)
-      end if
+      endif
     end do
 
     ! realize the import and export fields using the mesh
@@ -1166,7 +1166,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
           model_areas(k) = ocean_grid%AreaT(i,j) / ocean_grid%Rad_Earth_L**2
           mod2med_areacor(k) = model_areas(k) / mesh_areas(k)
           med2mod_areacor(k) = mesh_areas(k) / model_areas(k)
-        end if
+        endif
       end do
     end do
     deallocate(mesh_areas)
@@ -1187,7 +1187,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
             min_areacor_glob(1), max_areacor_glob(1), 'MOM6'
       write(stdout,'(2A,2g23.15,A )') trim(subname),' :  min_med2mod_areacor, max_med2mod_areacor ',&
             min_areacor_glob(2), max_areacor_glob(2), 'MOM6'
-    end if
+    endif
 #endif
 
     deallocate(ownedElemCoords)
@@ -1686,7 +1686,7 @@ subroutine ModelAdvance(gcomp, rc)
     if (dbug > 0) then
       call state_diagnose(importState,subname//':IS ',rc=rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
-    end if
+    endif
 
     !---------------
     ! Get ocean grid
@@ -1720,7 +1720,7 @@ subroutine ModelAdvance(gcomp, rc)
     if (dbug > 0) then
       call state_diagnose(exportState,subname//':ES ',rc=rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
-    end if
+    endif
   endif
 
   !---------------
@@ -1986,7 +1986,7 @@ subroutine ModelSetRunClock(gcomp, rc)
       call ESMF_AlarmSet(restart_alarm, clock=mclock, rc=rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
       call ESMF_LogWrite(subname//" Restart alarm is Created and Set", ESMF_LOGMSG_INFO)
-    end if
+    endif
 
     ! create a 1-shot alarm at the driver stop time
     stop_alarm = ESMF_AlarmCreate(mclock, ringtime=dstopTime, name = "stop_alarm", rc=rc)
@@ -2059,7 +2059,7 @@ subroutine ocean_model_finalize(gcomp, rc)
     write_restart = .true.
   else
     write_restart = .false.
-  end if
+  endif
   if (write_restart)call ESMF_LogWrite("No Restart Alarm, writing restart at Finalize ", &
                          ESMF_LOGMSG_INFO)
 
@@ -2288,7 +2288,7 @@ subroutine fld_list_add(num, fldlist, stdname, transferOffer, shortname, ungridd
   if (present(ungridded_lbound) .and. present(ungridded_ubound)) then
     fldlist(num)%ungridded_lbound = ungridded_lbound
     fldlist(num)%ungridded_ubound = ungridded_ubound
-  end if
+  endif
 
 end subroutine fld_list_add
 
