@@ -60,7 +60,7 @@ type, public :: surface
     ocean_salt, &  !< The total salt content of the ocean in [1e-3 S R Z ~> kgSalt m-2].
     taux_shelf, &  !< The zonal stresses on the ocean under shelves [R L Z T-2 ~> Pa].
     tauy_shelf, &  !< The meridional stresses on the ocean under shelves [R L Z T-2 ~> Pa].
-    sfc_co2        !< CO2 flux from the ocean to the atmosphere [TODO: R Z T-1 ~> kgCO2 m-2 s-1]
+    fco2           !< CO2 flux from the ocean to the atmosphere [R Z T-1 ~> kgCO2 m-2 s-1]
   logical :: T_is_conT = .false. !< If true, the temperature variable SST is actually the
                    !! conservative temperature in [C ~> degC].
   logical :: S_is_absS = .false. !< If true, the salinity variable SSS is actually the
@@ -350,7 +350,7 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
   logical,     optional, intent(in)    :: use_marbl_tracers  !< If true, allocate the space for CO2 flux from MARBL
 
   ! local variables
-  logical :: use_temp, alloc_integ, use_melt_potential, alloc_iceshelves, alloc_frazil, alloc_cfcs, alloc_co2
+  logical :: use_temp, alloc_integ, use_melt_potential, alloc_iceshelves, alloc_frazil, alloc_cfcs, alloc_fco2
   integer :: is, ie, js, je, isd, ied, jsd, jed
   integer :: isdB, iedB, jsdB, jedB
 
@@ -364,7 +364,7 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
   alloc_cfcs = .false. ; if (present(use_cfcs)) alloc_cfcs = use_cfcs
   alloc_iceshelves = .false. ; if (present(use_iceshelves)) alloc_iceshelves = use_iceshelves
   alloc_frazil = .true. ; if (present(omit_frazil)) alloc_frazil = .not.omit_frazil
-  alloc_co2 = .false. ; if (present(use_marbl_tracers)) alloc_co2 = use_marbl_tracers
+  alloc_fco2 = .false. ; if (present(use_marbl_tracers)) alloc_fco2 = use_marbl_tracers
 
   if (sfc_state%arrays_allocated) return
 
@@ -409,8 +409,8 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
     call coupler_type_spawn(gas_fields_ocn, sfc_state%tr_fields, &
                             (/is,is,ie,ie/), (/js,js,je,je/), as_needed=.true.)
 
-  if (alloc_co2) then
-    allocate(sfc_state%sfc_co2(isd:ied,jsd:jed), source=0.0)
+  if (alloc_fco2) then
+    allocate(sfc_state%fco2(isd:ied,jsd:jed), source=0.0)
   endif
 
   sfc_state%arrays_allocated = .true.
@@ -436,7 +436,7 @@ subroutine deallocate_surface_state(sfc_state)
   if (allocated(sfc_state%ocean_salt)) deallocate(sfc_state%ocean_salt)
   if (allocated(sfc_state%sfc_cfc11)) deallocate(sfc_state%sfc_cfc11)
   if (allocated(sfc_state%sfc_cfc12)) deallocate(sfc_state%sfc_cfc12)
-  if (allocated(sfc_state%sfc_co2)) deallocate(sfc_state%sfc_co2)
+  if (allocated(sfc_state%fco2)) deallocate(sfc_state%fco2)
   call coupler_type_destructor(sfc_state%tr_fields)
 
   sfc_state%arrays_allocated = .false.

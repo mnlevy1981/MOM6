@@ -989,7 +989,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !     * Surface flux output
       do m=1,CS%sfo_cnt
-        CS%SFO(i,j,m) = MARBL_instances%surface_flux_output%outputs_for_GCM(m)%forcing_field_0d(1)
+      !  nmol/cm^2/s (positive down) to kg CO2/m^2/s (positive down)
+        CS%SFO(i,j,m) = 44.0e-8 * MARBL_instances%surface_flux_output%outputs_for_GCM(m)%forcing_field_0d(1)
       end do
 
     end do
@@ -1359,10 +1360,9 @@ subroutine MARBL_tracers_surface_state(sfc_state, G, US, CS)
 
   if (.not.associated(CS)) return
 
-  if (allocated(sfc_state%sfc_co2)) then
+  if (allocated(sfc_state%fco2)) then
     do j=js,je ; do i=is,ie
-      !  nmol/cm^2/s (positive down) to kg CO2/m^2/s (positive down)
-      sfc_state%sfc_co2(i,j) = US%kg_m2s_to_RZ_T * (44.0e-8*CS%SFO(i,j,CS%flux_co2_ind))
+      sfc_state%fco2(i,j) = US%kg_m2s_to_RZ_T * CS%SFO(i,j,CS%flux_co2_ind)
     enddo ; enddo
   endif
 

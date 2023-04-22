@@ -976,9 +976,9 @@ subroutine convert_state_to_ocean_type(sfc_state, Ocean_sfc, G, US, patm, press_
     enddo ; enddo
   endif
 
-  if (allocated(sfc_state%sfc_co2)) then
+  if (allocated(sfc_state%fco2)) then
     do j=jsc_bnd,jec_bnd ; do i=isc_bnd,iec_bnd
-      Ocean_sfc%ocn_co2(i,j) = US%RZ_T_to_kg_m2s * sfc_state%sfc_co2(i+i0,j+j0)
+      Ocean_sfc%ocn_co2(i,j) = US%RZ_T_to_kg_m2s * sfc_state%fco2(i+i0,j+j0)
     enddo ; enddo
   endif
 

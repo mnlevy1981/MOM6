@@ -444,50 +444,68 @@ contains
       ! Nitrogen Deposition
       fluxes%nhx_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * nhx_dep(i-i0,j-j0)
       fluxes%noy_dep(i,j) = (G%mask2dT(i,j) * ndep_conversion) * noy_dep(i-i0,j-j0)
+    enddo ; enddo
 
-      ! Atmospheric CO2
-      select case (CS%atm_co2_iopt)
-        case (atm_co2_prognostic_iopt)
-          if (associated(atm_co2_prog)) then
+    ! Atmospheric CO2
+    select case (CS%atm_co2_iopt)
+      case (atm_co2_prognostic_iopt)
+        if (associated(atm_co2_prog)) then
+          do j=js,je ; do i=is,ie
             fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
-          else
-            call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
-          end if
-        case (atm_co2_diagnostic_iopt)
-          if (associated(atm_co2_diag)) then
+          enddo ; enddo
+        else
+          call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+        end if
+      case (atm_co2_diagnostic_iopt)
+        if (associated(atm_co2_diag)) then
+          do j=js,je ; do i=is,ie
             fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
-          else
-            call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
-          end if
-        case (atm_co2_constant_iopt)
+          enddo ; enddo
+        else
+          call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+        end if
+      case (atm_co2_constant_iopt)
+        do j=js,je ; do i=is,ie
           fluxes%atm_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
-      end select
-      select case (CS%atm_alt_co2_iopt)
-        case (atm_co2_prognostic_iopt)
-          if (associated(atm_co2_prog)) then
-            fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
-          else
-            call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
-          end if
-        case (atm_co2_diagnostic_iopt)
-          if (associated(atm_co2_diag)) then
-            fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
-          else
-            call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
-          end if
-        case (atm_co2_constant_iopt)
-          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
-      end select
+        enddo ; enddo
+    end select
 
-      if (associated(atm_fine_dust_flux)) then
+    ! Alternate Atmospheric CO2
+    select case (CS%atm_alt_co2_iopt)
+      case (atm_co2_prognostic_iopt)
+        if (associated(atm_co2_prog)) then
+          do j=js,je ; do i=is,ie
+            fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
+          enddo ; enddo
+        else
+          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+        end if
+      case (atm_co2_diagnostic_iopt)
+        if (associated(atm_co2_diag)) then
+          do j=js,je ; do i=is,ie
+            fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
+          enddo ; enddo
+        else
+          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+        end if
+      case (atm_co2_constant_iopt)
+        do j=js,je ; do i=is,ie
+          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
+        enddo ; enddo
+    end select
+
+    if (associated(atm_fine_dust_flux)) then
+      do j=js,je ; do i=is,ie
         ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
         fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * dust_flux_conversion) * &
                                        (atm_fine_dust_flux(i-i0,j-j0) + &
                                         atm_coarse_dust_flux(i-i0,j-j0) + &
                                         seaice_dust_flux(i-i0,j-j0))
-      end if
+      enddo ; enddo
+    end if
 
-      if (associated(atm_bc_flux)) then
+    if (associated(atm_bc_flux)) then
+      do j=js,je ; do i=is,ie
         ! TODO: abort if atm_fine_dust_flux and atm_coarse_dust_flux are not associated?
         ! Contribution of atmospheric dust to iron flux
         if (atm_coarse_dust_flux(i-i0,j-j0) < &
@@ -516,11 +534,13 @@ contains
         ! Unit conversion (kg / m^2 / s -> nmol / cm^2 / s)
         fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
 
-      end if
+      enddo ; enddo
+    end if
 
       ! Per ice-category forcings
       ! If the cap receives per-category fields, memory should be allocated in fluxes
-      if (associated(ifrac_n)) then
+    if (associated(ifrac_n)) then
+      do j=js,je ; do i=is,ie
         fluxes%fracr_cat(i,j,1) = min(1., afracr(i-i0,j-j0))
         fluxes%qsw_cat(i,j,1) = swnet_afracr(i-i0,j-j0)
         do m=1,size(ifrac_n, 3)
@@ -535,9 +555,8 @@ contains
         endwhere
         fluxes%fracr_cat(i,j,:) = G%mask2dT(i,j) * fluxes%fracr_cat(i,j,:)
         fluxes%qsw_cat(i,j,:)   = G%mask2dT(i,j) * fluxes%qsw_cat(i,j,:)
-      endif
-
-    enddo; enddo
+      enddo; enddo
+    endif
 
     ! River fluxes
     if (CS%read_riv_fluxes) then
