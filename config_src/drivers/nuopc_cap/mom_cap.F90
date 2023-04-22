@@ -352,7 +352,7 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
   write(logmsg,*) use_mommesh
   call ESMF_LogWrite('MOM_cap:use_mommesh = '//trim(logmsg), ESMF_LOGMSG_INFO)
 
-  if(use_mommesh)then
+  if (use_mommesh) then
     geomtype = ESMF_GEOMTYPE_MESH
     call NUOPC_CompAttributeGet(gcomp, name='mesh_ocn', isPresent=isPresent, isSet=isSet, rc=rc)
     if (.not. isPresent .and. .not. isSet) then
@@ -656,104 +656,64 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
 
   call get_domain_extent(ocean_public%domain, isc, iec, jsc, jec)
 
-  allocate ( Ice_ocean_boundary% u_flux (isc:iec,jsc:jec),          &
-             Ice_ocean_boundary% v_flux (isc:iec,jsc:jec),          &
-             Ice_ocean_boundary% t_flux (isc:iec,jsc:jec),          &
-             Ice_ocean_boundary% q_flux (isc:iec,jsc:jec),          &
-             Ice_ocean_boundary% salt_flux (isc:iec,jsc:jec),       &
-             Ice_ocean_boundary% lw_flux (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% sw_flux_vis_dir (isc:iec,jsc:jec), &
-             Ice_ocean_boundary% sw_flux_vis_dif (isc:iec,jsc:jec), &
-             Ice_ocean_boundary% sw_flux_nir_dir (isc:iec,jsc:jec), &
-             Ice_ocean_boundary% sw_flux_nir_dif (isc:iec,jsc:jec), &
-             Ice_ocean_boundary% lprec (isc:iec,jsc:jec),           &
-             Ice_ocean_boundary% fprec (isc:iec,jsc:jec),           &
-             Ice_ocean_boundary% seaice_melt_heat (isc:iec,jsc:jec),&
-             Ice_ocean_boundary% seaice_melt (isc:iec,jsc:jec),     &
-             Ice_ocean_boundary% mi (isc:iec,jsc:jec),              &
-             Ice_ocean_boundary% ice_fraction (isc:iec,jsc:jec),    &
-             Ice_ocean_boundary% u10_sqr (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
-             Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
-             Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
-             Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
-             Ice_ocean_boundary% p (isc:iec,jsc:jec),               &
-             Ice_ocean_boundary% lrunoff (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% frunoff (isc:iec,jsc:jec))
-
-  Ice_ocean_boundary%u_flux          = 0.0
-  Ice_ocean_boundary%v_flux          = 0.0
-  Ice_ocean_boundary%t_flux          = 0.0
-  Ice_ocean_boundary%q_flux          = 0.0
-  Ice_ocean_boundary%salt_flux       = 0.0
-  Ice_ocean_boundary%lw_flux         = 0.0
-  Ice_ocean_boundary%sw_flux_vis_dir = 0.0
-  Ice_ocean_boundary%sw_flux_vis_dif = 0.0
-  Ice_ocean_boundary%sw_flux_nir_dir = 0.0
-  Ice_ocean_boundary%sw_flux_nir_dif = 0.0
-  Ice_ocean_boundary%lprec           = 0.0
-  Ice_ocean_boundary%fprec           = 0.0
-  Ice_ocean_boundary%seaice_melt     = 0.0
-  Ice_ocean_boundary%seaice_melt_heat= 0.0
-  Ice_ocean_boundary%mi              = 0.0
-  Ice_ocean_boundary%ice_fraction    = 0.0
-  Ice_ocean_boundary%u10_sqr         = 0.0
-  Ice_ocean_boundary%nhx_dep         = 0.0
-  Ice_ocean_boundary%noy_dep         = 0.0
-  Ice_ocean_boundary%atm_fine_dust_flux   = 0.0
-  Ice_ocean_boundary%atm_coarse_dust_flux = 0.0
-  Ice_ocean_boundary%seaice_dust_flux     = 0.0
-  Ice_ocean_boundary%atm_bc_flux          = 0.0
-  Ice_ocean_boundary%seaice_bc_flux       = 0.0
-  Ice_ocean_boundary%p               = 0.0
-  Ice_ocean_boundary%lrunoff         = 0.0
-  Ice_ocean_boundary%frunoff         = 0.0
+  allocate(Ice_ocean_boundary% u_flux (isc:iec,jsc:jec),          &
+           Ice_ocean_boundary% v_flux (isc:iec,jsc:jec),          &
+           Ice_ocean_boundary% t_flux (isc:iec,jsc:jec),          &
+           Ice_ocean_boundary% q_flux (isc:iec,jsc:jec),          &
+           Ice_ocean_boundary% salt_flux (isc:iec,jsc:jec),       &
+           Ice_ocean_boundary% lw_flux (isc:iec,jsc:jec),         &
+           Ice_ocean_boundary% sw_flux_vis_dir (isc:iec,jsc:jec), &
+           Ice_ocean_boundary% sw_flux_vis_dif (isc:iec,jsc:jec), &
+           Ice_ocean_boundary% sw_flux_nir_dir (isc:iec,jsc:jec), &
+           Ice_ocean_boundary% sw_flux_nir_dif (isc:iec,jsc:jec), &
+           Ice_ocean_boundary% lprec (isc:iec,jsc:jec),           &
+           Ice_ocean_boundary% fprec (isc:iec,jsc:jec),           &
+           Ice_ocean_boundary% seaice_melt_heat (isc:iec,jsc:jec),&
+           Ice_ocean_boundary% seaice_melt (isc:iec,jsc:jec),     &
+           Ice_ocean_boundary% mi (isc:iec,jsc:jec),              &
+           Ice_ocean_boundary% ice_fraction (isc:iec,jsc:jec),    &
+           Ice_ocean_boundary% u10_sqr (isc:iec,jsc:jec),         &
+           Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
+           Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
+           Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
+           Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
+           Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
+           Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
+           Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
+           Ice_ocean_boundary% p (isc:iec,jsc:jec),               &
+           Ice_ocean_boundary% lrunoff (isc:iec,jsc:jec),         &
+           Ice_ocean_boundary% frunoff (isc:iec,jsc:jec),         &
+           source=0.0)
 
   ! Allocate memory for fields coming from multiple ice categories
-  if (Ice_ocean_boundary%ice_ncat > 0) then
-    allocate ( Ice_ocean_boundary% afracr(isc:iec,jsc:jec),       &
-               Ice_ocean_boundary% swnet_afracr(isc:iec,jsc:jec), &
-               Ice_ocean_boundary% swpen_ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat), &
-               Ice_ocean_boundary% ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat))
-    Ice_ocean_boundary%afracr         = 0.0
-    Ice_ocean_boundary%swnet_afracr   = 0.0
-    Ice_ocean_boundary%swpen_ifrac_n  = 0.0
-    Ice_ocean_boundary%ifrac_n        = 0.0
-  endif
+  if (Ice_ocean_boundary%ice_ncat > 0) &
+    allocate(Ice_ocean_boundary% afracr(isc:iec,jsc:jec),       &
+             Ice_ocean_boundary% swnet_afracr(isc:iec,jsc:jec), &
+             Ice_ocean_boundary% swpen_ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat), &
+             Ice_ocean_boundary% ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat), &
+             source=0.0)
 
-  if (cesm_coupled) then
-    allocate (Ice_ocean_boundary% hrain (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% hsnow (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% hrofl (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% hrofi (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% hevap (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% hcond (isc:iec,jsc:jec),           &
-              Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
-              Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec))
-
-    Ice_ocean_boundary%hrain           = 0.0
-    Ice_ocean_boundary%hsnow           = 0.0
-    Ice_ocean_boundary%hrofl           = 0.0
-    Ice_ocean_boundary%hrofi           = 0.0
-    Ice_ocean_boundary%hevap           = 0.0
-    Ice_ocean_boundary%hcond           = 0.0
-    Ice_ocean_boundary%atm_co2_prog    = 0.0
-    Ice_ocean_boundary%atm_co2_diag    = 0.0
-  endif
+  if (cesm_coupled) &
+    allocate(Ice_ocean_boundary% hrain (isc:iec,jsc:jec),           &
+             Ice_ocean_boundary% hsnow (isc:iec,jsc:jec),           &
+             Ice_ocean_boundary% hrofl (isc:iec,jsc:jec),           &
+             Ice_ocean_boundary% hrofi (isc:iec,jsc:jec),           &
+             Ice_ocean_boundary% hevap (isc:iec,jsc:jec),           &
+             Ice_ocean_boundary% hcond (isc:iec,jsc:jec),           &
+             Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
+             Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec),    &
+             source=0.0)
 
   call query_ocean_state(ocean_state, use_waves=use_waves, wave_method=wave_method)
   if (use_waves) then
     if (wave_method == "EFACTOR") then
-      allocate( Ice_ocean_boundary%lamult(isc:iec,jsc:jec) )
-      Ice_ocean_boundary%lamult          = 0.0
+      allocate( Ice_ocean_boundary%lamult(isc:iec,jsc:jec), source=0.0)
     else if (wave_method == "SURFACE_BANDS") then
       call query_ocean_state(ocean_state, NumWaveBands=Ice_ocean_boundary%num_stk_bands)
-      allocate(Ice_ocean_boundary%ustkb(isc:iec,jsc:jec,Ice_ocean_boundary%num_stk_bands), source=0.0)
-      allocate(Ice_ocean_boundary%vstkb(isc:iec,jsc:jec,Ice_ocean_boundary%num_stk_bands), source=0.0)
-      allocate(Ice_ocean_boundary%stk_wavenumbers(Ice_ocean_boundary%num_stk_bands), source=0.0)
+      allocate(Ice_ocean_boundary%ustkb(isc:iec,jsc:jec,Ice_ocean_boundary%num_stk_bands), &
+               Ice_ocean_boundary%vstkb(isc:iec,jsc:jec,Ice_ocean_boundary%num_stk_bands), &
+               Ice_ocean_boundary%stk_wavenumbers(Ice_ocean_boundary%num_stk_bands),       &
+               source=0.0)
       call query_ocean_state(ocean_state, WaveNumbers=Ice_ocean_boundary%stk_wavenumbers, unscale=.true.)
     else
       call MOM_error(FATAL, "Unsupported WAVE_METHOD encountered in NUOPC cap.")
@@ -873,7 +833,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     call NUOPC_Advertise(exportState, standardName=fldsFrOcn(n)%stdname, name=fldsFrOcn(n)%shortname, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
   enddo
-  if(is_root_pe()) write(stdout,*) 'InitializeAdvertise complete'
+  if (is_root_pe()) write(stdout,*) 'InitializeAdvertise complete'
 end subroutine InitializeAdvertise
 
 !> Called by NUOPC to realize import and export fields.  "Realizing" a field
@@ -1141,10 +1101,9 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
     call ESMF_MeshGet(Emesh, numOwnedElements=numOwnedElements, spatialDim=spatialDim, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
-    allocate (mod2med_areacor(numOwnedElements))
-    allocate (med2mod_areacor(numOwnedElements))
-    mod2med_areacor(:) = 1._ESMF_KIND_R8
-    med2mod_areacor(:) = 1._ESMF_KIND_R8
+    allocate(mod2med_areacor(numOwnedElements), &
+             med2mod_areacor(numOwnedElements), &
+             source=1._ESMF_KIND_R8)
 
 #ifdef CESMCOUPLED
     ! Determine model areas and flux correction factors (module variables in mom_)
@@ -1374,7 +1333,7 @@ subroutine InitializeRealize(gcomp, importState, exportState, clock, rc)
         dataPtr_mask(i1,j1)  = ocean_grid%mask2dT(ig,jg)
         dataPtr_xcen(i1,j1)  = ocean_grid%geolonT(ig,jg)
         dataPtr_ycen(i1,j1)  = ocean_grid%geolatT(ig,jg)
-        if(grid_attach_area) then
+        if (grid_attach_area) then
           dataPtr_area(i1,j1) = ocean_grid%US%L_to_m**2 * ocean_grid%areaT(ig,jg)
         endif
       enddo
@@ -1593,7 +1552,7 @@ subroutine ModelAdvance(gcomp, rc)
   integer                                :: num_rest_files
 
   rc = ESMF_SUCCESS
-  if(profile_memory) call ESMF_VMLogMemInfo("Entering MOM Model_ADVANCE: ")
+  if (profile_memory) call ESMF_VMLogMemInfo("Entering MOM Model_ADVANCE: ")
 
   call shr_log_setLogUnit (stdout)
 
@@ -1705,10 +1664,10 @@ subroutine ModelAdvance(gcomp, rc)
     ! Update MOM6
     !---------------
 
-    if(profile_memory) call ESMF_VMLogMemInfo("Entering MOM update_ocean_model: ")
+    if (profile_memory) call ESMF_VMLogMemInfo("Entering MOM update_ocean_model: ")
     call update_ocean_model(Ice_ocean_boundary, ocean_state, ocean_public, Time, Time_step_coupled, &
                             cesm_coupled)
-    if(profile_memory) call ESMF_VMLogMemInfo("Leaving MOM update_ocean_model: ")
+    if (profile_memory) call ESMF_VMLogMemInfo("Leaving MOM update_ocean_model: ")
 
     !---------------
     ! Export Data
@@ -1833,7 +1792,7 @@ subroutine ModelAdvance(gcomp, rc)
     enddo
   endif
 
-  if(profile_memory) call ESMF_VMLogMemInfo("Leaving MOM Model_ADVANCE: ")
+  if (profile_memory) call ESMF_VMLogMemInfo("Leaving MOM Model_ADVANCE: ")
 
 end subroutine ModelAdvance
 
@@ -1943,7 +1902,7 @@ subroutine ModelSetRunClock(gcomp, rc)
       if (isPresent .and. isSet) then
         call ESMF_LogWrite(subname//" Restart_n = "//trim(cvalue), ESMF_LOGMSG_INFO)
         read(cvalue,*) restart_n
-        if (restart_n /= 0)then
+        if (restart_n /= 0) then
           call NUOPC_CompAttributeGet(gcomp, name="restart_option", value=cvalue, &
                isPresent=isPresent, isSet=isSet, rc=rc)
           if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -2060,8 +2019,8 @@ subroutine ocean_model_finalize(gcomp, rc)
   else
     write_restart = .false.
   endif
-  if (write_restart)call ESMF_LogWrite("No Restart Alarm, writing restart at Finalize ", &
-                         ESMF_LOGMSG_INFO)
+  if (write_restart) call ESMF_LogWrite("No Restart Alarm, writing restart at Finalize ", &
+                          ESMF_LOGMSG_INFO)
 
   call ocean_model_end(ocean_public, ocean_State, Time, write_restart=write_restart)
 
@@ -2204,11 +2163,11 @@ subroutine MOM_RealizeFields(state, nfields, field_defs, tag, ice_ocean_boundary
 
       if (present(ice_ocean_boundary)) then
         if (trim(field_defs(i)%stdname) == 'Sa_co2prog') then
-          if(is_root_pe()) write(stdout,*) subname // tag // " Nullifying ice_ocean_boundary%atm_co2_prog"
+          if (is_root_pe()) write(stdout,*) subname // tag // " Nullifying ice_ocean_boundary%atm_co2_prog"
           deallocate(ice_ocean_boundary%atm_co2_prog)
           nullify(ice_ocean_boundary%atm_co2_prog)
         elseif (trim(field_defs(i)%stdname) == 'Sa_co2diag') then
-          if(is_root_pe()) write(stdout,*) subname // tag // " Nullifying ice_ocean_boundary%atm_co2_diag"
+          if (is_root_pe()) write(stdout,*) subname // tag // " Nullifying ice_ocean_boundary%atm_co2_diag"
           deallocate(ice_ocean_boundary%atm_co2_diag)
           nullify(ice_ocean_boundary%atm_co2_diag)
         endif

@@ -488,7 +488,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   allocate(CS%tracer_data(CS%ntr))
 
   do m = 1, CS%ntr
-    allocate(CS%tracer_data(m)%tr(isd:ied,jsd:jed,nz)) ; CS%tracer_data(m)%tr(:,:,:) = 0.0
+    allocate(CS%tracer_data(m)%tr(isd:ied,jsd:jed,nz), source=0.0)
     write(var_name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(desc_name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%long_name)
     write(units(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%units)
@@ -565,12 +565,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   CS%diag => diag
 
   ! Allocate memory for surface tracer fluxes
-  allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr))
-  allocate(CS%RIV_FLUXES(SZI_(G), SZJ_(G), CS%ntr))
-  allocate(CS%SFO(SZI_(G), SZJ_(G), CS%sfo_cnt))
-  CS%STF(:,:,:) = 0.
-  CS%RIV_FLUXES(:,:,:) = 0.
-  CS%SFO(:,:,:) = 0.
+  allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr), &
+           CS%RIV_FLUXES(SZI_(G), SZJ_(G), CS%ntr), &
+           CS%SFO(SZI_(G), SZJ_(G), CS%sfo_cnt), &
+           source=0.0)
 
   ! Register diagnostics returned from MARBL (surface flux first, then interior tendency)
   call register_MARBL_diags(MARBL_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
@@ -601,10 +599,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
                                                          day, &
                                                          trim(longname), &
                                                          trim(units))
-    if (CS%interior_tendency_out(m)%id > 0) then
-      allocate(CS%interior_tendency_out(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
-      CS%interior_tendency_out(m)%field_3d(:,:,:) = 0.
-    endif
+    if (CS%interior_tendency_out(m)%id > 0) &
+      allocate(CS%interior_tendency_out(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)), source=0.0)
 
     write(name, "(2A)") "Jint_", trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), " Source Sink Term Vertical Integral"
@@ -615,10 +611,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
                                                               day, &
                                                               trim(longname), &
                                                               trim(units))
-    if (CS%interior_tendency_out_zint(m)%id > 0) then
-      allocate(CS%interior_tendency_out_zint(m)%field_2d(SZI_(G),SZJ_(G)))
-      CS%interior_tendency_out_zint(m)%field_2d(:,:) = 0.
-    endif
+    if (CS%interior_tendency_out_zint(m)%id > 0) &
+      allocate(CS%interior_tendency_out_zint(m)%field_2d(SZI_(G),SZJ_(G)), source=0.0)
 
     write(name, "(2A)") "Jint_100m_", trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), &
@@ -630,10 +624,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
                                                                    day, &
                                                                    trim(longname), &
                                                                    trim(units))
-    if (CS%interior_tendency_out_zint_100m(m)%id > 0) then
-      allocate(CS%interior_tendency_out_zint_100m(m)%field_2d(SZI_(G),SZJ_(G)))
-      CS%interior_tendency_out_zint_100m(m)%field_2d(:,:) = 0.
-    endif
+    if (CS%interior_tendency_out_zint_100m(m)%id > 0) &
+      allocate(CS%interior_tendency_out_zint_100m(m)%field_2d(SZI_(G),SZJ_(G)), source=0.0)
 
   enddo
 
@@ -772,10 +764,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         day, &
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
-      if (id_diags(m)%id > 0) then
-        allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)))
-        id_diags(m)%field_2d(:,:) = 0.
-      endif
+      if (id_diags(m)%id > 0) allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)), source=0.0)
     else ! 3D field
       ! TODO: MARBL should provide v_extensive through MARBL_diags
       !       (for now, FESEDFLUX is the only one that should be true)
@@ -786,10 +775,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units), &
         v_extensive=(trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX"))
-      if (id_diags(m)%id > 0) then
-        allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)))
-        id_diags(m)%field_3d(:,:,:) = 0.
-      endif
+      if (id_diags(m)%id > 0) allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)), source=0.0)
     endif
   enddo
 
@@ -819,13 +805,11 @@ subroutine setup_saved_state(MARBL_saved_state, HI, GV, restart_CS, tracers_may_
     write(varname, "(2A)") "MARBL_", trim(MARBL_saved_state%state(m)%short_name)
     select case (MARBL_saved_state%state(m)%rank)
       case (2)
-        allocate(local_saved_state(m)%field_2d(SZI_(HI),SZJ_(HI)))
-        local_saved_state(m)%field_2d(:,:) = 0.
+        allocate(local_saved_state(m)%field_2d(SZI_(HI),SZJ_(HI)), source=0.0)
         call register_restart_field(local_saved_state(m)%field_2d, varname, .not.tracers_may_reinit, restart_CS)
       case (3)
         if (trim(MARBL_saved_state%state(m)%vertical_grid).eq."layer_avg") then
-          allocate(local_saved_state(m)%field_3d(SZI_(HI),SZJ_(HI), SZK_(GV)))
-          local_saved_state(m)%field_3d(:,:,:) = 0.
+          allocate(local_saved_state(m)%field_3d(SZI_(HI),SZJ_(HI), SZK_(GV)), source=0.0)
           call register_restart_field(local_saved_state(m)%field_3d, varname, .not.tracers_may_reinit, restart_CS)
         else
           write(log_message, "(3A, I0, A)") "'", trim(MARBL_saved_state%state(m)%vertical_grid), &
@@ -1424,20 +1408,13 @@ subroutine MARBL_tracers_end(CS)
       enddo
       deallocate(CS%tracer_data)
     endif
-    if (allocated(CS%ind_tr)) &
-      deallocate(CS%ind_tr)
-    if (allocated(CS%id_surface_flux_out)) &
-      deallocate(CS%id_surface_flux_out)
-    if (allocated(CS%fracr_cat_id)) &
-      deallocate(CS%fracr_cat_id)
-    if (allocated(CS%qsw_cat_id)) &
-      deallocate(CS%qsw_cat_id)
-    if (allocated(CS%STF)) &
-      deallocate(CS%STF)
-    if (allocated(CS%RIV_FLUXES)) &
-      deallocate(CS%RIV_FLUXES)
-    if (allocated(CS%SFO)) &
-      deallocate(CS%SFO)
+    if (allocated(CS%ind_tr)) deallocate(CS%ind_tr)
+    if (allocated(CS%id_surface_flux_out)) deallocate(CS%id_surface_flux_out)
+    if (allocated(CS%fracr_cat_id)) deallocate(CS%fracr_cat_id)
+    if (allocated(CS%qsw_cat_id)) deallocate(CS%qsw_cat_id)
+    if (allocated(CS%STF)) deallocate(CS%STF)
+    if (allocated(CS%RIV_FLUXES)) deallocate(CS%RIV_FLUXES)
+    if (allocated(CS%SFO)) deallocate(CS%SFO)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end

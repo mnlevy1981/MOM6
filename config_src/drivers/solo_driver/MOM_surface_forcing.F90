@@ -2058,6 +2058,7 @@ subroutine surface_forcing_end(CS, fluxes)
   if (associated(CS)) deallocate(CS)
   CS => NULL()
 
+  call callTree_leave("MARBL_forcing_from_data_override, MOM_surface_forcing.F90")
 end subroutine surface_forcing_end
 
 end module MOM_surface_forcing

@@ -108,18 +108,18 @@ type, public ::  ocean_public_type
                     !! a global max across ocean and non-ocean processors can be
                     !! used to determine its value.
   real, pointer, dimension(:,:)  :: &
-    t_surf => NULL(), & !< SST on t-cell (degrees Kelvin)
-    s_surf => NULL(), & !< SSS on t-cell (psu)
-    u_surf => NULL(), & !< i-velocity at the locations indicated by stagger, m/s.
-    v_surf => NULL(), & !< j-velocity at the locations indicated by stagger, m/s.
+    t_surf => NULL(),  & !< SST on t-cell (degrees Kelvin)
+    s_surf => NULL(),  & !< SSS on t-cell (psu)
+    u_surf => NULL(),  & !< i-velocity at the locations indicated by stagger, m/s.
+    v_surf => NULL(),  & !< j-velocity at the locations indicated by stagger, m/s.
     sea_lev => NULL(), & !< Sea level in m after correction for surface pressure,
-                        !! i.e. dzt(1) + eta_t + patm/rho0/grav (m)
-    frazil =>NULL(), &  !< Accumulated heating (in Joules/m^2) from frazil
-                        !! formation in the ocean.
+                         !! i.e. dzt(1) + eta_t + patm/rho0/grav (m)
+    frazil =>NULL(),   &  !< Accumulated heating (in Joules/m^2) from frazil
+                          !! formation in the ocean.
     melt_potential => NULL(), & !< Instantaneous heat used to melt sea ice (in J/m^2)
-    area => NULL(), &   !< cell area of the ocean surface, in m2.
-    OBLD => NULL(), &   !< Ocean boundary layer depth, in m.
-    ocn_co2 => NULL()   !< Ocean CO2 flux, in kg CO2/m^2/s
+    area => NULL(),    &  !< cell area of the ocean surface, in m2.
+    OBLD => NULL(),    &  !< Ocean boundary layer depth, in m.
+    fco2_ocn => NULL()    !< Ocean CO2 flux, in kg CO2/m^2/s
   type(coupler_2d_bc_type) :: fields    !< A structure that may contain named
                                         !! arrays of tracer-related surface fields.
   integer                  :: avg_kount !< A count of contributions to running
@@ -786,7 +786,7 @@ subroutine ocean_model_end(Ocean_sfc, Ocean_state, Time, write_restart)
   type(time_type),         intent(in)    :: Time        !< The model time, used for writing restarts.
   logical,                 intent(in)    :: write_restart !< true => write restart file
 
-  if(write_restart)call ocean_model_save_restart(Ocean_state, Time)
+  if (write_restart)call ocean_model_save_restart(Ocean_state, Time)
   call diag_mediator_end(Time, Ocean_state%diag, end_diag_manager=.true.)
   call MOM_end(Ocean_state%MOM_CSp)
   if (Ocean_state%use_ice_shelf) call ice_shelf_end(Ocean_state%Ice_shelf_CSp)
@@ -859,27 +859,18 @@ subroutine initialize_ocean_public_type(input_domain, Ocean_sfc, diag, maskmap, 
   endif
   call mpp_get_compute_domain(Ocean_sfc%Domain, isc, iec, jsc, jec)
 
-  allocate ( Ocean_sfc%t_surf (isc:iec,jsc:jec), &
-             Ocean_sfc%s_surf (isc:iec,jsc:jec), &
-             Ocean_sfc%u_surf (isc:iec,jsc:jec), &
-             Ocean_sfc%v_surf (isc:iec,jsc:jec), &
-             Ocean_sfc%sea_lev(isc:iec,jsc:jec), &
-             Ocean_sfc%frazil (isc:iec,jsc:jec), &
-             Ocean_sfc%melt_potential(isc:iec,jsc:jec), &
-             Ocean_sfc%area   (isc:iec,jsc:jec), &
-             Ocean_sfc%OBLD   (isc:iec,jsc:jec), &
-             Ocean_sfc%ocn_co2(isc:iec,jsc:jec))
+  allocate(Ocean_sfc%t_surf (isc:iec,jsc:jec),  &  ! time averaged sst (Kelvin) passed to atmosphere/ice model
+           Ocean_sfc%s_surf (isc:iec,jsc:jec),  &  ! time averaged sss (psu) passed to atmosphere/ice models
+           Ocean_sfc%u_surf (isc:iec,jsc:jec),  &  ! time averaged u-current (m/sec) passed to atmosphere/ice models
+           Ocean_sfc%v_surf (isc:iec,jsc:jec),  &  ! time averaged v-current (m/sec)  passed to atmosphere/ice models
+           Ocean_sfc%sea_lev(isc:iec,jsc:jec),  &  ! time averaged thickness of top model grid cell (m) plus patm/rho0/grav
+           Ocean_sfc%frazil (isc:iec,jsc:jec),  &  ! time accumulated frazil (J/m^2) passed to ice model
+           Ocean_sfc%melt_potential(isc:iec,jsc:jec), &  ! time accumulated melt potential (J/m^2) passed to ice model
+           Ocean_sfc%area   (isc:iec,jsc:jec),  &
+           Ocean_sfc%OBLD   (isc:iec,jsc:jec),  &  ! ocean boundary layer depth, in m
+           Ocean_sfc%fco2_ocn(isc:iec,jsc:jec), &  ! time averaged co2 flux (kg/m^2/s) passed to atmosphere model
+           source=0.0)
 
-  Ocean_sfc%t_surf  = 0.0  ! time averaged sst (Kelvin) passed to atmosphere/ice model
-  Ocean_sfc%s_surf  = 0.0  ! time averaged sss (psu) passed to atmosphere/ice models
-  Ocean_sfc%u_surf  = 0.0  ! time averaged u-current (m/sec) passed to atmosphere/ice models
-  Ocean_sfc%v_surf  = 0.0  ! time averaged v-current (m/sec)  passed to atmosphere/ice models
-  Ocean_sfc%sea_lev = 0.0  ! time averaged thickness of top model grid cell (m) plus patm/rho0/grav
-  Ocean_sfc%frazil  = 0.0  ! time accumulated frazil (J/m^2) passed to ice model
-  Ocean_sfc%melt_potential  = 0.0  ! time accumulated melt potential (J/m^2) passed to ice model
-  Ocean_sfc%area    = 0.0
-  Ocean_sfc%OBLD    = 0.0  ! ocean boundary layer depth, in m
-  Ocean_sfc%ocn_co2 = 0.0  ! time averaged co2 flux (kg/m^2/s) passed to atmosphere model
   Ocean_sfc%axes    = diag%axesT1%handles !diag axes to be used by coupler tracer flux diagnostics
 
   if (present(gas_fields_ocn)) then
@@ -978,7 +969,7 @@ subroutine convert_state_to_ocean_type(sfc_state, Ocean_sfc, G, US, patm, press_
 
   if (allocated(sfc_state%fco2)) then
     do j=jsc_bnd,jec_bnd ; do i=isc_bnd,iec_bnd
-      Ocean_sfc%ocn_co2(i,j) = US%RZ_T_to_kg_m2s * sfc_state%fco2(i+i0,j+j0)
+      Ocean_sfc%fco2_ocn(i,j) = US%RZ_T_to_kg_m2s * sfc_state%fco2(i+i0,j+j0)
     enddo ; enddo
   endif
 

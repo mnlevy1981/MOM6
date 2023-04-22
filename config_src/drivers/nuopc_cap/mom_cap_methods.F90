@@ -21,7 +21,6 @@ use MOM_surface_forcing_nuopc, only: ice_ocean_boundary_type
 use MOM_grid,                  only: ocean_grid_type
 use MOM_domains,               only: pass_var
 use mpp_domains_mod,           only: mpp_get_compute_domain
-use MOM_error_handler,         only: MOM_error, WARNING
 
 ! By default make data private
 implicit none; private
@@ -443,8 +442,8 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
 
   !----
   ! atmospheric CO2 concentration
-  ! may not be passed from atmosphere component,
-  ! in which case we nullify the pointer(s)
+  ! might not be passed from atmosphere component,
+  ! in which the pointer(s) will not be associated
   !----
   if (associated(ice_ocean_boundary%atm_co2_prog)) then
     ice_ocean_boundary%atm_co2_prog(:,:) = 0._ESMF_KIND_R8
@@ -757,15 +756,12 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   ! Sea-surface zonal and meridional slopes
   !----------------
 
-  allocate(ssh(ocean_grid%isd:ocean_grid%ied,ocean_grid%jsd:ocean_grid%jed)) ! local indices with halos
-  allocate(dhdx(isc:iec, jsc:jec))     !global indices without halos
-  allocate(dhdy(isc:iec, jsc:jec))     !global indices without halos
+  allocate(ssh(ocean_grid%isd:ocean_grid%ied,ocean_grid%jsd:ocean_grid%jed), & ! local indices with halos
+           dhdx(isc:iec, jsc:jec),                                           & !global indices without halos
+           dhdy(isc:iec, jsc:jec),                                           & !global indices without halos
+           source=0.0_ESMF_KIND_R8)
   allocate(dhdx_rot(isc:iec, jsc:jec)) !global indices without halos
   allocate(dhdy_rot(isc:iec, jsc:jec)) !global indices without halos
-
-  ssh  = 0.0_ESMF_KIND_R8
-  dhdx = 0.0_ESMF_KIND_R8
-  dhdy = 0.0_ESMF_KIND_R8
 
   ! Make a copy of ssh in order to do a halo update (ssh has local indexing with halos)
   do j = ocean_grid%jsc, ocean_grid%jec
@@ -865,7 +861,7 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   call ESMF_StateGet(exportState, 'Faoo_fco2_ocn', itemFlag, rc=rc)
   if (itemFlag /= ESMF_STATEITEM_NOTFOUND) then
     call State_SetExport(exportState, 'Faoo_fco2_ocn', &
-         isc, iec, jsc, jec, ocean_public%ocn_co2, ocean_grid, rc=rc)
+         isc, iec, jsc, jec, ocean_public%fco2_ocn, ocean_grid, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
   endif
 
