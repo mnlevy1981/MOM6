@@ -266,7 +266,186 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
          isc, iec, jsc, jec, ice_ocean_boundary%hcond, areacor=med2mod_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
-  endif
+    !--------------!
+    ! MARBL fields !
+    !--------------!
+
+    ! seaice_dust_flux, nhx_dep, and noy_dep are single fields from the coupler
+    ! atm_fine_dust_flux, atm_coarse_dust_flux, atm_bc_flux, and seaice_bc_flux
+    ! are all sums of multiple fields and will be treated slightly differently
+    ! For those fields, we use do_sum = .true.
+
+    !----
+    ! nhx deposition
+    !----
+    ice_ocean_boundary%nhx_dep(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Faxa_ndep',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%nhx_dep(:,:), &
+        areacor=med2mod_areacor, esmf_ind=1, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    !----
+    ! noy deposition
+    !----
+    ice_ocean_boundary%noy_dep(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Faxa_ndep',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%noy_dep(:,:), &
+        areacor=med2mod_areacor, esmf_ind=2, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    !----
+    ! atmospheric CO2 concentration
+    ! might not be passed from atmosphere component,
+    ! in which the pointer(s) will not be associated
+    !----
+    if (associated(ice_ocean_boundary%atm_co2_prog)) then
+      ice_ocean_boundary%atm_co2_prog(:,:) = 0._ESMF_KIND_R8
+      call state_getimport(importState, 'Sa_co2prog',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_prog(:,:), &
+          areacor=med2mod_areacor, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__, &
+      file=__FILE__)) &
+      return  ! bail out
+    endif
+    if (associated(ice_ocean_boundary%atm_co2_diag)) then
+      ice_ocean_boundary%atm_co2_diag(:,:) = 0._ESMF_KIND_R8
+      call state_getimport(importState, 'Sa_co2diag',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_diag(:,:), &
+          areacor=med2mod_areacor, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+      line=__LINE__, &
+      file=__FILE__)) &
+      return  ! bail out
+    endif
+
+    !----
+    ! fine dust flux from atmosphere
+    !----
+    ice_ocean_boundary%atm_fine_dust_flux(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Faxa_dstwet', &
+        isc, iec, jsc, jec, ice_ocean_boundary%atm_fine_dust_flux(:,:), &
+        areacor=med2mod_areacor, do_sum=.true., esmf_ind=1, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+    call state_getimport(importState, 'Faxa_dstdry',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%atm_fine_dust_flux(:,:), &
+        areacor=med2mod_areacor, do_sum=.true., esmf_ind=1, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    !----
+    ! coarse dust flux from atmosphere
+    !----
+    ice_ocean_boundary%atm_coarse_dust_flux(:,:) = 0._ESMF_KIND_R8
+    do esmf_ind=2,4
+      call state_getimport(importState, 'Faxa_dstwet',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%atm_coarse_dust_flux(:,:), &
+          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+      call state_getimport(importState, 'Faxa_dstdry',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%atm_coarse_dust_flux(:,:), &
+          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+    end do
+
+    !----
+    ! dust flux from sea ice
+    !----
+    ice_ocean_boundary%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Fioi_flxdst',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%seaice_dust_flux, &
+        areacor=med2mod_areacor, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    !----
+    ! black carbon flux from atmosphere
+    !----
+    ice_ocean_boundary%atm_bc_flux(:,:) = 0._ESMF_KIND_R8
+    do esmf_ind=1,3
+      call state_getimport(importState, 'Faxa_bcph',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%atm_bc_flux(:,:), &
+          areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+    end do
+
+    !----
+    ! black carbon flux from sea ice
+    !----
+    ice_ocean_boundary%seaice_bc_flux(:,:) = 0._ESMF_KIND_R8
+    call state_getimport(importState, 'Fioi_bcpho',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%seaice_bc_flux(:,:), &
+        areacor=med2mod_areacor, do_sum=.true., rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+    call state_getimport(importState, 'Fioi_bcphi',  &
+        isc, iec, jsc, jec, ice_ocean_boundary%seaice_bc_flux(:,:), &
+        areacor=med2mod_areacor, do_sum=.true., rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+        line=__LINE__, &
+        file=__FILE__)) &
+        return  ! bail out
+
+    ! Fields coming from coupler per ice category
+    if (ice_ocean_boundary%ice_ncat > 0) then
+      call state_getimport(importState, 'Sf_afracr',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%afracr(:,:), rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+
+      call state_getimport(importState, 'Foxx_swnet_afracr',  &
+          isc, iec, jsc, jec, ice_ocean_boundary%swnet_afracr(:,:), &
+          areacor=med2mod_areacor, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+
+      call state_getimport(importState, 'Fioi_swpen_ifrac_n',  &
+          isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
+          ice_ocean_boundary%swpen_ifrac_n(:,:,:), &
+          areacor=med2mod_areacor, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+
+      call state_getimport(importState, 'Si_ifrac_n',  &
+          isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
+          ice_ocean_boundary%ifrac_n(:,:,:), rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
+          line=__LINE__, &
+          file=__FILE__)) &
+          return  ! bail out
+    endif ! multiple ice categories
+
+  endif ! cesm_coupled
 
   !----
   ! salt flux from ice
@@ -408,183 +587,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
       deallocate(stkx1,stkx2,stkx3,stky1,stky2,stky3)
     endif
   endif
-
-  ! MARBL fields
-  !
-  ! seaice_dust_flux is single field from the coupler
-  ! atm_fine_dust_flux, atm_coarse_dust_flux, atm_bc_flux, and seaice_bc_flux
-  ! are all sums of multiple fields and will be treated slightly differently
-  ! For those fields, we use do_sum = .true.
-
-  !----
-  ! nhx deposition
-  !----
-  ice_ocean_boundary%nhx_dep(:,:) = 0._ESMF_KIND_R8
-  call state_getimport(importState, 'Faxa_ndep',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%nhx_dep(:,:), &
-       areacor=med2mod_areacor, esmf_ind=1, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  !----
-  ! noy deposition
-  !----
-  ice_ocean_boundary%noy_dep(:,:) = 0._ESMF_KIND_R8
-  call state_getimport(importState, 'Faxa_ndep',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%noy_dep(:,:), &
-       areacor=med2mod_areacor, esmf_ind=2, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  !----
-  ! atmospheric CO2 concentration
-  ! might not be passed from atmosphere component,
-  ! in which the pointer(s) will not be associated
-  !----
-  if (associated(ice_ocean_boundary%atm_co2_prog)) then
-    ice_ocean_boundary%atm_co2_prog(:,:) = 0._ESMF_KIND_R8
-    call state_getimport(importState, 'Sa_co2prog',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_prog(:,:), &
-         areacor=med2mod_areacor, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-     line=__LINE__, &
-     file=__FILE__)) &
-     return  ! bail out
-  endif
-  if (associated(ice_ocean_boundary%atm_co2_diag)) then
-    ice_ocean_boundary%atm_co2_diag(:,:) = 0._ESMF_KIND_R8
-    call state_getimport(importState, 'Sa_co2diag',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_diag(:,:), &
-         areacor=med2mod_areacor, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-     line=__LINE__, &
-     file=__FILE__)) &
-     return  ! bail out
-  endif
-
-  !----
-  ! fine dust flux from atmosphere
-  !----
-  ice_ocean_boundary%atm_fine_dust_flux(:,:) = 0._ESMF_KIND_R8
-  call state_getimport(importState, 'Faxa_dstwet', &
-       isc, iec, jsc, jec, ice_ocean_boundary%atm_fine_dust_flux(:,:), &
-       areacor=med2mod_areacor, do_sum=.true., esmf_ind=1, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-  call state_getimport(importState, 'Faxa_dstdry',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%atm_fine_dust_flux(:,:), &
-       areacor=med2mod_areacor, do_sum=.true., esmf_ind=1, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  !----
-  ! coarse dust flux from atmosphere
-  !----
-  ice_ocean_boundary%atm_coarse_dust_flux(:,:) = 0._ESMF_KIND_R8
-  do esmf_ind=2,4
-    call state_getimport(importState, 'Faxa_dstwet',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%atm_coarse_dust_flux(:,:), &
-         areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-         line=__LINE__, &
-         file=__FILE__)) &
-         return  ! bail out
-    call state_getimport(importState, 'Faxa_dstdry',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%atm_coarse_dust_flux(:,:), &
-         areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-         line=__LINE__, &
-         file=__FILE__)) &
-         return  ! bail out
-  end do
-
-  !----
-  ! dust flux from sea ice
-  !----
-  ice_ocean_boundary%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
-  call state_getimport(importState, 'Fioi_flxdst',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%seaice_dust_flux, &
-       areacor=med2mod_areacor, rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  !----
-  ! black carbon flux from atmosphere
-  !----
-  ice_ocean_boundary%atm_bc_flux(:,:) = 0._ESMF_KIND_R8
-  do esmf_ind=1,3
-    call state_getimport(importState, 'Faxa_bcph',  &
-         isc, iec, jsc, jec, ice_ocean_boundary%atm_bc_flux(:,:), &
-         areacor=med2mod_areacor, do_sum=.true., esmf_ind=esmf_ind, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-         line=__LINE__, &
-         file=__FILE__)) &
-         return  ! bail out
-  end do
-
-  !----
-  ! black carbon flux from sea ice
-  !----
-  ice_ocean_boundary%seaice_bc_flux(:,:) = 0._ESMF_KIND_R8
-  call state_getimport(importState, 'Fioi_bcpho',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%seaice_bc_flux(:,:), &
-       areacor=med2mod_areacor, do_sum=.true., rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-  call state_getimport(importState, 'Fioi_bcphi',  &
-       isc, iec, jsc, jec, ice_ocean_boundary%seaice_bc_flux(:,:), &
-       areacor=med2mod_areacor, do_sum=.true., rc=rc)
-  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-       line=__LINE__, &
-       file=__FILE__)) &
-       return  ! bail out
-
-  ! Fields coming from coupler per ice category
-  if (ice_ocean_boundary%ice_ncat > 0) then
-    call state_getimport(importState, 'Sf_afracr',  &
-        isc, iec, jsc, jec, ice_ocean_boundary%afracr(:,:), rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-        line=__LINE__, &
-        file=__FILE__)) &
-        return  ! bail out
-
-    call state_getimport(importState, 'Foxx_swnet_afracr',  &
-        isc, iec, jsc, jec, ice_ocean_boundary%swnet_afracr(:,:), &
-        areacor=med2mod_areacor, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-        line=__LINE__, &
-        file=__FILE__)) &
-        return  ! bail out
-
-    call state_getimport(importState, 'Fioi_swpen_ifrac_n',  &
-        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
-        ice_ocean_boundary%swpen_ifrac_n(:,:,:), &
-        areacor=med2mod_areacor, rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-        line=__LINE__, &
-        file=__FILE__)) &
-        return  ! bail out
-
-    call state_getimport(importState, 'Si_ifrac_n',  &
-        isc, iec, jsc, jec, 1, ice_ocean_boundary%ice_ncat, &
-        ice_ocean_boundary%ifrac_n(:,:,:), rc=rc)
-    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
-        line=__LINE__, &
-        file=__FILE__)) &
-        return  ! bail out
-  endif ! multiple ice categories
 
 end subroutine mom_import
 

@@ -423,7 +423,6 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   character(len=*), parameter            :: subname='(MOM_cap:InitializeAdvertise)'
   character(len=32)                      :: calendar
   logical                                :: i2o_per_cat
-  integer                                :: ice_ncat
 !--------------------------------
 
   rc = ESMF_SUCCESS
@@ -528,30 +527,29 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   ! optional input from cice columns due to ice thickness categories
   !-----------------
 
-  ! Note that flds_i2o_per_cat is set by the env_run.xml variable CPL_I2O_PER_CAT
-  ! This xml variable is set by MOM_interface's buildnml script; it has the same
-  ! value as USE_MARBL in the case
-  call NUOPC_CompAttributeGet(gcomp, name='flds_i2o_per_cat', value=cvalue, rc=rc)
-  if (ChkErr(rc,__LINE__,u_FILE_u)) return
-  read(cvalue,*) i2o_per_cat
-  if (is_root_pe()) then
-      write(stdout,*) 'i2o_per_cat = ',i2o_per_cat
-  endif
+  Ice_ocean_boundary%ice_ncat = 0
+  if (cesm_coupled) then
+    ! Note that flds_i2o_per_cat is set by the env_run.xml variable CPL_I2O_PER_CAT
+    ! This xml variable is set by MOM_interface's buildnml script; it has the same
+    ! value as USE_MARBL in the case
+    call NUOPC_CompAttributeGet(gcomp, name='flds_i2o_per_cat', value=cvalue, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+    read(cvalue,*) i2o_per_cat
+    if (is_root_pe()) then
+        write(stdout,*) 'i2o_per_cat = ',i2o_per_cat
+    endif
 
-  ! Note that ice_ncat is set by the env_run.xml variable ICE_NCAT which is set
-  ! by the ice component (default is 1)
-  call NUOPC_CompAttributeGet(gcomp, name='ice_ncat', value=cvalue, rc=rc)
-  if (ChkErr(rc,__LINE__,u_FILE_u)) return
-  read(cvalue,*) ice_ncat
-  if (is_root_pe()) then
-      write(stdout,*) 'ice_ncat = ',ice_ncat
-  endif
-
-  if (i2o_per_cat) then
-    Ice_ocean_boundary%ice_ncat = ice_ncat
-  else
-    Ice_ocean_boundary%ice_ncat = 0
-  endif
+    ! Note that ice_ncat is set by the env_run.xml variable ICE_NCAT which is set
+    ! by the ice component (default is 1)
+    if (i2o_per_cat) then
+      call NUOPC_CompAttributeGet(gcomp, name='ice_ncat', value=cvalue, rc=rc)
+      if (ChkErr(rc,__LINE__,u_FILE_u)) return
+      read(cvalue,*) Ice_ocean_boundary%ice_ncat
+    endif
+    if (is_root_pe()) then
+        write(stdout,*) 'ice_ncat = ', Ice_ocean_boundary%ice_ncat
+    endif
+  end if
 
   ! rsd need to figure out how to get this without share code
   !call shr_nuopc_get_component_instance(gcomp, inst_suffix, inst_index)
@@ -673,13 +671,6 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
            Ice_ocean_boundary% mi (isc:iec,jsc:jec),              &
            Ice_ocean_boundary% ice_fraction (isc:iec,jsc:jec),    &
            Ice_ocean_boundary% u10_sqr (isc:iec,jsc:jec),         &
-           Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
-           Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
-           Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
-           Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
-           Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
-           Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
-           Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
            Ice_ocean_boundary% p (isc:iec,jsc:jec),               &
            Ice_ocean_boundary% lrunoff (isc:iec,jsc:jec),         &
            Ice_ocean_boundary% frunoff (isc:iec,jsc:jec),         &
@@ -700,6 +691,18 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% hrofi (isc:iec,jsc:jec),           &
              Ice_ocean_boundary% hevap (isc:iec,jsc:jec),           &
              Ice_ocean_boundary% hcond (isc:iec,jsc:jec),           &
+             source=0.0)
+
+    ! Needed for MARBL
+    ! These are allocated separately to make it easier to pull out
+    ! of the cesm_coupled block if other models want to add BGC
+    allocate(Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
+             Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
+             Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
+             Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
+             Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
              Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
              Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec),    &
              source=0.0)
@@ -750,17 +753,6 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_rofi"                  , "will provide") !-> ice runoff
   call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac"                   , "will provide") !-> ice fraction
   call fld_list_add(fldsToOcn_num, fldsToOcn, "So_duu10n"                  , "will provide") !-> wind^2 at 10m
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_ndep"                  , "will provide", & !-> nitrogen deposition
-                    ungridded_lbound=1, ungridded_ubound=2)
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstwet"                , "will provide", &
-                    ungridded_lbound=1, ungridded_ubound=4)
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstdry"                , "will provide", &
-                    ungridded_lbound=1, ungridded_ubound=4)
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_bcph"                  , "will provide", &
-                    ungridded_lbound=1, ungridded_ubound=3)
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_flxdst"                , "will provide") !-> ice runoff
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcphi"                 , "will provide")
-  call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcpho"                 , "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "mean_fresh_water_to_ocean_rate", "will provide")
   call fld_list_add(fldsToOcn_num, fldsToOcn, "net_heat_flx_to_ocn"        , "will provide")
 
@@ -768,9 +760,9 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Sf_afracr", "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Foxx_swnet_afracr", "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_swpen_ifrac_n", "will provide", &
-                      ungridded_lbound=1, ungridded_ubound=ice_ncat)
+                      ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%ice_ncat)
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Si_ifrac_n", "will provide", &
-                      ungridded_lbound=1, ungridded_ubound=ice_ncat)
+                      ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%ice_ncat)
   endif
 
   if (cesm_coupled) then
@@ -780,6 +772,19 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_cond" , "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_rofl" , "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "heat_content_rofi" , "will provide")
+
+    ! Fields needed for MARBL
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_ndep"                  , "will provide", & !-> nitrogen deposition
+                      ungridded_lbound=1, ungridded_ubound=2)
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstwet"                , "will provide", &
+                      ungridded_lbound=1, ungridded_ubound=4)
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_dstdry"                , "will provide", &
+                      ungridded_lbound=1, ungridded_ubound=4)
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_bcph"                  , "will provide", &
+                      ungridded_lbound=1, ungridded_ubound=3)
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_flxdst"                , "will provide") !-> ice runoff
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcphi"                 , "will provide")
+    call fld_list_add(fldsToOcn_num, fldsToOcn, "Fioi_bcpho"                 , "will provide")
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Sa_co2prog"        , "will provide") !-> prognostic CO2 from atm
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Sa_co2diag"        , "will provide") !-> diagnostic CO2 from atm
   endif
