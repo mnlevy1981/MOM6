@@ -200,9 +200,6 @@ type, public :: MARBL_tracers_CS ; private
 end type MARBL_tracers_CS
 
 ! Module parameters
-real, parameter :: cm_per_m = 100.  !< convert from m -> cm (MARBL is cgs)
-real, parameter :: g_per_kg = 1000. !< convert from kg -> g (MARBL is cgs)
-real, parameter :: m_per_cm = 0.01  !< convert from cm -> m
 real, parameter :: atm_per_Pa = 1./101325.  !< convert from Pa -> atm
 
 contains
@@ -295,8 +292,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   if (is_root_PE()) close(marbl_settings_in)
 
   ! (3) call marbl%init()
-  ! TODO: the units in gcm_delta_z, gcm_zw, and gcm_zt are wrong, but we want to strip these values
-  !       out of init anyway because MOM updates them every time step / every column
+  ! TODO: We want to strip gcm_delta_z, gcm_zw, and gcm_zt values out of
+  !       init because MOM updates them every time step / every column
   call MARBL_instances%init(&
                             gcm_num_levels = nz, &
                             gcm_num_PAR_subcols = CS%ice_ncat + 1, &
@@ -304,7 +301,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
                             gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
                             gcm_zw = GV%sInterface(2:nz+1), &
                             gcm_zt = GV%sLayer, &
-                            unit_system = "cgs", &
+                            unit_system = "mks", &
                             lgcm_has_global_ops = .true. &
                            )
   if (MARBL_instances%StatusLog%labort_marbl) &
@@ -319,7 +316,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%sfo_cnt = CS%sfo_cnt +1
   call MARBL_instances%surface_flux_output%add_output(num_elements=1, &
                                                       field_name="flux_co2", &
-                                                      unit_system="cgs", &
+                                                      unit_system="mks", &
                                                       output_id=CS%flux_co2_ind, &
                                                       marbl_status_log=MARBL_instances%StatusLog)
 
@@ -481,8 +478,8 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   endif
   ! ** Scale factor for FESEDFLUX
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
-                 "Conversion factor between FESEDFLUX file and MARBL units (umol / m^2 / d -> nmol / cm^2 / s)", &
-                 default=1000. / 10000. / 86400.)
+                 "Conversion factor between FESEDFLUX file and MARBL units (umol / m^2 / d -> mmol / m^2 / s)", &
+                 default=0.001/86400.)
 
   CS%ntr = size(MARBL_instances%tracer_metadata)
   allocate(CS%ind_tr(CS%ntr))
@@ -875,11 +872,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
   integer :: i, j, k, is, ie, js, je, nz, m
-  real :: ndep_conversion ! mol L-2 T-1 -> nmol cm-2 s-1
+  real :: ndep_conversion ! mol L-2 T-1 -> mmol m-2 s-1
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  ! First two terms get us to mol m-2 s-1; 1e5 gets us nmol cm-2 s-1, which is what MARBL wants
-  ndep_conversion = (US%m_to_L)**2 * US%s_to_T * 1.e5
+  ! First two terms get us to mol m-2 s-1; 1e3 gets us mmol m-2 s-1, which is what MARBL wants
+  ndep_conversion = (US%m_to_L)**2 * US%s_to_T * 1.e3
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -901,10 +898,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%sst_ind > 0) MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
       if (CS%ifrac_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
-      ! MARBL wants u10_sqr in (cm/s)^2
+      ! MARBL wants u10_sqr in (m/s)^2
       if (CS%u10_sqr_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * &
-                                                                            (US%L_t_to_m_s * cm_per_m)**2
+        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (US%L_t_to_m_s)**2
       ! mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
       if (CS%atmpress_ind > 0) then
@@ -928,7 +924,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (CS%fe_dep_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j)
 
-      !       MARBL wants ndep in (nmol/cm^2/s)
+      !       MARBL wants ndep in (mmol/m^2/s)
       if (CS%nox_flux_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * &
                                                                              ndep_conversion
@@ -971,12 +967,12 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       enddo
 
       !     * Surface tracer flux
-      CS%STF(i,j,:) = MARBL_instances%surface_fluxes(1,:) * m_per_cm
+      CS%STF(i,j,:) = MARBL_instances%surface_fluxes(1,:)
 
       !     * Surface flux output
       do m=1,CS%sfo_cnt
-      !  nmol/cm^2/s (positive down) to kg CO2/m^2/s (positive down)
-        CS%SFO(i,j,m) = 44.0e-8 * MARBL_instances%surface_flux_output%outputs_for_GCM(m)%forcing_field_0d(1)
+      !  mmol/m^2/s (positive down) to kg CO2/m^2/s (positive down)
+        CS%SFO(i,j,m) = 44.0e-6 * MARBL_instances%surface_flux_output%outputs_for_GCM(m)%forcing_field_0d(1)
       enddo
 
     enddo
@@ -1084,14 +1080,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
                                               CS%bot_flux_mix_thickness / (G%bathyT(i,j) - zi(0))
       if (CS%bot_flux_to_tend_id > 0) &
         bot_flux_to_tend(i, j, :) = MARBL_instances%bot_flux_to_tend(:)
-      ! When MARBL is mks, we can drop the m_per_cm conversion
-      MARBL_instances%bot_flux_to_tend(:) = MARBL_instances%bot_flux_to_tend(:) * m_per_cm
 
-      ! mks -> cgs
       ! zw(1:nz) is bottom cell depth so no element of zw = 0, it is assumed to be top layer depth
-      MARBL_instances%domain%zw(:) = zi(1:GV%ke) * cm_per_m
-      MARBL_instances%domain%zt(:) = zc(:) * cm_per_m
-      MARBL_instances%domain%delta_z(:) = dz(:) * cm_per_m
+      MARBL_instances%domain%zw(:) = zi(1:GV%ke)
+      MARBL_instances%domain%zt(:) = zc(:)
+      MARBL_instances%domain%delta_z(:) = dz(:)
 
       ! iii. Load proper column data
       !      * Forcing Fields

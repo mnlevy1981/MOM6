@@ -407,7 +407,6 @@ contains
     integer :: i, j, is, ie, js, je, m
     real :: atm_fe_bioavail_frac     !< TODO: define this (local) term
     real :: seaice_fe_bioavail_frac  !< TODO: define this (local) term
-    real :: dust_flux_conversion     !< TODO: define this (local) term
     real :: iron_flux_conversion     !< TODO: define this (local) term
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
                                      !! nitrogen deposition [kg(N) m-2 s-1 ~> mol L-2 T-1]
@@ -416,8 +415,7 @@ contains
 
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
     ndep_conversion = (1000./14.) * ((US%L_to_m)**2 * US%T_to_s)
-    dust_flux_conversion = US%kg_m2s_to_RZ_T * 0.1            ! kg / m^2 / s -> g / cm^2 / s
-    iron_flux_conversion = US%kg_m2s_to_RZ_T * 1.e8 / molw_Fe ! kg / m^2 / s -> nmol / cm^2 / s
+    iron_flux_conversion = US%kg_m2s_to_RZ_T * 1.e6 / molw_Fe ! kg / m^2 / s -> mmol / m^2 / s
 
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
@@ -496,8 +494,7 @@ contains
 
     if (associated(atm_fine_dust_flux)) then
       do j=js,je ; do i=is,ie
-        ! TODO: MARBL wants g/cm^2/s; we should convert to RZ_T in ocn_cap_methods then back to MARBL units here
-        fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * dust_flux_conversion) * &
+        fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * US%kg_m2s_to_RZ_T) * &
                                        (atm_fine_dust_flux(i-i0,j-j0) + &
                                         atm_coarse_dust_flux(i-i0,j-j0) + &
                                         seaice_dust_flux(i-i0,j-j0))
@@ -531,7 +528,7 @@ contains
         fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
                                  (CS%seaice_fe_to_bc_ratio * seaice_bc_flux(i-i0,j-j0)))
 
-        ! Unit conversion (kg / m^2 / s -> nmol / cm^2 / s)
+        ! Unit conversion (kg / m^2 / s -> mmol / m^2 / s)
         fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
 
       enddo ; enddo
