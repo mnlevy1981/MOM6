@@ -44,8 +44,6 @@ type, public :: surface
     SST, &         !< The sea surface temperature [C ~> degC].
     SSS, &         !< The sea surface salinity [S ~> psu or gSalt/kg].
     sfc_density, & !< The mixed layer density [R ~> kg m-3].
-    sfc_cfc11,   & !< Sea surface concentration of CFC11 [mol kg-1].
-    sfc_cfc12,   & !< Sea surface concentration of CFC12 [mol kg-1].
     Hml, &         !< The mixed layer depth [Z ~> m].
     u, &           !< The mixed layer zonal velocity [L T-1 ~> m s-1].
     v, &           !< The mixed layer meridional velocity [L T-1 ~> m s-1].
@@ -329,7 +327,7 @@ contains
 !! the ocean model. Unused fields are unallocated.
 subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
                                   gas_fields_ocn, use_meltpot, use_iceshelves, &
-                                  omit_frazil, use_cfcs, use_marbl_tracers)
+                                  omit_frazil, use_marbl_tracers)
   type(ocean_grid_type), intent(in)    :: G                !< ocean grid structure
   type(surface),         intent(inout) :: sfc_state        !< ocean surface state type to be allocated.
   logical,     optional, intent(in)    :: use_temperature  !< If true, allocate the space for thermodynamic variables.
@@ -342,7 +340,6 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
                                               !! tracer fluxes, and can be used to spawn related
                                               !! internal variables in the ice model.
   logical,     optional, intent(in)    :: use_meltpot      !< If true, allocate the space for melt potential
-  logical,     optional, intent(in)    :: use_cfcs         !< If true, allocate the space for cfcs
   logical,     optional, intent(in)    :: use_iceshelves   !< If true, allocate the space for the stresses
                                                            !! under ice shelves.
   logical,     optional, intent(in)    :: omit_frazil      !< If present and false, do not allocate the space to
@@ -350,7 +347,7 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
   logical,     optional, intent(in)    :: use_marbl_tracers  !< If true, allocate the space for CO2 flux from MARBL
 
   ! local variables
-  logical :: use_temp, alloc_integ, use_melt_potential, alloc_iceshelves, alloc_frazil, alloc_cfcs, alloc_fco2
+  logical :: use_temp, alloc_integ, use_melt_potential, alloc_iceshelves, alloc_frazil, alloc_fco2
   integer :: is, ie, js, je, isd, ied, jsd, jed
   integer :: isdB, iedB, jsdB, jedB
 
@@ -361,7 +358,6 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
   use_temp = .true. ; if (present(use_temperature)) use_temp = use_temperature
   alloc_integ = .true. ; if (present(do_integrals)) alloc_integ = do_integrals
   use_melt_potential = .false. ; if (present(use_meltpot)) use_melt_potential = use_meltpot
-  alloc_cfcs = .false. ; if (present(use_cfcs)) alloc_cfcs = use_cfcs
   alloc_iceshelves = .false. ; if (present(use_iceshelves)) alloc_iceshelves = use_iceshelves
   alloc_frazil = .true. ; if (present(omit_frazil)) alloc_frazil = .not.omit_frazil
   alloc_fco2 = .false. ; if (present(use_marbl_tracers)) alloc_fco2 = use_marbl_tracers
@@ -384,11 +380,6 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
 
   if (use_melt_potential) then
     allocate(sfc_state%melt_potential(isd:ied,jsd:jed), source=0.0)
-  endif
-
-  if (alloc_cfcs) then
-    allocate(sfc_state%sfc_cfc11(isd:ied,jsd:jed), source=0.0)
-    allocate(sfc_state%sfc_cfc12(isd:ied,jsd:jed), source=0.0)
   endif
 
   if (alloc_integ) then
@@ -434,8 +425,6 @@ subroutine deallocate_surface_state(sfc_state)
   if (allocated(sfc_state%ocean_mass)) deallocate(sfc_state%ocean_mass)
   if (allocated(sfc_state%ocean_heat)) deallocate(sfc_state%ocean_heat)
   if (allocated(sfc_state%ocean_salt)) deallocate(sfc_state%ocean_salt)
-  if (allocated(sfc_state%sfc_cfc11)) deallocate(sfc_state%sfc_cfc11)
-  if (allocated(sfc_state%sfc_cfc12)) deallocate(sfc_state%sfc_cfc12)
   if (allocated(sfc_state%fco2)) deallocate(sfc_state%fco2)
   call coupler_type_destructor(sfc_state%tr_fields)
 

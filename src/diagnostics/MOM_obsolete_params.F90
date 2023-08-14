@@ -85,6 +85,8 @@ subroutine find_obsolete_params(param_file)
   call obsolete_real(param_file, "BT_MASS_SOURCE_LIMIT", 0.0)
 
   call obsolete_int(param_file, "SEAMOUNT_LENGTH_SCALE", hint="Use SEAMOUNT_X_LENGTH_SCALE instead.")
+  call obsolete_int(param_file, "USE_LATERAL_BOUNDARY_DIFFUSION", &
+                    hint="Use USE_HORIZONTAL_BOUNDARY_DIFFUSION instead.")
 
   call obsolete_logical(param_file, "MSTAR_FIXED", hint="Instead use MSTAR_MODE.")
   call obsolete_logical(param_file, "USE_VISBECK_SLOPE_BUG", .false.)
@@ -96,6 +98,8 @@ subroutine find_obsolete_params(param_file)
 
   ! This parameter is on the to-do list to be obsoleted.
   ! call obsolete_logical(param_file, "NEW_SPONGES", hint="Use INTERPOLATE_SPONGE_TIME_SPACE instead.")
+
+  call obsolete_logical(param_file, "SMOOTH_RI", hint="Instead use N_SMOOTH_RI.")
 
   ! Write the file version number to the model log.
   call log_version(param_file, mdl, version)
