@@ -200,7 +200,7 @@ contains
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
-        "If true, use nitrogen deposition supplied from "//&
+        "If true, use river fluxes supplied from "//&
         "an input file", default=.true.)
     if (CS%read_riv_fluxes) then
       call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &

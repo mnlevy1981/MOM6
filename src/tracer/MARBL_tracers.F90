@@ -301,7 +301,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
                             gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), &
                             gcm_zw = GV%sInterface(2:nz+1), &
                             gcm_zt = GV%sLayer, &
-                            unit_system = "mks", &
+                            unit_system_opt = "mks", &
                             lgcm_has_global_ops = .true. &
                            )
   if (MARBL_instances%StatusLog%labort_marbl) &
@@ -316,7 +316,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%sfo_cnt = CS%sfo_cnt +1
   call MARBL_instances%surface_flux_output%add_output(num_elements=1, &
                                                       field_name="flux_co2", &
-                                                      unit_system="mks", &
+                                                      conc_flux_units=MARBL_instances%get_conc_flux_units(), &
                                                       output_id=CS%flux_co2_ind, &
                                                       marbl_status_log=MARBL_instances%StatusLog)
 

@@ -88,13 +88,13 @@ module marbl_interface_public_types
 
 contains
 
-    subroutine marbl_output_add(this, num_elements, field_name, unit_system, &
+    subroutine marbl_output_add(this, num_elements, field_name, conc_flux_units, &
                                 output_id, marbl_status_log, num_levels)
 
        class(marbl_output_for_GCM_type), intent(inout) :: this
        integer,              intent(in)    :: num_elements
        character(len=*),     intent(in)    :: field_name
-       character(len=*),     intent(in)    :: unit_system
+       character(len=*),     intent(in)    :: conc_flux_units
        integer,              intent(out)   :: output_id
        type(marbl_log_type), intent(inout) :: marbl_status_log
        integer,              optional, intent(in) :: num_levels

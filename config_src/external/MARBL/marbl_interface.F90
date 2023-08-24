@@ -62,7 +62,7 @@ contains
         gcm_delta_z,                       &
         gcm_zw,                            &
         gcm_zt,                            &
-        unit_system,                       &
+        unit_system_opt,                   &
         lgcm_has_global_ops)
 
         class(marbl_interface_class), intent(inout) :: self
@@ -72,7 +72,7 @@ contains
         real,                         intent(in)    :: gcm_delta_z(gcm_num_levels)
         real,                         intent(in)    :: gcm_zw(gcm_num_levels)
         real,                         intent(in)    :: gcm_zt(gcm_num_levels)
-        character(len=*),             intent(in)    :: unit_system
+        character(len=*),             intent(in)    :: unit_system_opt
         logical,                      intent(in)    :: lgcm_has_global_ops
 
         call MOM_error(FATAL, error_msg)
