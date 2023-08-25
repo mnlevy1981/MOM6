@@ -314,11 +314,9 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 
   ! CO2 Flux to the atmosphere
   CS%sfo_cnt = CS%sfo_cnt +1
-  call MARBL_instances%surface_flux_output%add_output(num_elements=1, &
-                                                      field_name="flux_co2", &
-                                                      conc_flux_units=MARBL_instances%get_conc_flux_units(), &
-                                                      output_id=CS%flux_co2_ind, &
-                                                      marbl_status_log=MARBL_instances%StatusLog)
+  call MARBL_instances%add_output_for_GCM(num_elements=1, &
+                                          field_name="flux_co2", &
+                                          output_id=CS%flux_co2_ind)
 
   ! (5) Initialize forcing fields
   !     i. store all surface forcing indices

@@ -37,8 +37,8 @@ module marbl_interface
         procedure, public  :: init                       !< dummy routine
         procedure, public  :: surface_flux_compute       !< dummy surface flux routine
         procedure, public  :: interior_tendency_compute  !< dummy interior tendency routine
+        procedure, public  :: add_output_for_GCM         !< dummy add_output_for_GCM routine
         procedure, public  :: get_output_for_GCM         !< dummy get_output_for_GCM routine
-        procedure, public  :: get_conc_flux_units        !< dummy get_conc_flux_units
         procedure, public  :: shutdown                   !< dummy shutdown routine
     end type marbl_interface_class
 
@@ -97,6 +97,19 @@ contains
 
     end subroutine interior_tendency_compute
 
+    !> Dummy version of MARBL's add_output_for_GCM() function
+    subroutine add_output_for_GCM(self, num_elements, field_name, output_id, num_levels)
+
+        class (marbl_interface_class), intent(inout) :: self
+        integer,                       intent(in)    :: num_elements
+        character(len=*),              intent(in)    :: field_name
+        integer,                       intent(out)   :: output_id
+        integer,             optional, intent(in) :: num_levels
+
+        output_id = 0
+
+    end subroutine add_output_for_GCM
+
     !> Dummy version of MARBL's get_output_for_GCM() function
     subroutine get_output_for_GCM(self, field_ind, array_out)
 
@@ -106,16 +119,6 @@ contains
         call MOM_error(FATAL, error_msg)
 
     end subroutine get_output_for_GCM
-
-    !> Dummy version of MARBL's get_conc_flux_units() function
-    function get_conc_flux_units(self)
-
-        class (marbl_interface_class), intent(inout) :: self
-        character(len=1) :: get_conc_flux_units
-
-        get_conc_flux_units = ''
-
-    end function get_conc_flux_units
 
     !> Dummy version of MARBL's shutdown() function
     subroutine shutdown(self)

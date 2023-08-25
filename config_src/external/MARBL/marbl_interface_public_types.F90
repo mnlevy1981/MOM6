@@ -82,23 +82,6 @@ module marbl_interface_public_types
 
     type, public :: marbl_output_for_GCM_type
         type(marbl_single_output_type), dimension(:), pointer :: outputs_for_GCM => NULL()
-    contains
-        procedure, public :: add_output => marbl_output_add
     end type marbl_output_for_GCM_type
-
-contains
-
-    subroutine marbl_output_add(this, num_elements, field_name, conc_flux_units, &
-                                output_id, marbl_status_log, num_levels)
-
-       class(marbl_output_for_GCM_type), intent(inout) :: this
-       integer,              intent(in)    :: num_elements
-       character(len=*),     intent(in)    :: field_name
-       character(len=*),     intent(in)    :: conc_flux_units
-       integer,              intent(out)   :: output_id
-       type(marbl_log_type), intent(inout) :: marbl_status_log
-       integer,              optional, intent(in) :: num_levels
-
-    end subroutine marbl_output_add
 
 end module marbl_interface_public_types
