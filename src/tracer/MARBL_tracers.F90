@@ -271,13 +271,6 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
     ! iii. All tasks call put_setting (TODO: openMP blocks?)
     call MARBL_instances%put_setting(marbl_in_line(1))
   enddo
-  ! iv. (TEMPORARY) don't set tracer restoring
-  !     TODO: fix this
-  call MARBL_instances%put_setting("tracer_restore_vars(1) = ''")
-  call MARBL_instances%put_setting("tracer_restore_vars(2) = ''")
-  call MARBL_instances%put_setting("tracer_restore_vars(3) = ''")
-  call MARBL_instances%put_setting("tracer_restore_vars(4) = ''")
-  call MARBL_instances%put_setting("tracer_restore_vars(5) = ''")
 
   ! (2c) we should always reach the EOF to capture the entire file...
   if (.not. is_iostat_end(read_error)) then
@@ -1054,6 +1047,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (G%mask2dT(i,j) == 0) cycle
 
       ! ii. Set up vertical domain and bot_flux_to_tend
+      !     TODO: why doesn't ke have (i,j) coordinate?
       MARBL_instances%domain%kmt = GV%ke
       ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
       ! MARBL wants this to be positive-down
