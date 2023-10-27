@@ -14,6 +14,7 @@ use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
 use MOM_grid,            only : ocean_grid_type
+use MOM_interpolate,     only : init_external_field, time_interp_external
 use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index,       only : hor_index_type
 use MOM_io,              only : file_exists, MOM_read_data, slasher, vardesc, var_desc, query_vardesc
@@ -98,6 +99,7 @@ end type MARBL_tracer_data
 !> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr    !< The number of tracers that are actually used.
+  integer :: restore_count !< The number of tracers MARBL is configured to restore
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
   logical :: use_ice_category_fields    !< Forcing will include multiple ice categories for ice_frac and shortwave
   logical :: request_Chl_from_MARBL     !< MARBL can provide Chl to use in set_pen_shortwave()
@@ -120,6 +122,12 @@ type, public :: MARBL_tracers_CS ; private
 
   character(len=200) :: fesedflux_file  !< name of [netCDF] file containing iron sediment flux
   character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
+  character(len=4) :: restoring_source !< location of tracer restoring data
+                                       !! valid values: file, none
+  character(len=14) :: restoring_rtau_source !< location of tracer restoring timescale data
+                                             !! valid values: file, grid_dependent
+  character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
+  character(len=200) :: restoring_rtau_file !< name of [netCDF] file containing tracer restoring timescale
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
 
   real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
@@ -159,6 +167,8 @@ type, public :: MARBL_tracers_CS ; private
                                          !! (dims: i, j, tracer) [conc m]
   real, allocatable :: SFO(:,:,:)  !< surface flux output returned from MARBL for use in GCM
                                    !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
+  real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
+  real, allocatable :: restoring_fields(:,:,:,:) !< fields to restore to (dims: i, j, k, num_restored_tracers) [tracer units]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -182,6 +192,10 @@ type, public :: MARBL_tracers_CS ; private
   integer :: fesedflux_ind  !< index of MARBL forcing field array to copy iron sediment flux into
   integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
   integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
+  integer, allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
+  character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
+  integer, allocatable :: tracer_restoring_ind(:) !< index of MARBL forcing field to copy per-tracer restoring field into
+  integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer restoring timescale into
 
   !> Number of surface flux outputs as well as specific indices for each one
   integer :: sfo_cnt
@@ -216,8 +230,9 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
-  integer :: m, nz, marbl_settings_in, read_error
-  logical :: chl_from_file
+  character(len=256) :: forcing_sname
+  integer :: m, n, nz, marbl_settings_in, read_error, rtau_count, forcing_index
+  logical :: chl_from_file, forcing_processed
   nz = GV%ke
   marbl_settings_in = 615
 
@@ -301,6 +316,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
     call MARBL_instances%StatusLog%log_error_trace("MARBL_instances%init", "configure_MARBL_tracers")
   call print_marbl_log(MARBL_instances%StatusLog)
   call MARBL_instances%StatusLog%erase()
+  CS%ntr = size(MARBL_instances%tracer_metadata)
 
   ! (4) Request fields needed by MOM6
   CS%sfo_cnt = 0
@@ -365,9 +381,13 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%fesedflux_ind = -1
   CS%o2_scalef_ind = -1
   CS%remin_scalef_ind = -1
+  allocate(CS%id_tracer_restoring(CS%ntr), source=-1)
+  allocate(CS%tracer_restoring_varname(CS%ntr), source='')
+  allocate(CS%tracer_restoring_ind(CS%ntr), source=-1)
+  allocate(CS%tracer_rtau_ind(CS%ntr), source=-1)
+  CS%restore_count = 0
+  rtau_count = 0
   do m=1,size(MARBL_instances%interior_tendency_forcings)
-    ! i. Check to see if this is a tracer restoring field or timescale
-    ! ii. If not, should be one of the following:
     select case (trim(MARBL_instances%interior_tendency_forcings(m)%metadata%varname))
       case('Dust Flux')
         CS%dustflux_ind = m
@@ -388,9 +408,22 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
       case('Particulate Remin Scale Factor')
         CS%remin_scalef_ind = m
       case DEFAULT
-        write(log_message, "(A,1X,A)") trim(MARBL_instances%interior_tendency_forcings(m)%metadata%varname), &
-                                   'is not a valid interior tendency forcing field name.'
-        call MOM_error(FATAL, log_message)
+        forcing_index = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Field')
+        if (forcing_index > 0) then
+          CS%restore_count = CS%restore_count + 1
+          CS%tracer_restoring_ind(CS%restore_count) = m
+          CS%tracer_restoring_varname(CS%restore_count) = MARBL_instances%interior_tendency_forcings(m)%metadata%varname(1:forcing_index-2)
+        else
+          forcing_index = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Inverse Timescale')
+          if (forcing_index > 0) then
+            rtau_count = rtau_count + 1
+            CS%tracer_rtau_ind(rtau_count) = m
+          else
+            write(log_message, "(A,1X,A)") trim(MARBL_instances%interior_tendency_forcings(m)%metadata%varname), &
+                                           'is not a valid interior tendency forcing field name.'
+            call MOM_error(FATAL, log_message)
+          end if
+        end if
     end select
   enddo
 end subroutine configure_MARBL_tracers
@@ -412,6 +445,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
+  character(len=256) :: log_message
   character(len=200) :: inputdir ! The directory where the input files are.
   character(len=48)  :: var_name ! The variable's name.
   character(len=128) :: desc_name ! The variable's descriptor.
@@ -472,7 +506,32 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                  "Conversion factor between FESEDFLUX file and MARBL units (umol / m^2 / d -> mmol / m^2 / s)", &
                  default=0.001/86400.)
 
-  CS%ntr = size(MARBL_instances%tracer_metadata)
+  ! ** Tracer Restoring
+  call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_SOURCE", CS%restoring_source, &
+                 "Source of data for restoring MARBL tracers", &
+                 default="none")
+  select case(CS%restoring_source)
+    case("none")
+    case("file")
+      call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_FILE", CS%restoring_file, &
+                     "File containing fields to restore MARBL tracers towards")
+      call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_SOURCE", CS%restoring_rtau_source, &
+                     "Source of data for  1/timescale for restoring MARBL tracers")
+      select case(CS%restoring_rtau_source)
+        case("file")
+          call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_FILE", CS%restoring_rtau_file, &
+                        "File containing the inverse timescale for restoring MARBL tracers")
+        case DEFAULT
+          write(log_message, "(3A)") "'", trim(CS%restoring_rtau_source), &
+               "' is not a valid option for MARBL_TRACER_RESTORING_RTAU_SOURCE"
+          call MOM_error(FATAL, log_message)
+     end select
+    case DEFAULT
+      write(log_message, "(3A)") "'", trim(CS%restoring_source), &
+           "' is not a valid option for MARBL_TRACER_RESTORING_SOURCE"
+      call MOM_error(FATAL, log_message)
+    end select
+
   allocate(CS%ind_tr(CS%ntr))
   allocate(CS%tr_desc(CS%ntr))
   allocate(CS%tracer_data(CS%ntr))
@@ -725,6 +784,23 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
       enddo
     enddo
   enddo
+
+  if (CS%restoring_rtau_source == "file") then
+    allocate(CS%rtau(SZI_(G), SZJ_(G), SZK_(G)), source=0.)
+    allocate(CS%restoring_fields(SZI_(G), SZJ_(G), SZK_(G), CS%restore_count), source=0.)
+    select case(CS%restoring_source)
+      case("file")
+        do m=1,CS%restore_count
+          CS%id_tracer_restoring(m) = init_external_field(CS%restoring_file, trim(CS%tracer_restoring_varname(m)), domain=G%Domain%mpp_domain)
+        end do
+    end select
+    select case(CS%restoring_rtau_source)
+      case("file")
+        call MOM_read_data(CS%restoring_rtau_file, "RTAU", CS%rtau(:,:,:), G%Domain)
+    end select
+  end if
+
+  ! Set up arrays for tracer restoring
 
 end subroutine initialize_MARBL_tracers
 
@@ -1040,6 +1116,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   endif
 
   ! (4) Compute interior tendencies
+
+  ! Read any tracer restoring fields
+  ! do m=1, CS%restore_count
+  !   call time_interp_external(CS%id_tracer_restoring(m), Time, CS%restoring_fields(:,:,:,m))
+  ! end do
   bot_flux_to_tend(:, :, :) = 0.
   do j=js,je
     do i=is,ie
@@ -1109,6 +1190,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           MARBL_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,1) = fluxes%sw(i,j)
         endif
       endif
+      ! Tracer restoring
+      do m=1,CS%restore_count
+        MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:) = CS%restoring_fields(i,j,:,m)
+        MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = CS%rtau(i,j,:)
+      end do
 
       !        TODO: In POP, pressure comes from a function in state_mod.F90; I don't see a similar function here
       !              This formulation is from Levitus 1994, and I think it belongs in MOM_EOS.F90?
@@ -1397,11 +1483,20 @@ subroutine MARBL_tracers_end(CS)
     endif
     if (allocated(CS%ind_tr)) deallocate(CS%ind_tr)
     if (allocated(CS%id_surface_flux_out)) deallocate(CS%id_surface_flux_out)
+    if (allocated(CS%interior_tendency_out)) deallocate(CS%interior_tendency_out)
+    if (allocated(CS%interior_tendency_out_zint)) deallocate(CS%interior_tendency_out_zint)
+    if (allocated(CS%interior_tendency_out_zint_100m)) deallocate(CS%interior_tendency_out_zint_100m)
     if (allocated(CS%fracr_cat_id)) deallocate(CS%fracr_cat_id)
     if (allocated(CS%qsw_cat_id)) deallocate(CS%qsw_cat_id)
     if (allocated(CS%STF)) deallocate(CS%STF)
     if (allocated(CS%RIV_FLUXES)) deallocate(CS%RIV_FLUXES)
     if (allocated(CS%SFO)) deallocate(CS%SFO)
+    if (allocated(CS%tracer_restoring_ind)) deallocate(CS%tracer_restoring_ind)
+    if (allocated(CS%tracer_rtau_ind)) deallocate(CS%tracer_rtau_ind)
+    if (allocated(CS%fesedflux_in)) deallocate(CS%fesedflux_in)
+    if (allocated(CS%feventflux_in)) deallocate(CS%feventflux_in)
+    if (allocated(CS%restoring_fields)) deallocate(CS%restoring_fields)
+    if (allocated(CS%rtau)) deallocate(CS%rtau)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end
