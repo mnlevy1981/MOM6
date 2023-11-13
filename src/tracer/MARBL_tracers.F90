@@ -9,7 +9,7 @@ module MARBL_tracers
 
 use MOM_coms,            only : root_PE, broadcast
 use MOM_diag_mediator,   only : diag_ctrl
-use MOM_diag_vkernels,   only : reintegrate_column
+use MOM_diag_vkernels,   only : interpolate_column, reintegrate_column
 use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
@@ -44,6 +44,7 @@ implicit none ; private
 
 public register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
+public MARBL_tracers_set_forcing
 public MARBL_tracer_stock, MARBL_tracers_get_output_for_GCM, MARBL_tracers_end
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
@@ -124,6 +125,12 @@ type, public :: MARBL_tracers_CS ; private
   character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
   character(len=4) :: restoring_source !< location of tracer restoring data
                                        !! valid values: file, none
+  integer :: restoring_nz  !< number of levels in tracer restoring file
+  real, allocatable, dimension(:) :: &
+    restoring_z_edges  !< The depths of the cell interfaces in the input data [Z ~> m]
+  ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
+  real, allocatable, dimension(:) :: &
+    restoring_dz  !< The thickness of the cell layers in the input data [Z ~> m]
   character(len=14) :: restoring_rtau_source !< location of tracer restoring timescale data
                                              !! valid values: file, grid_dependent
   character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
@@ -168,7 +175,7 @@ type, public :: MARBL_tracers_CS ; private
   real, allocatable :: SFO(:,:,:)  !< surface flux output returned from MARBL for use in GCM
                                    !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
   real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
-  real, allocatable :: restoring_fields(:,:,:,:) !< fields to restore to (dims: i, j, k, num_restored_tracers) [tracer units]
+  real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -382,7 +389,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%o2_scalef_ind = -1
   CS%remin_scalef_ind = -1
   allocate(CS%id_tracer_restoring(CS%ntr), source=-1)
-  allocate(CS%tracer_restoring_varname(CS%ntr), source='')
+  allocate(CS%tracer_restoring_varname(CS%ntr), source='               ') ! gfortran 13.2 bug? source = '' does not blank out strings
   allocate(CS%tracer_restoring_ind(CS%ntr), source=-1)
   allocate(CS%tracer_rtau_ind(CS%ntr), source=-1)
   CS%restore_count = 0
@@ -452,7 +459,9 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=48)  :: units ! The variable's units.
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_MARBL_tracers
-  integer :: isd, ied, jsd, jed, nz, m
+  logical :: restoring_has_edges, restoring_use_missing
+  real :: restoring_missing
+  integer :: isd, ied, jsd, jed, nz, m, k, kbot
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
   if (associated(CS)) then
@@ -517,6 +526,17 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                      "File containing fields to restore MARBL tracers towards")
       call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_SOURCE", CS%restoring_rtau_source, &
                      "Source of data for  1/timescale for restoring MARBL tracers")
+
+      ! Set up array for thicknesses in restoring file
+      call read_Z_edges(CS%restoring_file, "PO4", CS%restoring_z_edges, CS%restoring_nz, &
+                        restoring_has_edges, restoring_use_missing, restoring_missing, &
+                        scale=US%m_to_Z)
+      allocate(CS%restoring_dz(CS%restoring_nz))
+      do k=CS%restoring_nz,1,-1
+        kbot = k + 1 ! level k is between z(k) and z(k+1)
+        CS%restoring_dz(k) = CS%restoring_z_edges(k) - CS%restoring_z_edges(kbot)
+      enddo
+
       select case(CS%restoring_rtau_source)
         case("file")
           call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_FILE", CS%restoring_rtau_file, &
@@ -536,7 +556,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   allocate(CS%tr_desc(CS%ntr))
   allocate(CS%tracer_data(CS%ntr))
 
-  do m = 1, CS%ntr
+  do m=1,CS%ntr
     allocate(CS%tracer_data(m)%tr(isd:ied,jsd:jed,nz), source=0.0)
     write(var_name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(desc_name(:),'(A)') trim(MARBL_instances%tracer_metadata(m)%long_name)
@@ -785,11 +805,13 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     enddo
   enddo
 
+  ! Initialize external field for restoring
   if (CS%restoring_rtau_source == "file") then
     allocate(CS%rtau(SZI_(G), SZJ_(G), SZK_(G)), source=0.)
-    allocate(CS%restoring_fields(SZI_(G), SZJ_(G), SZK_(G), CS%restore_count), source=0.)
     select case(CS%restoring_source)
       case("file")
+        ! Set up array for reading in raw restoring data
+        allocate(CS%restoring_in(SZI_(G), SZJ_(G), CS%restoring_nz, CS%restore_count), source=0.)
         do m=1,CS%restore_count
           CS%id_tracer_restoring(m) = init_external_field(CS%restoring_file, trim(CS%tracer_restoring_varname(m)), domain=G%Domain%mpp_domain)
         end do
@@ -1117,10 +1139,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
   ! (4) Compute interior tendencies
 
-  ! Read any tracer restoring fields
-  ! do m=1, CS%restore_count
-  !   call time_interp_external(CS%id_tracer_restoring(m), Time, CS%restoring_fields(:,:,:,m))
-  ! end do
   bot_flux_to_tend(:, :, :) = 0.
   do j=js,je
     do i=is,ie
@@ -1192,7 +1210,14 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       endif
       ! Tracer restoring
       do m=1,CS%restore_count
-        MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:) = CS%restoring_fields(i,j,:,m)
+        MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:) = 0.
+        call interpolate_column(CS%restoring_nz, &
+                                CS%restoring_dz(:), &
+                                CS%restoring_in(i,j,:,m), &
+                                GV%ke, &
+                                dz(:), &
+                                0., &
+                                MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:))
         MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = CS%rtau(i,j,:)
       end do
 
@@ -1353,6 +1378,24 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
 end subroutine MARBL_tracers_column_physics
 
+!> This subroutine reads time-varying forcing from files
+subroutine MARBL_tracers_set_forcing(day_start, G, CS)
+
+  type(time_type),         intent(in)    :: day_start !< Start time of the fluxes.
+  type(ocean_grid_type),   intent(in)    :: G         !< The ocean's grid structure.
+  type(MARBL_tracers_CS),  pointer       :: CS        !< The control structure returned by a
+
+  integer :: k,m
+
+  do m=1,CS%restore_count
+    call time_interp_external(CS%id_tracer_restoring(m),day_start,CS%restoring_in(:,:,:,m))
+    do k=1,CS%restoring_nz
+      CS%restoring_in(:,:,k,m) = G%mask2dT(:,:) * CS%restoring_in(:,:,k,m)
+    end do
+  end do
+
+end subroutine MARBL_tracers_set_forcing
+
 !> This function calculates the mass-weighted integral of all tracer stocks,
 !! returning the number of stocks it has calculated.  If the stock_index
 !! is present, only the stock corresponding to that coded index is returned.
@@ -1495,7 +1538,6 @@ subroutine MARBL_tracers_end(CS)
     if (allocated(CS%tracer_rtau_ind)) deallocate(CS%tracer_rtau_ind)
     if (allocated(CS%fesedflux_in)) deallocate(CS%fesedflux_in)
     if (allocated(CS%feventflux_in)) deallocate(CS%feventflux_in)
-    if (allocated(CS%restoring_fields)) deallocate(CS%restoring_fields)
     if (allocated(CS%rtau)) deallocate(CS%rtau)
     deallocate(CS)
   endif
