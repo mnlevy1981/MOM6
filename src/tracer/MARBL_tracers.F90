@@ -238,7 +238,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
   character(len=256) :: forcing_sname
-  integer :: m, n, nz, marbl_settings_in, read_error, rtau_count, forcing_index
+  integer :: m, n, nz, marbl_settings_in, read_error, rtau_count, fi
   logical :: chl_from_file, forcing_processed
   nz = GV%ke
   marbl_settings_in = 615
@@ -415,14 +415,14 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
       case('Particulate Remin Scale Factor')
         CS%remin_scalef_ind = m
       case DEFAULT
-        forcing_index = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Field')
-        if (forcing_index > 0) then
+        fi = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Field') ! fi stands for forcing_index
+        if (fi > 0) then
           CS%restore_count = CS%restore_count + 1
           CS%tracer_restoring_ind(CS%restore_count) = m
-          CS%tracer_restoring_varname(CS%restore_count) = MARBL_instances%interior_tendency_forcings(m)%metadata%varname(1:forcing_index-2)
+          CS%tracer_restoring_varname(CS%restore_count) = MARBL_instances%interior_tendency_forcings(m)%metadata%varname(1:fi-2)
         else
-          forcing_index = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Inverse Timescale')
-          if (forcing_index > 0) then
+          fi = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Inverse Timescale')
+          if (fi > 0) then
             rtau_count = rtau_count + 1
             CS%tracer_rtau_ind(rtau_count) = m
           else
@@ -813,7 +813,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
         ! Set up array for reading in raw restoring data
         allocate(CS%restoring_in(SZI_(G), SZJ_(G), CS%restoring_nz, CS%restore_count), source=0.)
         do m=1,CS%restore_count
-          CS%id_tracer_restoring(m) = init_external_field(CS%restoring_file, trim(CS%tracer_restoring_varname(m)), domain=G%Domain%mpp_domain)
+          CS%id_tracer_restoring(m) = init_external_field(CS%restoring_file, trim(CS%tracer_restoring_varname(m)), &
+                                                          domain=G%Domain%mpp_domain)
         end do
     end select
     select case(CS%restoring_rtau_source)
