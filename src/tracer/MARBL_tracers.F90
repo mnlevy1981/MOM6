@@ -9,7 +9,7 @@ module MARBL_tracers
 
 use MOM_coms,            only : root_PE, broadcast
 use MOM_diag_mediator,   only : diag_ctrl
-use MOM_diag_vkernels,   only : interpolate_column, reintegrate_column
+use MOM_diag_vkernels,   only : reintegrate_column
 use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
@@ -19,6 +19,7 @@ use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index,       only : hor_index_type
 use MOM_io,              only : file_exists, MOM_read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
+use MOM_remapping,       only : remapping_CS, initialize_remapping, remapping_core_h
 use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
@@ -127,13 +128,18 @@ type, public :: MARBL_tracers_CS ; private
                                        !! valid values: file, none
   integer :: restoring_nz  !< number of levels in tracer restoring file
   real, allocatable, dimension(:) :: &
-    restoring_z_edges  !< The depths of the cell interfaces in the input data [Z ~> m]
-  ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
+    restoring_z_edges  !< The depths of the cell interfaces in the tracer restoring file [Z ~> m]
   real, allocatable, dimension(:) :: &
-    restoring_dz  !< The thickness of the cell layers in the input data [Z ~> m]
+    restoring_dz  !< The thickness of the cell layers in the tracer restoring file [Z ~> m]
+  integer :: restoring_timescale_nz  !< number of levels in tracer restoring timescale file
+  real, allocatable, dimension(:) :: &
+    restoring_timescale_z_edges  !< The depths of the cell interfaces in the tracer restoring timescale file [Z ~> m]
+  real, allocatable, dimension(:) :: &
+    restoring_timescale_dz  !< The thickness of the cell layers in the tracer restoring timescale file [Z ~> m]
   character(len=14) :: restoring_rtau_source !< location of tracer restoring timescale data
                                              !! valid values: file, grid_dependent
   character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
+  type(remapping_CS) :: restoring_remapCS ! Remapping parameters and work arrays for tracer restoring / timescale
   character(len=200) :: restoring_rtau_file !< name of [netCDF] file containing tracer restoring timescale
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
 
@@ -460,7 +466,8 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   real, pointer :: tr_ptr(:,:,:) => NULL()
   logical :: register_MARBL_tracers
   logical :: restoring_has_edges, restoring_use_missing
-  real :: restoring_missing
+  logical :: restoring_timescale_has_edges, restoring_timescale_use_missing
+  real :: restoring_missing, restoring_timescale_missing
   integer :: isd, ied, jsd, jed, nz, m, k, kbot
   isd = HI%isd ; ied = HI%ied ; jsd = HI%jsd ; jed = HI%jed ; nz = GV%ke
 
@@ -527,6 +534,9 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
       call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_SOURCE", CS%restoring_rtau_source, &
                      "Source of data for  1/timescale for restoring MARBL tracers")
 
+      ! Initialize remapping type
+      call initialize_remapping(CS%restoring_remapCS, 'PCM', boundary_extrapolation=.false., answer_date=99991231)
+
       ! Set up array for thicknesses in restoring file
       call read_Z_edges(CS%restoring_file, "PO4", CS%restoring_z_edges, CS%restoring_nz, &
                         restoring_has_edges, restoring_use_missing, restoring_missing, &
@@ -541,6 +551,15 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
         case("file")
           call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_FILE", CS%restoring_rtau_file, &
                         "File containing the inverse timescale for restoring MARBL tracers")
+          ! Set up array for thicknesses in restoring timescale file
+          call read_Z_edges(CS%restoring_rtau_file, "RTAU", CS%restoring_timescale_z_edges, &
+                            CS%restoring_timescale_nz, restoring_timescale_has_edges, restoring_timescale_use_missing, &
+                            restoring_timescale_missing, scale=US%m_to_Z)
+          allocate(CS%restoring_timescale_dz(CS%restoring_timescale_nz))
+          do k=CS%restoring_timescale_nz,1,-1
+            kbot = k + 1 ! level k is between z(k) and z(k+1)
+            CS%restoring_timescale_dz(k) = CS%restoring_timescale_z_edges(k) - CS%restoring_timescale_z_edges(kbot)
+          enddo
         case DEFAULT
           write(log_message, "(3A)") "'", trim(CS%restoring_rtau_source), &
                "' is not a valid option for MARBL_TRACER_RESTORING_RTAU_SOURCE"
@@ -807,7 +826,6 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
 
   ! Initialize external field for restoring
   if (CS%restoring_rtau_source == "file") then
-    allocate(CS%rtau(SZI_(G), SZJ_(G), SZK_(G)), source=0.)
     select case(CS%restoring_source)
       case("file")
         ! Set up array for reading in raw restoring data
@@ -819,6 +837,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     end select
     select case(CS%restoring_rtau_source)
       case("file")
+        allocate(CS%rtau(SZI_(G), SZJ_(G), CS%restoring_timescale_nz), source=0.)
         call MOM_read_data(CS%restoring_rtau_file, "RTAU", CS%rtau(:,:,:), G%Domain)
     end select
   end if
@@ -1212,14 +1231,25 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! Tracer restoring
       do m=1,CS%restore_count
         MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:) = 0.
-        call interpolate_column(CS%restoring_nz, &
-                                CS%restoring_dz(:), &
-                                CS%restoring_in(i,j,:,m), &
+        call remapping_core_h(CS%restoring_remapCS, &
+                              CS%restoring_nz, &
+                              CS%restoring_dz(:), &
+                              CS%restoring_in(i,j,:,m), &
+                              GV%ke, &
+                              dz(:), &
+                              MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:))
+        if (m==1) then
+          call remapping_core_h(CS%restoring_remapCS, &
+                                CS%restoring_timescale_nz, &
+                                CS%restoring_timescale_dz(:), &
+                                CS%rtau(i,j,:), &
                                 GV%ke, &
                                 dz(:), &
-                                0., &
-                                MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:))
-        MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = CS%rtau(i,j,:)
+                                MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:))
+        else
+          MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = &
+              MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(1))%field_1d(1,:)
+        end if
       end do
 
       !        TODO: In POP, pressure comes from a function in state_mod.F90; I don't see a similar function here
