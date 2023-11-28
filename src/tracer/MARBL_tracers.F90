@@ -9,16 +9,16 @@ module MARBL_tracers
 
 use MOM_coms,            only : root_PE, broadcast
 use MOM_diag_mediator,   only : diag_ctrl
-use MOM_diag_vkernels,   only : reintegrate_column
 use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
 use MOM_forcing_type,    only : forcing
 use MOM_grid,            only : ocean_grid_type
-use MOM_interpolate,     only : init_external_field, time_interp_external
+use MOM_interpolate,     only : external_field, init_external_field, time_interp_external
 use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index,       only : hor_index_type
 use MOM_io,              only : file_exists, MOM_read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
+use MOM_remapping,       only : reintegrate_column
 use MOM_remapping,       only : remapping_CS, initialize_remapping, remapping_core_h
 use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
@@ -205,7 +205,7 @@ type, public :: MARBL_tracers_CS ; private
   integer :: fesedflux_ind  !< index of MARBL forcing field array to copy iron sediment flux into
   integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
   integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
-  integer, allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
+  type(external_field), allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
   character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
   integer, allocatable :: tracer_restoring_ind(:) !< index of MARBL forcing field to copy per-tracer restoring field into
   integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer restoring timescale into
@@ -394,7 +394,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%fesedflux_ind = -1
   CS%o2_scalef_ind = -1
   CS%remin_scalef_ind = -1
-  allocate(CS%id_tracer_restoring(CS%ntr), source=-1)
+  allocate(CS%id_tracer_restoring(CS%ntr))
   allocate(CS%tracer_restoring_varname(CS%ntr), source='               ') ! gfortran 13.2 bug? source = '' does not blank out strings
   allocate(CS%tracer_restoring_ind(CS%ntr), source=-1)
   allocate(CS%tracer_rtau_ind(CS%ntr), source=-1)
@@ -519,8 +519,8 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   endif
   ! ** Scale factor for FESEDFLUX
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
-                 "Conversion factor between FESEDFLUX file and MARBL units (umol / m^2 / d -> mmol / m^2 / s)", &
-                 default=0.001/86400.)
+                 "Conversion factor between FESEDFLUX file and MARBL units", &
+                 units="umol/m^2/d -> mmol/m^2/s", default=0.001/86400.)
 
   ! ** Tracer Restoring
   call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_SOURCE", CS%restoring_source, &
@@ -1266,7 +1266,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
                                 CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), &
                                 GV%ke, &
                                 dz(:), &
-                                0., &
                                 MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:))
       endif
 

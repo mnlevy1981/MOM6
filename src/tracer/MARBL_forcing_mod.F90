@@ -12,7 +12,7 @@ use MOM_error_handler,        only : MOM_error, WARNING, FATAL
 use MOM_file_parser,          only : get_param, log_param, param_file_type
 use MOM_grid,                 only : ocean_grid_type
 use MOM_unit_scaling,         only : unit_scale_type
-use MOM_interpolate,          only : init_external_field, time_interp_external
+use MOM_interpolate,          only : external_field, init_external_field, time_interp_external
 use MOM_io,                   only : slasher
 use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
 use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
@@ -77,15 +77,15 @@ type, public :: marbl_forcing_CS
   type(marbl_forcing_diag_ids) :: diag_ids  !< used for registering and posting some MARBL forcing fields as diagnostics
 
 
-  integer :: id_din_riv  = -1     !< id number for time_interp_external.
-  integer :: id_don_riv  = -1     !< id number for time_interp_external.
-  integer :: id_dip_riv  = -1     !< id number for time_interp_external.
-  integer :: id_dop_riv  = -1     !< id number for time_interp_external.
-  integer :: id_dsi_riv  = -1     !< id number for time_interp_external.
-  integer :: id_dfe_riv  = -1     !< id number for time_interp_external.
-  integer :: id_dic_riv  = -1     !< id number for time_interp_external.
-  integer :: id_alk_riv  = -1     !< id number for time_interp_external.
-  integer :: id_doc_riv  = -1     !< id number for time_interp_external.
+  type(external_field) :: id_din_riv     !< id for time_interp_external.
+  type(external_field) :: id_don_riv     !< id for time_interp_external.
+  type(external_field) :: id_dip_riv     !< id for time_interp_external.
+  type(external_field) :: id_dop_riv     !< id for time_interp_external.
+  type(external_field) :: id_dsi_riv     !< id for time_interp_external.
+  type(external_field) :: id_dfe_riv     !< id for time_interp_external.
+  type(external_field) :: id_dic_riv     !< id for time_interp_external.
+  type(external_field) :: id_alk_riv     !< id for time_interp_external.
+  type(external_field) :: id_doc_riv     !< id for time_interp_external.
 
   logical :: use_marbl_tracers    !< most functions can return immediately
                                   !! MARBL tracers are turned off
@@ -140,25 +140,25 @@ contains
     call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir2, default="/glade/work/mlevy/cesm_inputdata")
 
     call get_param(param_file, mdl, "DUST_RATIO_THRES", CS%dust_ratio_thres, &
-    "TODO: Add description", default=69.00594)
+        "TODO: Add description", units="add_units", default=69.00594)
     call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
-    "TODO: Add description", default=1./366.314)
+        "TODO: Add description", units="add_units", default=1./366.314)
     call get_param(param_file, mdl, "FE_BIOAVAIL_FRAC_OFFSET", CS%fe_bioavail_frac_offset, &
-        "TODO: Add description", default=0.0146756)
+        "TODO: Add description", units="add_units", default=0.0146756)
     call get_param(param_file, mdl, "ATM_FE_TO_BC_RATIO", CS%atm_fe_to_bc_ratio, &
-        "TODO: Add description", default=1.)
+        "TODO: Add description", units="add_units", default=1.)
     call get_param(param_file, mdl, "ATM_BC_FE_BIOAVAIL_FRAC", CS%atm_bc_fe_bioavail_frac, &
-        "TODO: Add description", default=0.06)
+        "TODO: Add description", units="add_units", default=0.06)
     call get_param(param_file, mdl, "SEAICE_FE_TO_BC_RATIO", CS%seaice_fe_to_bc_ratio, &
-        "TODO: Add description", default=1.)
+        "TODO: Add description", units="add_units", default=1.)
     call get_param(param_file, mdl, "SEAICE_BC_FE_BIOAVAIL_FRAC", CS%seaice_bc_fe_bioavail_frac, &
-        "TODO: Add description", default=0.06)
+        "TODO: Add description", units="add_units", default=0.06)
     call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_FINE_DUST", CS%iron_frac_in_atm_fine_dust, &
-        "Fraction of fine dust from the atmosphere that is iron", default=0.035)
+        "Fraction of fine dust from the atmosphere that is iron", units="add_units", default=0.035)
     call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_COARSE_DUST", CS%iron_frac_in_atm_coarse_dust, &
-        "Fraction of coarse dust from the atmosphere that is iron", default=0.035)
+        "Fraction of coarse dust from the atmosphere that is iron", units="add_units", default=0.035)
     call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
-        "Fraction of dust from sea ice that is iron", default=0.035)
+        "Fraction of dust from sea ice that is iron", units="add_units", default=0.035)
     call get_param(param_file, mdl, "ATM_CO2_OPT", atm_co2_opt, &
         "Source of atmospheric CO2 [constant, diagnostic, or prognostic]", &
         default="constant")

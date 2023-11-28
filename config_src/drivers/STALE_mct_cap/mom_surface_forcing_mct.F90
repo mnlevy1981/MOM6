@@ -25,6 +25,7 @@ use MOM_get_input,        only : Get_MOM_Input, directories
 use MOM_grid,             only : ocean_grid_type
 use MOM_interpolate,      only : init_external_field, time_interp_external
 use MOM_interpolate,      only : time_interp_external_init
+use MOM_interpolate,      only : external_field
 use MOM_io,               only : slasher, write_version_number, MOM_read_data
 use MOM_io,               only : stdout
 use MOM_restart,          only : register_restart_field, restart_init, MOM_restart_CS
@@ -76,14 +77,14 @@ type, public :: surface_forcing_CS ; private
                                 !! the correction for the atmospheric (and sea-ice)
                                 !! pressure limited by max_p_surf instead of the
                                 !! full atmospheric pressure.  The default is true.
-  real :: gust_const            !< constant unresolved background gustiness for ustar [R L Z T-1 ~> Pa]
+  real :: gust_const            !< constant unresolved background gustiness for ustar [R L Z T-2 ~> Pa]
   logical :: read_gust_2d       !< If true, use a 2-dimensional gustiness supplied
                                 !! from an input file.
   real, pointer, dimension(:,:) :: &
     TKE_tidal => NULL(), &      !< turbulent kinetic energy introduced to the
                                 !! bottom boundary layer by drag on the tidal flows [R Z3 T-3 ~> W m-2]
     gust => NULL(), &           !< spatially varying unresolved background
-                                !! gustiness that contributes to ustar [R L Z T-1 ~> Pa].
+                                !! gustiness that contributes to ustar [R L Z T-2 ~> Pa].
                                 !! gust is used when read_gust_2d is true.
     ustar_tidal => NULL()       !< tidal contribution to the bottom friction velocity [Z T-1 ~> m s-1]
   real :: cd_tides              !< drag coefficient that applies to the tides (nondimensional)
@@ -134,8 +135,10 @@ type, public :: surface_forcing_CS ; private
                                                     !! in inputdir/temp_restore_mask.nc and the field should
                                                     !! be named 'mask'
   real, pointer, dimension(:,:) :: trestore_mask => NULL() !< mask for SST restoring
-  integer :: id_srestore = -1     !< id number for time_interp_external.
-  integer :: id_trestore = -1     !< id number for time_interp_external.
+  type(external_field) :: srestore_handle
+    !< Handle for time-interpolated salt restoration field
+  type(external_field) :: trestore_handle
+    !< Handle for time-interpolated temperature restoration field
 
   type(forcing_diags), public :: handles !< diagnostics handles
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< restart pointer
@@ -206,7 +209,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
   type(time_type),         intent(in)    :: Time   !< The time of the fluxes, used for interpolating the
                                                    !! salinity to the right time, when it is being restored.
   real,                    intent(in)    :: valid_time !< The amount of time over which these fluxes
-                                                   !! should be applied [s].
+                                                   !! should be applied [T ~> s].
   type(ocean_grid_type),   intent(inout) :: G      !< The ocean's grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
   type(surface_forcing_CS),pointer       :: CS     !< A pointer to the control structure returned by a
@@ -334,7 +337,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! Indicate that there are new unused fluxes.
   fluxes%fluxes_used = .false.
-  fluxes%dt_buoy_accum = US%s_to_T*valid_time
+  fluxes%dt_buoy_accum = valid_time
 
   if (CS%allow_flux_adjustments) then
     fluxes%heat_added(:,:) = 0.0
@@ -348,7 +351,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! Salinity restoring logic
   if (restore_salinity) then
-    call time_interp_external(CS%id_srestore, Time, data_restore, scale=US%ppt_to_S)
+    call time_interp_external(CS%srestore_handle, Time, data_restore, scale=US%ppt_to_S)
     ! open_ocn_mask indicates where to restore salinity (1 means restore, 0 does not)
     open_ocn_mask(:,:) = 1.0
     if (CS%mask_srestore_under_ice) then ! Do not restore under sea-ice
@@ -405,7 +408,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
 
   ! SST restoring logic
   if (restore_sst) then
-    call time_interp_external(CS%id_trestore, Time, data_restore, scale=US%degC_to_C)
+    call time_interp_external(CS%trestore_handle, Time, data_restore, scale=US%degC_to_C)
     do j=js,je ; do i=is,ie
       delta_sst = data_restore(i,j) - sfc_state%SST(i,j)
       delta_sst = sign(1.0,delta_sst)*min(abs(delta_sst),CS%max_delta_trestore)
@@ -444,7 +447,7 @@ subroutine convert_IOB_to_fluxes(IOB, fluxes, index_bounds, Time, valid_time, G,
     end if
 
     if (associated(IOB%ustar_berg)) &
-      fluxes%ustar_berg(i,j) = US%m_to_Z * IOB%ustar_berg(i-i0,j-j0) * G%mask2dT(i,j)
+      fluxes%ustar_berg(i,j) = US%m_to_Z*US%T_to_s * IOB%ustar_berg(i-i0,j-j0) * G%mask2dT(i,j)
 
     if (associated(IOB%area_berg)) &
       fluxes%area_berg(i,j) = IOB%area_berg(i-i0,j-j0) * G%mask2dT(i,j)
@@ -771,6 +774,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
              ((G%mask2dBu(I,J) + G%mask2dBu(I-1,J-1)) + (G%mask2dBu(I,J-1) + G%mask2dBu(I-1,J))) )
         if (CS%read_gust_2d) gustiness = CS%gust(i,j)
       endif
+      forces%tau_mag(i,j) = gustiness + tau_mag
       forces%ustar(i,j) = sqrt(gustiness*Irho0 + Irho0*tau_mag)
     enddo ; enddo
 
@@ -796,6 +800,7 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
     do j=js,je ; do i=is,ie
       gustiness = CS%gust_const
       if (CS%read_gust_2d .and. (G%mask2dT(i,j) > 0.0)) gustiness = CS%gust(i,j)
+      forces%tau_mag(i,j) = gustiness + G%mask2dT(i,j) * sqrt(taux_at_h(i,j)**2 + tauy_at_h(i,j)**2)
       forces%ustar(i,j) = sqrt(gustiness*Irho0 + Irho0 * G%mask2dT(i,j) * &
                                sqrt(taux_at_h(i,j)**2 + tauy_at_h(i,j)**2))
     enddo ; enddo
@@ -817,8 +822,10 @@ subroutine convert_IOB_to_forces(IOB, forces, index_bounds, Time, G, US, CS)
                  G%mask2dCv(i,J)*forces%tauy(i,J)**2) / (G%mask2dCv(i,J-1) + G%mask2dCv(i,J))
 
       if (CS%read_gust_2d) then
+        forces%tau_mag(i,j) = CS%gust(i,j) + sqrt(taux2 + tauy2)
         forces%ustar(i,j) = sqrt(CS%gust(i,j)*Irho0 + Irho0*sqrt(taux2 + tauy2))
       else
+        forces%tau_mag(i,j) = CS%gust_const + sqrt(taux2 + tauy2)
         forces%ustar(i,j) = sqrt(CS%gust_const*Irho0 + Irho0*sqrt(taux2 + tauy2))
       endif
     enddo ; enddo
@@ -1119,7 +1126,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
   call get_param(param_file, mdl, "WIND_STRESS_MULTIPLIER", CS%wind_stress_multiplier, &
                  "A factor multiplying the wind-stress given to the ocean by the "//&
                  "coupler. This is used for testing and should be =1.0 for any "//&
-                 "production runs.", default=1.0)
+                 "production runs.", units="nondim", default=1.0)
 
   if (restore_salt) then
     call get_param(param_file, mdl, "FLUXCONST", CS%Flux_const, &
@@ -1292,7 +1299,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
 
   if (present(restore_salt)) then ; if (restore_salt) then
     salt_file = trim(CS%inputdir) // trim(CS%salt_restore_file)
-    CS%id_srestore = init_external_field(salt_file, CS%salt_restore_var_name, domain=G%Domain%mpp_domain)
+    CS%srestore_handle = init_external_field(salt_file, CS%salt_restore_var_name, domain=G%Domain%mpp_domain)
     call safe_alloc_ptr(CS%srestore_mask,isd,ied,jsd,jed); CS%srestore_mask(:,:) = 1.0
     if (CS%mask_srestore) then ! read a 2-d file containing a mask for restoring fluxes
       flnam = trim(CS%inputdir) // 'salt_restore_mask.nc'
@@ -1302,7 +1309,7 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, restore_salt,
 
   if (present(restore_temp)) then ; if (restore_temp) then
     temp_file = trim(CS%inputdir) // trim(CS%temp_restore_file)
-    CS%id_trestore = init_external_field(temp_file, CS%temp_restore_var_name, domain=G%Domain%mpp_domain)
+    CS%trestore_handle = init_external_field(temp_file, CS%temp_restore_var_name, domain=G%Domain%mpp_domain)
     call safe_alloc_ptr(CS%trestore_mask,isd,ied,jsd,jed); CS%trestore_mask(:,:) = 1.0
     if (CS%mask_trestore) then  ! read a 2-d file containing a mask for restoring fluxes
       flnam = trim(CS%inputdir) // 'temp_restore_mask.nc'

@@ -39,14 +39,30 @@ AC_CONFIG_MACRO_DIR([m4])
 srcdir=$srcdir/..
 
 
-# Default to symmetric grid
-# NOTE: --enable is more properly used to add a feature, rather than to select
-#   a compile-time mode, so this is not exactly being used as intended.
-MEM_LAYOUT=${srcdir}/config_src/memory/dynamic_symmetric
-AC_ARG_ENABLE([asymmetric],
-  AS_HELP_STRING([--enable-asymmetric], [Use the asymmetric grid]))
-AS_IF([test "$enable_asymmetric" = yes],
-  [MEM_LAYOUT=${srcdir}/config_src/memory/dynamic_nonsymmetric])
+# Configure the memory layout header
+
+AC_ARG_VAR([MOM_MEMORY],
+  [Path to MOM_memory.h header, describing the field memory layout: dynamic
+   symmetric (default), dynamic asymmetric, or static.]
+)
+
+AS_VAR_IF([MOM_MEMORY], [],
+  [MOM_MEMORY=${srcdir}/config_src/memory/dynamic_symmetric/MOM_memory.h]
+)
+
+# Confirm that MOM_MEMORY is named 'MOM_memory.h'
+AS_IF([test $(basename "${MOM_MEMORY}") == "MOM_memory.h"], [],
+ [AC_MSG_ERROR([MOM_MEMORY header ${MOM_MEMORY} must be named 'MOM_memory.h'])]
+)
+
+# Confirm that the file exists
+AC_CHECK_FILE(["$MOM_MEMORY"], [],
+  [AC_MSG_ERROR([MOM_MEMORY header ${MOM_MEMORY} not found.])]
+)
+
+MOM_MEMORY_DIR=$(AS_DIRNAME(["${MOM_MEMORY}"]))
+AC_SUBST([MOM_MEMORY_DIR])
+
 
 # Default to solo_driver
 DRIVER_DIR=${srcdir}/config_src/drivers/solo_driver
@@ -88,8 +104,9 @@ AC_FC_SRCEXT(f90)
 # - This can cause standard AC_PROG_FC tests to fail if FCFLAGS is configured
 #   with flags from another compiler.
 # - I do not yet know how to resolve this possible issue.
-AX_MPI([],
-  [AC_MSG_ERROR([Could not find MPI launcher.])])
+AX_MPI([], [
+  AC_MSG_ERROR([Could not find MPI launcher.])
+])
 
 
 # Explicitly replace FC and LD with MPI wrappers
@@ -105,7 +122,7 @@ AX_FC_CHECK_MODULE([mpi],
 
 # netCDF configuration
 
-# Search for the Fortran netCDF module, fallback to nf-config.
+# Search for the Fortran netCDF module.
 AX_FC_CHECK_MODULE([netcdf], [], [
   AS_UNSET([ax_fc_cv_mod_netcdf])
   AC_PATH_PROG([NF_CONFIG], [nf-config])
@@ -118,39 +135,37 @@ AX_FC_CHECK_MODULE([netcdf], [], [
   ])
 ])
 
-# FMS may invoke netCDF C calls, so we link to libnetcdf.
-AC_LANG_PUSH([C])
-AC_CHECK_LIB([netcdf], [nc_create], [], [
-  AS_UNSET([ac_cv_lib_netcdf_nc_create])
+# Confirm that the Fortran compiler can link the netCDF C library
+AX_FC_CHECK_C_LIB([netcdf], [nc_create], [], [
+  AS_UNSET([ax_fc_cv_c_lib_netcdf_nc_create])
   AC_PATH_PROG([NC_CONFIG], [nc-config])
   AS_IF([test -n "$NC_CONFIG"], [
-    AC_SUBST([LDFLAGS],
-      ["$LDFLAGS -L$($NC_CONFIG --libdir)"]
-    )
-    ], [AC_MSG_ERROR([Could not find nc-config.])]
-  )
-  AC_CHECK_LIB([netcdf], [nc_create], [], [
-    AC_MSG_ERROR([Could not find libnetcdf.])
+    AC_SUBST([LDFLAGS], ["$LDFLAGS -L$($NC_CONFIG --libdir)"])
+  ], [
+    AC_MSG_ERROR([Could not find nc-config.])
+  ])
+  AX_FC_CHECK_C_LIB([netcdf], [nc_create], [], [
+    AC_MSG_ERROR([Could not find netCDF C library.])
   ])
 ])
-AC_LANG_POP([C])
 
-# NOTE: We test for nf_create, rather than nf90_create, because AX_FC_CHECK_LIB
-#   is currently not yet able to properly probe inside modules.
-# NOTE: nf-config does not have --libdir, so we use the first term of flibs.
-
-# Link to Fortran netCDF library, netcdff
+# Confirm that the Fortran compiler can link to the netCDF Fortran library.
+# NOTE:
+#   - We test nf_create, rather than nf90_create, since AX_FC_CHECK_LIB can
+#     not currently probe the Fortran 90 interfaces.
+#   - nf-config does not have --libdir, so we parse the --flibs output.
 AX_FC_CHECK_LIB([netcdff], [nf_create], [], [], [
   AS_UNSET([ax_fc_cv_lib_netcdff_nf_create])
   AC_PATH_PROG([NF_CONFIG], [nf-config])
   AS_IF([test -n "$NF_CONFIG"], [
     AC_SUBST([LDFLAGS],
-      ["$LDFLAGS $($NF_CONFIG --flibs | cut -f1 -d" ")"]
+      ["$LDFLAGS $($NF_CONFIG --flibs | xargs -n1 | grep "^-L" | sort -u | xargs)"]
     )
-    ], [AC_MSG_ERROR([Could not find nf_create.])]
-  )
+  ], [
+    AC_MSG_ERROR([Could not find nf-config.])
+  ])
   AX_FC_CHECK_LIB([netcdff], [nf_create], [], [], [
-    AC_MSG_ERROR([Could not find libnetcdff.])
+    AC_MSG_ERROR([Could not find netCDF Fortran library.])
   ])
 ])
 
@@ -221,27 +236,56 @@ AC_COMPILE_IFELSE(
   ]
 )
 
+# Python interpreter test
 
-# Verify that makedep is available
+AC_ARG_VAR([PYTHON], [Python interpreter command])
+
+AS_VAR_SET_IF([PYTHON], [
+  AC_PATH_PROGS([PYTHON], ["$PYTHON"], [none])
+], [
+  AC_PATH_PROGS([PYTHON], [python python3 python2], [none])
+])
+AS_VAR_IF([PYTHON], [none], [
+  AC_MSG_ERROR([Python interpreter not found.])
+])
+
+
+# Makedep test
 AC_PATH_PROG([MAKEDEP], [makedep], [${srcdir}/ac/makedep])
 AC_SUBST([MAKEDEP])
 
 
 # Generate source list and configure dependency command
-AC_SUBST([SRC_DIRS],
-    ["${srcdir}/src ${MODEL_FRAMEWORK} ${srcdir}/config_src/external ${DRIVER_DIR} ${MEM_LAYOUT}"]
+AC_SUBST([SRC_DIRS], ["\\
+  ${srcdir}/src \\
+  ${MODEL_FRAMEWORK} \\
+  ${srcdir}/config_src/external \\
+  ${DRIVER_DIR} \\
+  ${MOM_MEMORY_DIR}"]
 )
 AC_CONFIG_COMMANDS(Makefile.dep, [make depend])
 
 
 # POSIX verification tests
-AC_LANG_PUSH([C])
 
-# These symbols may be defined as macros, making them inaccessible by Fortran.
-# The following exist in BSD and Linux, so we just test for them.
-AC_CHECK_FUNC([setjmp], [], [AC_MSG_ERROR([Could not find setjmp.])])
-AC_CHECK_FUNC([longjmp], [], [AC_MSG_ERROR([Could not find longjmp.])])
-AC_CHECK_FUNC([siglongjmp], [], [AC_MSG_ERROR([Could not find siglongjmp.])])
+# Symbols in <setjmp.h> may be defined as macros, making them inaccessible by
+# Fortran C bindings.  `sigsetjmp` is known to have an internal symbol in
+# glibc, so we check for this possibility.  For the others, we only check for
+# existence.
+
+# If the need arises, we may want to define these under a standalone macro.
+
+# Validate the setjmp symbol
+AX_FC_CHECK_BIND_C([setjmp],
+  [SETJMP="setjmp"], [SETJMP="setjmp_missing"]
+)
+AC_DEFINE_UNQUOTED([SETJMP_NAME], ["${SETJMP}"])
+
+# Validate the longjmp symbol
+AX_FC_CHECK_BIND_C([longjmp],
+  [LONGJMP="longjmp"], [LONGJMP="longjmp_missing"]
+)
+AC_DEFINE_UNQUOTED([LONGJMP_NAME], ["${LONGJMP}"])
 
 # Determine the sigsetjmp symbol.  If missing, then point to sigsetjmp_missing.
 #
@@ -250,14 +294,27 @@ AC_CHECK_FUNC([siglongjmp], [], [AC_MSG_ERROR([Could not find siglongjmp.])])
 #   __sigsetjmp     glibc (Linux)
 SIGSETJMP="sigsetjmp_missing"
 for sigsetjmp_fn in sigsetjmp __sigsetjmp; do
-  AC_CHECK_FUNC([${sigsetjmp_fn}], [
+  AX_FC_CHECK_BIND_C([${sigsetjmp_fn}], [
     SIGSETJMP=${sigsetjmp_fn}
     break
   ])
 done
 AC_DEFINE_UNQUOTED([SIGSETJMP_NAME], ["${SIGSETJMP}"])
 
-# Determine the size of jmp_buf and sigjmp_buf
+# Validate the siglongjmp symbol
+AX_FC_CHECK_BIND_C([siglongjmp],
+  [SIGLONGJMP="siglongjmp"], [SETJMP="siglongjmp_missing"]
+)
+AC_DEFINE_UNQUOTED([SIGLONGJMP_NAME], ["${SIGLONGJMP}"])
+
+
+# Verify the size of nonlocal jump buffer structs
+# NOTE: This requires C compiler, but can it be done with a Fortran compiler?
+AC_LANG_PUSH([C])
+
+AX_MPI([], [AC_MSG_ERROR([Could not find MPI launcher.])])
+AC_SUBST([CC], [$MPICC])
+
 AC_CHECK_SIZEOF([jmp_buf], [], [#include <setjmp.h>])
 AC_CHECK_SIZEOF([sigjmp_buf], [], [#include <setjmp.h>])
 
@@ -268,4 +325,3 @@ AC_LANG_POP([C])
 AC_SUBST([CPPFLAGS])
 AC_CONFIG_FILES([Makefile:${srcdir}/ac/Makefile.in])
 AC_OUTPUT
-

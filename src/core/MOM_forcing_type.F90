@@ -10,7 +10,7 @@ use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOC
 use MOM_debugging,     only : hchksum, uvchksum
 use MOM_diag_mediator, only : post_data, register_diag_field, register_scalar_field
 use MOM_diag_mediator, only : time_type, diag_ctrl, safe_alloc_alloc, query_averaging_enabled
-use MOM_diag_mediator, only : enable_averages, enable_averaging, disable_averaging
+use MOM_diag_mediator, only : enable_averages, disable_averaging
 use MOM_EOS,           only : calculate_density_derivs, EOS_domain
 use MOM_error_handler, only : MOM_error, FATAL, WARNING
 use MOM_file_parser,   only : get_param, log_param, log_version, param_file_type
@@ -73,7 +73,11 @@ type, public :: forcing
 
   ! surface stress components and turbulent velocity scale
   real, pointer, dimension(:,:) :: &
+    omega_w2x     => NULL(), & !< the counter-clockwise angle of the wind stress with respect
     ustar         => NULL(), & !< surface friction velocity scale [Z T-1 ~> m s-1].
+    tau_mag       => NULL(), & !< Magnitude of the wind stress averaged over tracer cells,
+                               !! including any contributions from sub-gridscale variability
+                               !! or gustiness [R L Z T-2 ~> Pa]
     ustar_gustless => NULL()   !< surface friction velocity scale without any
                                !! any augmentation for gustiness [Z T-1 ~> m s-1].
 
@@ -253,8 +257,12 @@ type, public :: mech_forcing
   real, pointer, dimension(:,:) :: &
     taux  => NULL(), & !< zonal wind stress [R L Z T-2 ~> Pa]
     tauy  => NULL(), & !< meridional wind stress [R L Z T-2 ~> Pa]
+    tau_mag => NULL(), & !< Magnitude of the wind stress averaged over tracer cells, including any
+                       !! contributions from sub-gridscale variability or gustiness [R L Z T-2 ~> Pa]
     ustar => NULL(), & !< surface friction velocity scale [Z T-1 ~> m s-1].
-    net_mass_src => NULL() !< The net mass source to the ocean [R Z T-1 ~> kg m-2 s-1]
+    net_mass_src => NULL(), & !< The net mass source to the ocean [R Z T-1 ~> kg m-2 s-1]
+    omega_w2x    => NULL()    !< the counter-clockwise angle of the wind stress with respect
+                              !! to the horizontal abscissa (x-coordinate) at tracer points [rad].
 
   ! applied surface pressure from other component models (e.g., atmos, sea ice, land ice)
   real, pointer, dimension(:,:) :: p_surf_full => NULL()
@@ -286,7 +294,7 @@ type, public :: mech_forcing
     rigidity_ice_v => NULL()    !< Depth-integrated lateral viscosity of ice shelves or sea ice at
                                 !! v-points [L4 Z-1 T-1 ~> m3 s-1]
   real :: dt_force_accum = -1.0 !< The amount of time over which the mechanical forcing fluxes
-                                !! have been averaged [s].
+                                !! have been averaged [T ~> s].
   logical :: net_mass_src_set = .false. !< If true, an estimate of net_mass_src has been provided.
   logical :: accumulate_p_surf = .false. !< If true, the surface pressure due to the atmosphere
                                 !! and various types of ice needs to be accumulated, and the
@@ -390,7 +398,8 @@ type, public :: forcing_diags
   integer :: id_taux  = -1
   integer :: id_tauy  = -1
   integer :: id_ustar = -1
-
+  integer :: id_omega_w2x = -1
+  integer :: id_tau_mag = -1
   integer :: id_psurf     = -1
   integer :: id_TKE_tidal = -1
   integer :: id_buoy      = -1
@@ -998,7 +1007,7 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
                                                       ! [H T-1 ~> m s-1 or kg m-2 s-1]
   real, dimension(SZI_(G))              :: netHeat    ! net temp flux [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   real, dimension(max(nsw,1), SZI_(G))  :: penSWbnd   ! penetrating SW radiation by band
-                                                      ! [degC H T-1 ~> degC m s-1 or degC kg m-2 s-1]
+                                                      ! [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   real, dimension(SZI_(G))              :: pressure   ! pressure at the surface [R L2 T-2 ~> Pa]
   real, dimension(SZI_(G))              :: dRhodT     ! density partial derivative wrt temp [R C-1 ~> kg m-3 degC-1]
   real, dimension(SZI_(G))              :: dRhodS     ! density partial derivative wrt saln [R S-1 ~> kg m-3 ppt-1]
@@ -1025,7 +1034,7 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
   ! The surface forcing is contained in the fluxes type.
   ! We aggregate the thermodynamic forcing for a time step into the following:
   ! netH       = water added/removed via surface fluxes [H T-1 ~> m s-1 or kg m-2 s-1]
-  ! netHeat    = heat via surface fluxes [degC H T-1 ~> degC m s-1 or degC kg m-2 s-1]
+  ! netHeat    = heat via surface fluxes [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   ! netSalt    = salt via surface fluxes [S H T-1 ~> ppt m s-1 or gSalt m-2 s-1]
   ! Note that unlike other calls to extractFLuxes1d() that return the time-integrated flux
   ! this call returns the rate because dt=1 (in arbitrary time units)
@@ -1044,12 +1053,12 @@ subroutine calculateBuoyancyFlux1d(G, GV, US, fluxes, optics, nsw, h, Temp, Salt
                                 tv%eqn_of_state, EOS_domain(G%HI))
 
   ! Adjust netSalt to reflect dilution effect of FW flux
-  ! [ppt H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
+  ! [S H T-1 ~> ppt m s-1 or ppt kg m-2 s-1]
   netSalt(G%isc:G%iec) = netSalt(G%isc:G%iec) - Salt(G%isc:G%iec,j,1) * netH(G%isc:G%iec)
 
   ! Add in the SW heating for purposes of calculating the net
   ! surface buoyancy flux affecting the top layer.
-  ! [degC H T-1 ~> degC m s-1 or degC kg m-2 s-1]
+  ! [C H T-1 ~> degC m s-1 or degC kg m-2 s-1]
   !netHeat(:) = netHeatMinusSW(:) + sum( penSWbnd, dim=1 )
   netHeat(G%isc:G%iec) = netHeatMinusSW(G%isc:G%iec) + netPen(G%isc:G%iec,1)
 
@@ -1112,6 +1121,8 @@ subroutine MOM_forcing_chksum(mesg, fluxes, G, US, haloshift)
   ! and js...je as their extent.
   if (associated(fluxes%ustar)) &
     call hchksum(fluxes%ustar, mesg//" fluxes%ustar", G%HI, haloshift=hshift, scale=US%Z_to_m*US%s_to_T)
+  if (associated(fluxes%tau_mag)) &
+    call hchksum(fluxes%tau_mag, mesg//" fluxes%tau_mag", G%HI, haloshift=hshift, scale=US%RLZ_T2_to_Pa)
   if (associated(fluxes%buoy)) &
     call hchksum(fluxes%buoy, mesg//" fluxes%buoy ", G%HI, haloshift=hshift, scale=US%L_to_m**2*US%s_to_T**3)
   if (associated(fluxes%sw)) &
@@ -1211,11 +1222,13 @@ subroutine MOM_mech_forcing_chksum(mesg, forces, G, US, haloshift)
   ! and js...je as their extent.
   if (associated(forces%taux) .and. associated(forces%tauy)) &
     call uvchksum(mesg//" forces%tau[xy]", forces%taux, forces%tauy, G%HI, &
-                  haloshift=hshift, symmetric=.true., scale=US%RZ_T_to_kg_m2s*US%L_T_to_m_s)
+                  haloshift=hshift, symmetric=.true., scale=US%RLZ_T2_to_Pa)
   if (associated(forces%p_surf)) &
     call hchksum(forces%p_surf, mesg//" forces%p_surf", G%HI, haloshift=hshift, scale=US%RL2_T2_to_Pa)
   if (associated(forces%ustar)) &
     call hchksum(forces%ustar, mesg//" forces%ustar", G%HI, haloshift=hshift, scale=US%Z_to_m*US%s_to_T)
+  if (associated(forces%tau_mag)) &
+    call hchksum(forces%tau_mag, mesg//" forces%tau_mag", G%HI, haloshift=hshift, scale=US%RLZ_T2_to_Pa)
   if (associated(forces%rigidity_ice_u) .and. associated(forces%rigidity_ice_v)) &
     call uvchksum(mesg//" forces%rigidity_ice_[uv]", forces%rigidity_ice_u, &
         forces%rigidity_ice_v, G%HI, haloshift=hshift, symmetric=.true., &
@@ -1262,6 +1275,7 @@ subroutine forcing_SinglePointPrint(fluxes, G, i, j, mesg)
   write(0,'(2a)') 'MOM_forcing_type, forcing_SinglePointPrint: Called from ',mesg
   write(0,'(a,2es15.3)') 'MOM_forcing_type, forcing_SinglePointPrint: lon,lat = ',G%geoLonT(i,j),G%geoLatT(i,j)
   call locMsg(fluxes%ustar,'ustar')
+  call locMsg(fluxes%tau_mag,'tau_mag')
   call locMsg(fluxes%buoy,'buoy')
   call locMsg(fluxes%sw,'sw')
   call locMsg(fluxes%sw_vis_dir,'sw_vis_dir')
@@ -1330,21 +1344,28 @@ subroutine register_forcing_type_diags(Time, diag, US, use_temperature, handles,
 
   handles%id_taux = register_diag_field('ocean_model', 'taux', diag%axesCu1, Time,  &
         'Zonal surface stress from ocean interactions with atmos and ice', &
-        'Pa', conversion=US%RZ_T_to_kg_m2s*US%L_T_to_m_s, &
+        'Pa', conversion=US%RLZ_T2_to_Pa, &
         standard_name='surface_downward_x_stress', cmor_field_name='tauuo',         &
         cmor_units='N m-2', cmor_long_name='Surface Downward X Stress',             &
         cmor_standard_name='surface_downward_x_stress')
 
   handles%id_tauy = register_diag_field('ocean_model', 'tauy', diag%axesCv1, Time,  &
         'Meridional surface stress ocean interactions with atmos and ice', &
-        'Pa', conversion=US%RZ_T_to_kg_m2s*US%L_T_to_m_s, &
+        'Pa', conversion=US%RLZ_T2_to_Pa, &
         standard_name='surface_downward_y_stress', cmor_field_name='tauvo',        &
         cmor_units='N m-2', cmor_long_name='Surface Downward Y Stress',            &
         cmor_standard_name='surface_downward_y_stress')
 
+  handles%id_tau_mag = register_diag_field('ocean_model', 'tau_mag', diag%axesT1, Time, &
+        'Average magnitude of the wind stress including contributions from gustiness', &
+        'Pa', conversion=US%RLZ_T2_to_Pa)
+
   handles%id_ustar = register_diag_field('ocean_model', 'ustar', diag%axesT1, Time, &
       'Surface friction velocity = [(gustiness + tau_magnitude)/rho0]^(1/2)', &
       'm s-1', conversion=US%Z_to_m*US%s_to_T)
+
+  handles%id_omega_w2x = register_diag_field('ocean_model', 'omega_w2x', diag%axesT1, Time, &
+      'Counter-clockwise angle of the wind stress from the horizontal axis.', 'rad')
 
   if (present(use_berg_fluxes)) then
     if (use_berg_fluxes) then
@@ -2054,6 +2075,7 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
       fluxes%p_surf_full(i,j) = forces%p_surf_full(i,j)
 
       fluxes%ustar(i,j) = wt1*fluxes%ustar(i,j) + wt2*forces%ustar(i,j)
+      fluxes%tau_mag(i,j) = wt1*fluxes%tau_mag(i,j) + wt2*forces%tau_mag(i,j)
     enddo ; enddo
   else
     do j=js,je ; do i=is,ie
@@ -2061,6 +2083,7 @@ subroutine fluxes_accumulate(flux_tmp, fluxes, G, wt2, forces)
       fluxes%p_surf_full(i,j) = flux_tmp%p_surf_full(i,j)
 
       fluxes%ustar(i,j) = wt1*fluxes%ustar(i,j) + wt2*flux_tmp%ustar(i,j)
+      fluxes%tau_mag(i,j) = wt1*fluxes%tau_mag(i,j) + wt2*flux_tmp%tau_mag(i,j)
     enddo ; enddo
   endif
 
@@ -2178,6 +2201,17 @@ subroutine copy_common_forcing_fields(forces, fluxes, G, skip_pres)
   if (associated(forces%ustar) .and. associated(fluxes%ustar)) then
     do j=js,je ; do i=is,ie
       fluxes%ustar(i,j) = forces%ustar(i,j)
+    enddo ; enddo
+  endif
+
+  if (associated(forces%omega_w2x) .and. associated(fluxes%omega_w2x)) then
+    do j=js,je ; do i=is,ie
+      fluxes%omega_w2x(i,j) = forces%omega_w2x(i,j)
+    enddo ; enddo
+  endif
+  if (associated(forces%tau_mag) .and. associated(fluxes%tau_mag)) then
+    do j=js,je ; do i=is,ie
+      fluxes%tau_mag(i,j) = forces%tau_mag(i,j)
     enddo ; enddo
   endif
 
@@ -2312,13 +2346,24 @@ subroutine copy_back_forcing_fields(fluxes, forces, G)
     enddo ; enddo
   endif
 
+  if (associated(forces%omega_w2x) .and. associated(fluxes%omega_w2x)) then
+    do j=js,je ; do i=is,ie
+      forces%omega_w2x(i,j) = fluxes%omega_w2x(i,j)
+    enddo ; enddo
+  endif
+  if (associated(forces%tau_mag) .and. associated(fluxes%tau_mag)) then
+    do j=js,je ; do i=is,ie
+      forces%tau_mag(i,j) = fluxes%tau_mag(i,j)
+    enddo ; enddo
+  endif
+
 end subroutine copy_back_forcing_fields
 
 !> Offer mechanical forcing fields for diagnostics for those
 !! fields registered as part of register_forcing_type_diags.
 subroutine mech_forcing_diags(forces_in, dt, G, time_end, diag, handles)
   type(mech_forcing), target, intent(in) :: forces_in !< mechanical forcing input fields
-  real,                  intent(in)    :: dt       !< time step for the forcing [s]
+  real,                  intent(in)    :: dt       !< time step for the forcing [T ~> s]
   type(ocean_grid_type), intent(in)    :: G        !< grid type
   type(time_type),       intent(in)    :: time_end !< The end time of the diagnostic interval.
   type(diag_ctrl),       intent(inout) :: diag     !< diagnostic type
@@ -2343,7 +2388,7 @@ subroutine mech_forcing_diags(forces_in, dt, G, time_end, diag, handles)
   endif
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  call enable_averaging(dt, time_end, diag)
+  call enable_averages(dt, time_end, diag)
   ! if (query_averaging_enabled(diag)) then
 
     if ((handles%id_taux > 0) .and. associated(forces%taux)) &
@@ -2948,8 +2993,14 @@ subroutine forcing_diagnostics(fluxes_in, sfc_state, G_in, US, time_end, diag, h
     if ((handles%id_buoy > 0) .and. associated(fluxes%buoy))                         &
       call post_data(handles%id_buoy, fluxes%buoy, diag)
 
+    if ((handles%id_tau_mag > 0) .and. associated(fluxes%tau_mag)) &
+      call post_data(handles%id_tau_mag, fluxes%tau_mag, diag)
+
     if ((handles%id_ustar > 0) .and. associated(fluxes%ustar)) &
       call post_data(handles%id_ustar, fluxes%ustar, diag)
+
+    if ((handles%id_omega_w2x > 0) .and. associated(fluxes%omega_w2x)) &
+      call post_data(handles%id_omega_w2x, fluxes%omega_w2x, diag)
 
     if ((handles%id_ustar_berg > 0) .and. associated(fluxes%ustar_berg)) &
       call post_data(handles%id_ustar_berg, fluxes%ustar_berg, diag)
@@ -3022,6 +3073,7 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
 
   call myAlloc(fluxes%ustar,isd,ied,jsd,jed, ustar)
   call myAlloc(fluxes%ustar_gustless,isd,ied,jsd,jed, ustar)
+  call myAlloc(fluxes%tau_mag,isd,ied,jsd,jed, ustar)
 
   call myAlloc(fluxes%evap,isd,ied,jsd,jed, water)
   call myAlloc(fluxes%lprec,isd,ied,jsd,jed, water)
@@ -3186,6 +3238,7 @@ subroutine allocate_mech_forcing_by_group(G, forces, stress, ustar, shelf, &
   call myAlloc(forces%tauy,isd,ied,JsdB,JedB, stress)
 
   call myAlloc(forces%ustar,isd,ied,jsd,jed, ustar)
+  call myAlloc(forces%tau_mag,isd,ied,jsd,jed, ustar)
 
   call myAlloc(forces%p_surf,isd,ied,jsd,jed, press)
   call myAlloc(forces%p_surf_full,isd,ied,jsd,jed, press)
@@ -3254,8 +3307,7 @@ subroutine get_forcing_groups(fluxes, water, heat, ustar, press, shelf, &
   !   to some degree.  But since this would be enforced at the driver level,
   !   we handle them here as independent flags.
 
-  ustar = associated(fluxes%ustar) &
-      .and. associated(fluxes%ustar_gustless)
+  ustar = associated(fluxes%ustar) .and. associated(fluxes%ustar_gustless)
   ! TODO: Check for all associated fields, but for now just check one as a marker
   water = associated(fluxes%evap)
   heat = associated(fluxes%seaice_melt_heat)
@@ -3325,8 +3377,10 @@ end subroutine myAlloc_3d
 subroutine deallocate_forcing_type(fluxes)
   type(forcing), intent(inout) :: fluxes !< Forcing fields structure
 
+  if (associated(fluxes%omega_w2x))            deallocate(fluxes%omega_w2x)
   if (associated(fluxes%ustar))                deallocate(fluxes%ustar)
   if (associated(fluxes%ustar_gustless))       deallocate(fluxes%ustar_gustless)
+  if (associated(fluxes%tau_mag))              deallocate(fluxes%tau_mag)
   if (associated(fluxes%buoy))                 deallocate(fluxes%buoy)
   if (associated(fluxes%sw))                   deallocate(fluxes%sw)
   if (associated(fluxes%seaice_melt_heat))     deallocate(fluxes%seaice_melt_heat)
@@ -3385,9 +3439,11 @@ end subroutine deallocate_forcing_type
 subroutine deallocate_mech_forcing(forces)
   type(mech_forcing), intent(inout) :: forces  !< Forcing fields structure
 
-  if (associated(forces%taux))  deallocate(forces%taux)
-  if (associated(forces%tauy))  deallocate(forces%tauy)
-  if (associated(forces%ustar)) deallocate(forces%ustar)
+  if (associated(forces%omega_w2x))      deallocate(forces%omega_w2x)
+  if (associated(forces%taux))           deallocate(forces%taux)
+  if (associated(forces%tauy))           deallocate(forces%tauy)
+  if (associated(forces%ustar))          deallocate(forces%ustar)
+  if (associated(forces%tau_mag))        deallocate(forces%tau_mag)
   if (associated(forces%p_surf))         deallocate(forces%p_surf)
   if (associated(forces%p_surf_full))    deallocate(forces%p_surf_full)
   if (associated(forces%net_mass_src))   deallocate(forces%net_mass_src)
@@ -3416,6 +3472,7 @@ subroutine rotate_forcing(fluxes_in, fluxes, turns)
   if (do_ustar) then
     call rotate_array(fluxes_in%ustar, turns, fluxes%ustar)
     call rotate_array(fluxes_in%ustar_gustless, turns, fluxes%ustar_gustless)
+    call rotate_array(fluxes_in%tau_mag, turns, fluxes%tau_mag)
   endif
 
   if (do_water) then
@@ -3546,8 +3603,10 @@ subroutine rotate_mech_forcing(forces_in, turns, forces)
     call rotate_vector(forces_in%taux, forces_in%tauy, turns, &
         forces%taux, forces%tauy)
 
-  if (do_ustar) &
+  if (do_ustar) then
     call rotate_array(forces_in%ustar, turns, forces%ustar)
+    call rotate_array(forces_in%tau_mag, turns, forces%tau_mag)
+  endif
 
   if (do_shelf) then
     call rotate_array_pair( &
@@ -3606,24 +3665,27 @@ subroutine homogenize_mech_forcing(forces, G, US, Rho0, UpdateUstar)
                               do_press, do_iceberg)
 
   if (do_stress) then
-    tx_mean = global_area_mean_u(forces%taux, G, tmp_scale=US%Z_to_L*US%RL2_T2_to_Pa)
+    tx_mean = global_area_mean_u(forces%taux, G, tmp_scale=US%RLZ_T2_to_Pa)
     do j=js,je ; do i=isB,ieB
       if (G%mask2dCu(I,j) > 0.0) forces%taux(I,j) = tx_mean
     enddo ; enddo
-    ty_mean = global_area_mean_v(forces%tauy, G, tmp_scale=US%Z_to_L*US%RL2_T2_to_Pa)
+    ty_mean = global_area_mean_v(forces%tauy, G, tmp_scale=US%RLZ_T2_to_Pa)
     do j=jsB,jeB ; do i=is,ie
       if (G%mask2dCv(i,J) > 0.0) forces%tauy(i,J) = ty_mean
     enddo ; enddo
     if (tau2ustar) then
-      do j=js,je ; do i=is,ie
-        if (G%mask2dT(i,j) > 0.0) forces%ustar(i,j) = sqrt(sqrt(tx_mean**2 + ty_mean**2)*Irho0)
-      enddo ; enddo
+      do j=js,je ; do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
+        forces%tau_mag(i,j) = sqrt(tx_mean**2 + ty_mean**2)
+        forces%ustar(i,j) = sqrt(forces%tau_mag(i,j) * Irho0)
+      endif ; enddo ; enddo
     else
       call homogenize_field_t(forces%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
+      call homogenize_field_t(forces%tau_mag, G, tmp_scale=US%RLZ_T2_to_Pa)
     endif
   else
     if (do_ustar) then
       call homogenize_field_t(forces%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
+      call homogenize_field_t(forces%tau_mag, G, tmp_scale=US%RLZ_T2_to_Pa)
     endif
   endif
 
@@ -3664,6 +3726,7 @@ subroutine homogenize_forcing(fluxes, G, GV, US)
   if (do_ustar) then
     call homogenize_field_t(fluxes%ustar, G, tmp_scale=US%Z_to_m*US%s_to_T)
     call homogenize_field_t(fluxes%ustar_gustless, G, tmp_scale=US%Z_to_m*US%s_to_T)
+    call homogenize_field_t(fluxes%tau_mag, G, tmp_scale=US%RLZ_T2_to_Pa)
   endif
 
   if (do_water) then

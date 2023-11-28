@@ -98,7 +98,7 @@ function register_boundary_impulse_tracer(HI, GV, US, param_file, CS, tr_Reg, re
                  "Length of time for the boundary tracer to be injected "//&
                  "into the mixed layer. After this time has elapsed, the "//&
                  "surface becomes a sink for the boundary impulse tracer.", &
-                 default=31536000.0, scale=US%s_to_T)
+                 units="s", default=31536000.0, scale=US%s_to_T)
   call get_param(param_file, mdl, "TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
                  "If true, tracers may go through the initialization code "//&
                  "if they are not found in the restart files.  Otherwise "//&
@@ -188,10 +188,6 @@ subroutine initialize_boundary_impulse_tracer(restart, day, G, GV, US, h, diag, 
       call set_initialized(CS%tr(:,:,:,m), name, CS%restart_CSp)
     endif
   enddo ! Tracer loop
-
-  if (restart .and. (US%s_to_T_restart /= 0.0) .and. (US%s_to_T_restart /= 1.0) ) then
-    CS%remaining_source_time = (1.0 / US%s_to_T_restart) * CS%remaining_source_time
-  endif
 
   if (associated(OBC)) then
   ! Steal from updated DOME in the fullness of time.
