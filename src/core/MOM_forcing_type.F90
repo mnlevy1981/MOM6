@@ -213,21 +213,7 @@ type, public :: forcing
     atm_co2 => NULL(),               & !< Atmospheric CO2 Concentration [ppm]
     atm_alt_co2 => NULL(),           & !< Alternate atmospheric CO2 Concentration [ppm]
     dust_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
-    iron_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
-    no3_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    po4_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    sio3_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
-    fe_riv_flux  => NULL(),          & !< [mmol / m^2 / s]
-    alk_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    doc_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    docr_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
-    don_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    donr_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
-    dop_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    dopr_riv_flux  => NULL(),        & !< [mmol / m^2 / s]
-    dic_riv_flux  => NULL(),         & !< [mmol / m^2 / s]
-    alk_alt_co2_riv_flux  => NULL(), & !< [mmol / m^2 / s]
-    dic_alt_co2_riv_flux  => NULL()    !< [mmol / m^2 / s]
+    iron_flux => NULL()                !< Flux of dust into the ocean [m2 m-2]
 
   real, pointer, dimension(:,:,:) :: &
     fracr_cat   => NULL(),           & !< per-category ice fraction
@@ -3141,20 +3127,6 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
   call myAlloc(fluxes%atm_alt_co2,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%dust_flux,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%iron_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%no3_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%po4_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%sio3_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%fe_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%alk_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%doc_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%docr_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%don_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%donr_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%dop_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%dopr_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%dic_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%alk_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
-  call myAlloc(fluxes%dic_alt_co2_riv_flux,isd,ied,jsd,jed, marbl)
 
   ! These fields should only be allocated when receiving multiple ice categories
   if (present(ice_ncat)) then

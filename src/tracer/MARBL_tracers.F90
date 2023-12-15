@@ -27,6 +27,9 @@ use MOM_tracer_registry, only : register_tracer
 use MOM_tracer_types,    only : tracer_type, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_initialization_from_Z, only : MOM_initialize_tracer_from_Z
+use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
+use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
+use tracer_forcing_utils_mod, only : map_model_time_to_forcing_time
 use MOM_tracer_Z_init,   only : read_Z_edges
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface, thermo_var_ptrs
@@ -122,8 +125,11 @@ type, public :: MARBL_tracers_CS ; private
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
   logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
 
-  character(len=200) :: fesedflux_file  !< name of [netCDF] file containing iron sediment flux
+  character(len=200) :: fesedflux_file   !< name of [netCDF] file containing iron sediment flux
   character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
+  logical :: read_riv_fluxes             !< If true, use river fluxes supplied from an input file.
+                                         !! This is temporary, we will always read river fluxes
+  type(forcing_timeseries_dataset) :: riv_flux_dataset !< File and time axis information for river fluxes
   character(len=4) :: restoring_source !< location of tracer restoring data
                                        !! valid values: file, none
   integer :: restoring_nz  !< number of levels in tracer restoring file
@@ -176,12 +182,8 @@ type, public :: MARBL_tracers_CS ; private
 
   real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
                                   !! [conc m/s]
-  real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
-                                         !! (dims: i, j, tracer) [conc m]
   real, allocatable :: SFO(:,:,:)  !< surface flux output returned from MARBL for use in GCM
                                    !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
-  real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
-  real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
   integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
@@ -195,6 +197,33 @@ type, public :: MARBL_tracers_CS ; private
   integer :: xco2_ind  !< index of MARBL forcing field array to copy CO2 flux into
   integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
 
+  !> Indices for river fluxes (added to surface fluxes)
+  type(external_field) :: id_din_riv     !< id for time_interp_external.
+  type(external_field) :: id_don_riv     !< id for time_interp_external.
+  type(external_field) :: id_dip_riv     !< id for time_interp_external.
+  type(external_field) :: id_dop_riv     !< id for time_interp_external.
+  type(external_field) :: id_dsi_riv     !< id for time_interp_external.
+  type(external_field) :: id_dfe_riv     !< id for time_interp_external.
+  type(external_field) :: id_dic_riv     !< id for time_interp_external.
+  type(external_field) :: id_alk_riv     !< id for time_interp_external.
+  type(external_field) :: id_doc_riv     !< id for time_interp_external.
+
+  !> Indices for river fluxes (diagnostics)
+  integer :: no3_riv_flux          !< NO3 riverine flux
+  integer :: po4_riv_flux          !< PO4 riverine flux
+  integer :: don_riv_flux          !< DON riverine flux
+  integer :: donr_riv_flux         !< DONr riverine flux
+  integer :: dop_riv_flux          !< DOP riverine flux
+  integer :: dopr_riv_flux         !< DOPr riverine flux
+  integer :: sio3_riv_flux         !< SiO3 riverine flux
+  integer :: fe_riv_flux           !< Fe riverine flux
+  integer :: doc_riv_flux          !< DOC riverine flux
+  integer :: docr_riv_flux         !< DOCr riverine flux
+  integer :: alk_riv_flux          !< ALK riverine flux
+  integer :: alk_alt_co2_riv_flux  !< ALK (alternate CO2) riverine flux
+  integer :: dic_riv_flux          !< DIC riverine flux
+  integer :: dic_alt_co2_riv_flux  !< DIC (alternate CO2) riverine flux
+
   !> Indices for forcing fields required to compute interior tendencies
   integer :: dustflux_ind  !< index of MARBL forcing field array to copy dust flux into
   integer :: PAR_col_frac_ind  !< index of MARBL forcing field array to copy PAR column fraction into
@@ -206,9 +235,15 @@ type, public :: MARBL_tracers_CS ; private
   integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
   integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
   type(external_field), allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
-  character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
   integer, allocatable :: tracer_restoring_ind(:) !< index of MARBL forcing field to copy per-tracer restoring field into
   integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer restoring timescale into
+
+  !> Memory for storing river fluxes and tracer restoring fields
+  real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
+                                         !! (dims: i, j, tracer) [conc m]
+  character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
+  real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
+  real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
   !> Number of surface flux outputs as well as specific indices for each one
   integer :: sfo_cnt
@@ -435,8 +470,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
             write(log_message, "(A,1X,A)") trim(MARBL_instances%interior_tendency_forcings(m)%metadata%varname), &
                                            'is not a valid interior tendency forcing field name.'
             call MOM_error(FATAL, log_message)
-          end if
-        end if
+          endif
+        endif
     end select
   enddo
 end subroutine configure_MARBL_tracers
@@ -464,6 +499,11 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=128) :: desc_name ! The variable's descriptor.
   character(len=48)  :: units ! The variable's units.
   real, pointer :: tr_ptr(:,:,:) => NULL()
+  integer :: riv_flux_file_start_year
+  integer :: riv_flux_file_end_year
+  integer :: riv_flux_file_data_ref_year
+  integer :: riv_flux_file_model_ref_year
+  integer :: riv_flux_forcing_year
   logical :: register_MARBL_tracers
   logical :: restoring_has_edges, restoring_use_missing
   logical :: restoring_timescale_has_edges, restoring_timescale_use_missing
@@ -521,6 +561,43 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
                  "Conversion factor between FESEDFLUX file and MARBL units", &
                  units="umol/m^2/d -> mmol/m^2/s", default=0.001/86400.)
+
+  ! ** River fluxes
+  call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
+      "If true, use river fluxes supplied from "//&
+      "an input file", default=.true.)
+  if (CS%read_riv_fluxes) then
+    call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
+                  "The file in which the river fluxes can be found", &
+                  default="riv_nut.gnews_gnm.JRA025m_to_tx0.66v1_nnsm_e333r100_190910.20210405.nc")
+    ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
+    if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
+      ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
+      CS%riv_flux_dataset%file_name = trim(slasher(inputdir)) // trim(CS%riv_flux_dataset%file_name)
+      call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
+    endif
+    call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
+                  ".true. for time-varying forcing, .false. for static forcing", default=.false.)
+    if (CS%riv_flux_dataset%l_time_varying) then
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
+                    "Time coordinate of earliest date in RIV_FLUX_FILE", default=1900)
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
+                    "Time coordinate of earliest date in RIV_FLUX_FILE", default=1999)
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
+                    "Time coordinate of latest date in RIV_FLUX_FILE", default=1900)
+      call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
+                    "Time coordinate of latest date in RIV_FLUX_FILE",  default=1900)
+    else
+      call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
+                    "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
+    endif
+    call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
+                                              riv_flux_file_end_year, &
+                                              riv_flux_file_data_ref_year, &
+                                              riv_flux_file_model_ref_year, &
+                                              riv_flux_forcing_year, &
+                                              CS%riv_flux_dataset)
+  endif
 
   ! ** Tracer Restoring
   call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_SOURCE", CS%restoring_source, &
@@ -744,6 +821,92 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     endif
   enddo
 
+  ! Register diagnostics for river fluxes
+  CS%no3_riv_flux = register_diag_field("ocean_model", &
+                                         "NO3_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Dissolved Inorganic Nitrate Riverine Flux", &
+                                         "mmol/m^3 m/s")
+  CS%po4_riv_flux = register_diag_field("ocean_model", &
+                                         "PO4_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Dissolved Inorganic Phosphate Riverine Flux", &
+                                         "mmol/m^3 m/s")
+  CS%don_riv_flux = register_diag_field("ocean_model", &
+                                         "DON_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Dissolved Organic Nitrogen Riverine Flux", &
+                                         "mmol/m^3 m/s")
+  CS%donr_riv_flux = register_diag_field("ocean_model", &
+                                          "DONR_RIV_FLUX", &
+                                          diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                          day, &
+                                          "Refractory DON Riverine Flux", &
+                                          "mmol/m^3 m/s")
+  CS%dop_riv_flux = register_diag_field("ocean_model", &
+                                         "DOP_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Dissolved Organic Phosphorus Riverine Flux", &
+                                         "mmol/m^3 m/s")
+  CS%dopr_riv_flux = register_diag_field("ocean_model", &
+                                          "DOPR_RIV_FLUX", &
+                                          diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                          day, &
+                                          "Refractory DOP Riverine Flux", &
+                                          "mmol/m^3 m/s")
+  CS%sio3_riv_flux = register_diag_field("ocean_model", &
+                                          "SiO3_RIV_FLUX", &
+                                          diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                          day, &
+                                          "Dissolved Inorganic Silicate Riverine Flux", &
+                                          "mmol/m^3 m/s")
+  CS%fe_riv_flux = register_diag_field("ocean_model", &
+                                        "Fe_RIV_FLUX", &
+                                        diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                        day, &
+                                        "Dissolved Inorganic Iron Riverine Flux", &
+                                        "mmol/m^3 m/s")
+  CS%doc_riv_flux = register_diag_field("ocean_model", &
+                                         "DOC_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Dissolved Organic Carbon Riverine Flux", &
+                                         "mmol/m^3 m/s")
+  CS%docr_riv_flux = register_diag_field("ocean_model", &
+                                          "DOCR_RIV_FLUX", &
+                                          diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                          day, &
+                                          "Refractory DOC Riverine Flux", &
+                                          "mmol/m^3 m/s")
+  CS%alk_riv_flux = register_diag_field("ocean_model", &
+                                         "ALK_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Alkalinity Riverine Flux", &
+                                         "meq/m^3 m/s")
+  CS%alk_alt_co2_riv_flux = register_diag_field("ocean_model", &
+                                                 "ALK_ALT_CO2_RIV_FLUX", &
+                                                 diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                 day, &
+                                                 "Alkalinity Riverine Flux, Alternative CO2", &
+                                                 "meq/m^3 m/s")
+  CS%dic_riv_flux = register_diag_field("ocean_model", &
+                                         "DIC_RIV_FLUX", &
+                                         diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                         day, &
+                                         "Dissolved Inorganic Carbon Riverine Flux", &
+                                         "mmol/m^3 m/s")
+  CS%dic_alt_co2_riv_flux = register_diag_field("ocean_model", &
+                                                 "DIC_ALT_CO2_RIV_FLUX", &
+                                                 diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                                 day, &
+                                                 "Dissolved Inorganic Carbon Riverine Flux, Alternative CO2", &
+                                                 "mmol/m^3 m/s")
+
   ! Register diagnostics for per-category forcing fields
   if (CS%ice_ncat > 0) then
     allocate(CS%fracr_cat_id(CS%ice_ncat+1))
@@ -824,6 +987,19 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     enddo
   enddo
 
+  ! Initialize external field for river fluxes
+  if (CS%read_riv_fluxes) then
+    CS%id_din_riv = init_external_field(CS%riv_flux_dataset%file_name, 'din_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_don_riv = init_external_field(CS%riv_flux_dataset%file_name, 'don_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dip_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dip_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dop_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dop_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dsi_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dfe_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_dic_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dic_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_alk_riv = init_external_field(CS%riv_flux_dataset%file_name, 'alk_riv_flux', domain=G%Domain%mpp_domain)
+    CS%id_doc_riv = init_external_field(CS%riv_flux_dataset%file_name, 'doc_riv_flux', domain=G%Domain%mpp_domain)
+  endif
+
   ! Initialize external field for restoring
   if (CS%restoring_rtau_source == "file") then
     select case(CS%restoring_source)
@@ -840,7 +1016,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
         allocate(CS%rtau(SZI_(G), SZJ_(G), CS%restoring_timescale_nz), source=0.)
         call MOM_read_data(CS%restoring_rtau_file, "RTAU", CS%rtau(:,:,:), G%Domain)
     end select
-  end if
+  endif
 
   ! Set up arrays for tracer restoring
 
@@ -1086,35 +1262,37 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
     enddo
   enddo
+
   ! Add River Fluxes to STF
-  if (CS%tracer_inds%no3_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = fluxes%no3_riv_flux(:,:)
-  if (CS%tracer_inds%po4_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = fluxes%po4_riv_flux(:,:)
-  if (CS%tracer_inds%don_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = fluxes%don_riv_flux(:,:)
-  if (CS%tracer_inds%donr_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = fluxes%donr_riv_flux(:,:)
-  if (CS%tracer_inds%dop_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = fluxes%dop_riv_flux(:,:)
-  if (CS%tracer_inds%dopr_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = fluxes%dopr_riv_flux(:,:)
-  if (CS%tracer_inds%sio3_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = fluxes%sio3_riv_flux(:,:)
-  if (CS%tracer_inds%fe_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = fluxes%fe_riv_flux(:,:)
-  if (CS%tracer_inds%doc_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = fluxes%doc_riv_flux(:,:)
-  if (CS%tracer_inds%docr_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind) = fluxes%docr_riv_flux(:,:)
-  if (CS%tracer_inds%alk_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = fluxes%alk_riv_flux(:,:)
-  if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = fluxes%alk_alt_co2_riv_flux(:,:)
-  if (CS%tracer_inds%dic_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = fluxes%dic_riv_flux(:,:)
-  if (CS%tracer_inds%dic_alt_co2_ind > 0) &
-    CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = fluxes%dic_alt_co2_riv_flux(:,:)
+  ! (Post them first)
+  if (CS%no3_riv_flux > 0 .and. CS%tracer_inds%no3_ind > 0) &
+    call post_data(CS%no3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind), CS%diag)
+  if (CS%po4_riv_flux > 0 .and. CS%tracer_inds%po4_ind > 0) &
+    call post_data(CS%po4_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind), CS%diag)
+  if (CS%don_riv_flux > 0 .and. CS%tracer_inds%don_ind > 0) &
+    call post_data(CS%don_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind), CS%diag)
+  if (CS%donr_riv_flux > 0 .and. CS%tracer_inds%donr_ind > 0) &
+    call post_data(CS%donr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind), CS%diag)
+  if (CS%dop_riv_flux > 0 .and. CS%tracer_inds%dop_ind > 0) &
+    call post_data(CS%dop_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind), CS%diag)
+  if (CS%dopr_riv_flux > 0 .and. CS%tracer_inds%dopr_ind > 0) &
+    call post_data(CS%dopr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind), CS%diag)
+  if (CS%sio3_riv_flux > 0 .and. CS%tracer_inds%sio3_ind > 0) &
+    call post_data(CS%sio3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind), CS%diag)
+  if (CS%fe_riv_flux > 0 .and. CS%tracer_inds%fe_ind > 0) &
+    call post_data(CS%fe_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind), CS%diag)
+  if (CS%doc_riv_flux > 0 .and. CS%tracer_inds%doc_ind > 0) &
+    call post_data(CS%doc_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind), CS%diag)
+  if (CS%docr_riv_flux > 0 .and. CS%tracer_inds%docr_ind > 0) &
+    call post_data(CS%docr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind), CS%diag)
+  if (CS%alk_riv_flux > 0 .and. CS%tracer_inds%alk_ind > 0) &
+    call post_data(CS%alk_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind), CS%diag)
+  if (CS%alk_alt_co2_riv_flux > 0  .and. CS%tracer_inds%alk_alt_co2_ind > 0) &
+    call post_data(CS%alk_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind), CS%diag)
+  if (CS%dic_riv_flux > 0 .and. CS%tracer_inds%dic_ind > 0) &
+    call post_data(CS%dic_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind), CS%diag)
+  if (CS%dic_alt_co2_riv_flux > 0 .and. CS%tracer_inds%dic_alt_co2_ind > 0) &
+    call post_data(CS%dic_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind), CS%diag)
   ! fluxes%*_riv_flux are conc m/s, in_flux_optional expects time-integrated flux (conc m)
   CS%RIV_FLUXES(:,:,:) = CS%RIV_FLUXES(:,:,:) * dt
 
@@ -1249,7 +1427,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         else
           MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = &
               MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(1))%field_1d(1,:)
-        end if
+        endif
       end do
 
       !        TODO: In POP, pressure comes from a function in state_mod.F90; I don't see a similar function here
@@ -1415,8 +1593,75 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
   type(ocean_grid_type),   intent(in)    :: G         !< The ocean's grid structure.
   type(MARBL_tracers_CS),  pointer       :: CS        !< The control structure returned by a
 
+  ! These are Fortran parameters in POP
+  real, parameter :: DONriv_refract = 0.1
+  real, parameter :: DOCriv_refract = 0.2
+  real, parameter :: DOPriv_refract = 0.025
+
+  real, dimension(SZI_(G),SZJ_(G)) :: riv_flux_in  !< The field read in from forcing file with time dimension
+  type(time_type) :: Time_riv_flux  !< For reading river flux fields, we use a modified version of Time
   integer :: k,m
 
+    ! River fluxes
+  if (CS%read_riv_fluxes) then
+    CS%RIV_FLUXES(:,:,:) = 0.
+
+    ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
+    Time_riv_flux = map_model_time_to_forcing_time(day_start, CS%riv_flux_dataset)
+
+    call time_interp_external(CS%id_din_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%no3_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%alk_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) - riv_flux_in(:,:)
+    if (CS%tracer_inds%alk_alt_co2_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) - riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_dip_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%po4_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_don_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%don_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = G%mask2dT(:,:) * (1. - DONriv_refract) * riv_flux_in(:,:)
+    if (CS%tracer_inds%donr_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = G%mask2dT(:,:) * DONriv_refract * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_dop_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%dop_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = G%mask2dT(:,:) * (1. - DOPriv_refract) * riv_flux_in(:,:)
+    if (CS%tracer_inds%dopr_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = G%mask2dT(:,:) * DOPriv_refract * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_dsi_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%sio3_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_dfe_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%fe_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_dic_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%dic_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%dic_alt_co2_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_alk_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%alk_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) + riv_flux_in(:,:)
+    if (CS%tracer_inds%alk_alt_co2_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) + &
+                                                          G%mask2dT(:,:) * riv_flux_in(:,:)
+
+    call time_interp_external(CS%id_doc_riv,Time_riv_flux,riv_flux_in)
+    if (CS%tracer_inds%doc_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = G%mask2dT(:,:) * (1. - DOCriv_refract) * riv_flux_in(:,:)
+    if (CS%tracer_inds%docr_ind > 0) &
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind) = G%mask2dT(:,:) * DOCriv_refract * riv_flux_in(:,:)
+  endif
+
+  ! Tracer restoring
   do m=1,CS%restore_count
     call time_interp_external(CS%id_tracer_restoring(m),day_start,CS%restoring_in(:,:,:,m))
     do k=1,CS%restoring_nz
