@@ -869,7 +869,8 @@ subroutine initialize_ocean_public_type(input_domain, Ocean_sfc, diag, maskmap, 
            Ocean_sfc%s_surf (isc:iec,jsc:jec),  &  ! time averaged sss (psu) passed to atmosphere/ice models
            Ocean_sfc%u_surf (isc:iec,jsc:jec),  &  ! time averaged u-current (m/sec) passed to atmosphere/ice models
            Ocean_sfc%v_surf (isc:iec,jsc:jec),  &  ! time averaged v-current (m/sec)  passed to atmosphere/ice models
-           Ocean_sfc%sea_lev(isc:iec,jsc:jec),  &  ! time averaged thickness of top model grid cell (m) plus patm/rho0/grav
+           Ocean_sfc%sea_lev(isc:iec,jsc:jec),  &  ! time averaged thickness of top model grid cell (m) plus
+                                                   ! patm/rho0/grav
            Ocean_sfc%frazil (isc:iec,jsc:jec),  &  ! time accumulated frazil (J/m^2) passed to ice model
            Ocean_sfc%melt_potential(isc:iec,jsc:jec), &  ! time accumulated melt potential (J/m^2) passed to ice model
            Ocean_sfc%area   (isc:iec,jsc:jec),  &

@@ -235,15 +235,18 @@ type, public :: MARBL_tracers_CS ; private
   integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
   integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
   type(external_field), allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
-  integer, allocatable :: tracer_restoring_ind(:) !< index of MARBL forcing field to copy per-tracer restoring field into
-  integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer restoring timescale into
+  integer, allocatable :: tracer_restoring_ind(:) !< index of MARBL forcing field to copy
+                                                  !! per-tracer restoring field into
+  integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer
+                                             !! restoring timescale into
 
   !> Memory for storing river fluxes and tracer restoring fields
   real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
                                          !! (dims: i, j, tracer) [conc m]
   character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
   real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
-  real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
+  real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file
+                                                         !! (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
   !> Number of surface flux outputs as well as specific indices for each one
   integer :: sfo_cnt
@@ -430,7 +433,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%o2_scalef_ind = -1
   CS%remin_scalef_ind = -1
   allocate(CS%id_tracer_restoring(CS%ntr))
-  allocate(CS%tracer_restoring_varname(CS%ntr), source='               ') ! gfortran 13.2 bug? source = '' does not blank out strings
+  allocate(CS%tracer_restoring_varname(CS%ntr), source='               ') ! gfortran 13.2 bug?
+                                                                          ! source = '' does not blank out strings
   allocate(CS%tracer_restoring_ind(CS%ntr), source=-1)
   allocate(CS%tracer_rtau_ind(CS%ntr), source=-1)
   CS%restore_count = 0
@@ -456,11 +460,13 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
       case('Particulate Remin Scale Factor')
         CS%remin_scalef_ind = m
       case DEFAULT
-        fi = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Field') ! fi stands for forcing_index
+        ! fi stands for forcing_index
+        fi = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Field')
         if (fi > 0) then
           CS%restore_count = CS%restore_count + 1
           CS%tracer_restoring_ind(CS%restore_count) = m
-          CS%tracer_restoring_varname(CS%restore_count) = MARBL_instances%interior_tendency_forcings(m)%metadata%varname(1:fi-2)
+          CS%tracer_restoring_varname(CS%restore_count) = &
+              MARBL_instances%interior_tendency_forcings(m)%metadata%varname(1:fi-2)
         else
           fi = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, 'Restoring Inverse Timescale')
           if (fi > 0) then
@@ -1200,8 +1206,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         endif
       endif
       !       These are okay, but need option to come in from coupler
-      if (CS%xco2_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = fluxes%atm_co2(i,j)
-      if (CS%xco2_alt_ind > 0) MARBL_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = fluxes%atm_alt_co2(i,j)
+      if (CS%xco2_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%xco2_ind)%field_0d(1) = fluxes%atm_co2(i,j)
+      if (CS%xco2_alt_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%xco2_alt_ind)%field_0d(1) = fluxes%atm_alt_co2(i,j)
 
       !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) &
@@ -1585,7 +1593,8 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
     if (CS%tracer_inds%alk_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) - riv_flux_in(:,:)
     if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) - riv_flux_in(:,:)
+      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) - &
+                                                          riv_flux_in(:,:)
 
     call time_interp_external(CS%id_dip_riv,Time_riv_flux,riv_flux_in)
     if (CS%tracer_inds%po4_ind > 0) &
