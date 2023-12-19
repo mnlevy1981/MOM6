@@ -249,8 +249,8 @@ type, public :: MARBL_tracers_CS ; private
                                                          !! (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
   !> Number of surface flux outputs as well as specific indices for each one
-  integer :: sfo_cnt
-  integer :: flux_co2_ind
+  integer :: sfo_cnt      !< number of surface flux outputs from MARBL
+  integer :: flux_co2_ind !< index to co2 flux surface flux output
 
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux

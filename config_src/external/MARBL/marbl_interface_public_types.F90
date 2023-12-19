@@ -68,6 +68,7 @@ module marbl_interface_public_types
         real, allocatable :: delta_z(:)  !< dummy thicknesses
     end type marbl_domain_type
 
+    !> A non-functioning template of MARBL single output type
     type, public :: marbl_single_output_type
         ! marbl_single_output :
         ! a private type, this contains both the metadata and
@@ -76,12 +77,13 @@ module marbl_interface_public_types
         ! that needs to be passed to the GCM / flux coupler.
         ! Data must be accessed via the marbl_output_for_GCM_type
         ! data structure.
-        real, allocatable, dimension(:)   :: forcing_field_0d
-        real, allocatable, dimension(:,:) :: forcing_field_1d
+        real, allocatable, dimension(:)   :: forcing_field_0d  !< dummy forcing_field_0d
+        real, allocatable, dimension(:,:) :: forcing_field_1d  !< forcing_field_1d
     end type marbl_single_output_type
 
+    !> A non-functioning template of MARBL output for GCM type
     type, public :: marbl_output_for_GCM_type
-        type(marbl_single_output_type), dimension(:), pointer :: outputs_for_GCM => NULL()
+        type(marbl_single_output_type), dimension(:), pointer :: outputs_for_GCM => NULL()  !< dummy outputs_for_GCM
     end type marbl_output_for_GCM_type
 
 end module marbl_interface_public_types

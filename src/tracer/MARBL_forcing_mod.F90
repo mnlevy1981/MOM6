@@ -63,9 +63,9 @@ type, public :: marbl_forcing_CS
 end type marbl_forcing_CS
 
 ! Module parameters
-integer, parameter :: atm_co2_constant_iopt = 0
-integer, parameter :: atm_co2_prognostic_iopt = 1
-integer, parameter :: atm_co2_diagnostic_iopt = 2
+integer, parameter :: atm_co2_constant_iopt = 0     !< module parameter denoting atm_co2_opt = 'constant'
+integer, parameter :: atm_co2_prognostic_iopt = 1   !< module parameter denoting atm_co2_opt = 'diagnostic'
+integer, parameter :: atm_co2_diagnostic_iopt = 2   !< module parameter denoting atm_co2_opt = 'prognostic'
 
 contains
 
