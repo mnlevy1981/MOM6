@@ -145,7 +145,7 @@ type, public :: MARBL_tracers_CS ; private
   character(len=14) :: restoring_rtau_source !< location of tracer restoring timescale data
                                              !! valid values: file, grid_dependent
   character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
-  type(remapping_CS) :: restoring_remapCS ! Remapping parameters and work arrays for tracer restoring / timescale
+  type(remapping_CS) :: restoring_remapCS !< Remapping parameters and work arrays for tracer restoring / timescale
   character(len=200) :: restoring_rtau_file !< name of [netCDF] file containing tracer restoring timescale
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
 
