@@ -103,8 +103,12 @@ end type MARBL_tracer_data
 
 !> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
-  integer :: ntr    !< The number of tracers that are actually used.
-  integer :: restore_count !< The number of tracers MARBL is configured to restore
+  integer :: ntr          !< The number of tracers that are actually used.
+  logical :: base_bio_on  !< Will MARBL use base biotic tracers?
+  logical :: abio_dic_on  !< Will MARBL use abiotic DIC / DI14C tracers?
+  logical :: ciso_on      !< Will MARBL use isotopic tracers?
+
+  integer :: restore_count              !< The number of tracers MARBL is configured to restore
   logical :: coupled_tracers = .false.  !< These tracers are not offered to the coupler.
   logical :: use_ice_category_fields    !< Forcing will include multiple ice categories for ice_frac and shortwave
   logical :: request_Chl_from_MARBL     !< MARBL can provide Chl to use in set_pen_shortwave()
@@ -185,17 +189,18 @@ type, public :: MARBL_tracers_CS ; private
   real, allocatable :: SFO(:,:,:)  !< surface flux output returned from MARBL for use in GCM
                                    !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
 
-  integer :: u10_sqr_ind  !< index of MARBL forcing field array to copy 10-m wind (squared) into
-  integer :: sss_ind  !< index of MARBL forcing field array to copy sea surface salinity into
-  integer :: sst_ind  !< index of MARBL forcing field array to copy sea surface temperature into
-  integer :: ifrac_ind  !< index of MARBL forcing field array to copy ice fraction into
+  integer :: u10_sqr_ind   !< index of MARBL forcing field array to copy 10-m wind (squared) into
+  integer :: sss_ind       !< index of MARBL forcing field array to copy sea surface salinity into
+  integer :: sst_ind       !< index of MARBL forcing field array to copy sea surface temperature into
+  integer :: ifrac_ind     !< index of MARBL forcing field array to copy ice fraction into
   integer :: dust_dep_ind  !< index of MARBL forcing field array to copy dust flux into
-  integer :: fe_dep_ind  !< index of MARBL forcing field array to copy iron flux into
+  integer :: fe_dep_ind    !< index of MARBL forcing field array to copy iron flux into
   integer :: nox_flux_ind  !< index of MARBL forcing field array to copy NOx flux into
   integer :: nhy_flux_ind  !< index of MARBL forcing field array to copy NHy flux into
   integer :: atmpress_ind  !< index of MARBL forcing field array to copy atmospheric pressure into
-  integer :: xco2_ind  !< index of MARBL forcing field array to copy CO2 flux into
+  integer :: xco2_ind      !< index of MARBL forcing field array to copy CO2 flux into
   integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
+  integer :: d14c_ind      !< index of MARBL forcing field array to copy d14C into
 
   !> Indices for river fluxes (added to surface fluxes)
   type(external_field) :: id_din_riv     !< id for time_interp_external.
@@ -240,9 +245,11 @@ type, public :: MARBL_tracers_CS ; private
   integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer
                                              !! restoring timescale into
 
-  !> Memory for storing river fluxes and tracer restoring fields
-  real, allocatable :: RIV_FLUXES(:,:,:) !< time-integrate river flux forcing for applyTracerBoundaryFluxesInOut
-                                         !! (dims: i, j, tracer) [conc m]
+  !> Memory for storing river fluxes, tracer restoring fields, and abiotic forcing
+  real, allocatable :: d14c(:,:)         !< d14c forcing for abiotic DIC and carbon isotope tracer modules
+  real, allocatable :: RIV_FLUXES(:,:,:) !< river flux forcing for applyTracerBoundaryFluxesInOut
+                                         !! (needs to be time-integrated when passed to function!)
+                                         !! (dims: i, j, tracer) [conc m/s]
   character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
   real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
   real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file
@@ -368,6 +375,9 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call print_marbl_log(MARBL_instances%StatusLog)
   call MARBL_instances%StatusLog%erase()
   CS%ntr = size(MARBL_instances%tracer_metadata)
+  call marbl_instances%get_setting('base_bio_on', CS%base_bio_on)
+  call marbl_instances%get_setting('abio_dic_on', CS%abio_dic_on)
+  call marbl_instances%get_setting('ciso_on',     CS%ciso_on)
 
   ! (4) Request fields needed by MOM6
   CS%sfo_cnt = 0
@@ -415,6 +425,8 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
         CS%xco2_ind = m
       case('xco2_alt_co2')
         CS%xco2_alt_ind = m
+      case('d14c')
+        CS%d14c_ind = m
       case DEFAULT
         write(log_message, "(A,1X,A)") trim(MARBL_instances%surface_flux_forcings(m)%metadata%varname), &
                                    'is not a valid surface flux forcing field name.'
@@ -432,6 +444,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   CS%fesedflux_ind = -1
   CS%o2_scalef_ind = -1
   CS%remin_scalef_ind = -1
+  CS%d14c_ind = -1
   allocate(CS%id_tracer_restoring(CS%ntr))
   allocate(CS%tracer_restoring_varname(CS%ntr), source='               ') ! gfortran 13.2 bug?
                                                                           ! source = '' does not blank out strings
@@ -740,6 +753,9 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
            CS%RIV_FLUXES(SZI_(G), SZJ_(G), CS%ntr), &
            CS%SFO(SZI_(G), SZJ_(G), CS%sfo_cnt), &
            source=0.0)
+
+  ! Allocate memory for d14c forcing
+  if (CS%abio_dic_on) allocate(CS%d14c(SZI_(G), SZJ_(G)))
 
   ! Register diagnostics returned from MARBL (surface flux first, then interior tendency)
   call register_MARBL_diags(MARBL_instances%surface_flux_diags, diag, day, G, CS%surface_flux_diags)
@@ -1226,6 +1242,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * &
                                                                              ndep_conversion
 
+      if (CS%d14c_ind > 0) &
+        MARBL_instances%surface_flux_forcings(CS%d14c_ind)%field_0d(1) = CS%d14c(i,j)
+
       !     * tracers at surface
       !       TODO: average over some shallow depth (e.g. 5m)
       do m=1,CS%ntr
@@ -1580,7 +1599,12 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
   type(time_type) :: Time_riv_flux  !< For reading river flux fields, we use a modified version of Time
   integer :: k,m
 
-    ! River fluxes
+  ! Abiotic DIC forcing
+  if (CS%abio_dic_on) then
+    CS%d14c(:,:) = -4.
+  endif
+
+  ! River fluxes
   if (CS%read_riv_fluxes) then
     CS%RIV_FLUXES(:,:,:) = 0.
 
