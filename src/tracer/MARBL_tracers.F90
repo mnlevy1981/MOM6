@@ -127,7 +127,7 @@ type, public :: MARBL_tracers_CS ; private
   type(MOM_restart_CS), pointer :: restart_CSp => NULL() !< A pointer to the restart control structure
 
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
-  logical :: tracers_may_reinit = .false. !< If true the tracers may be initialized if not found in a restart file
+  logical :: tracers_may_reinit            !< If true the tracers may be initialized if not found in a restart file
 
   character(len=200) :: fesedflux_file   !< name of [netCDF] file containing iron sediment flux
   character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
@@ -553,6 +553,11 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     CS%IC_file = trim(slasher(inputdir))//trim(CS%IC_file)
     call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_IC_FILE", CS%IC_file)
   endif
+  call get_param(param_file, mdl, "MARBL_TRACERS_MAY_REINIT", CS%tracers_may_reinit, &
+                 "If true, tracers may go through the initialization code "//&
+                 "if they are not found in the restart files.  Otherwise "//&
+                 "it is a fatal error if tracers are not found in the "//&
+                 "restart files of a restarted run.", default=.false.)
   call get_param(param_file, mdl, "MARBL_TRACERS_INIT_VERTICAL_REMAP_ONLY", CS%ongrid, &
                  "If true, initial conditions are on the model horizontal grid. " //&
                  "Extrapolation over missing ocean values is done using an ICE-9 "//&
