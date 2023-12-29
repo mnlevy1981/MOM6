@@ -34,6 +34,7 @@ module marbl_interface
         real, allocatable :: interior_tendencies(:,:)  !< dummy tendencies
        contains
         procedure, public  :: put_setting                !< dummy put_setting routine
+        procedure, public  :: get_setting                !< dummy get_setting routine
         procedure, public  :: init                       !< dummy routine
         procedure, public  :: surface_flux_compute       !< dummy surface flux routine
         procedure, public  :: interior_tendency_compute  !< dummy interior tendency routine
@@ -55,7 +56,16 @@ contains
         call MOM_error(FATAL, error_msg)
     end subroutine put_setting
 
-    !> Dummy version of MARBL's init() function
+    !> Dummy version of MARBL's get_setting() function
+    subroutine get_setting(self, str_in, log_out)
+      class(marbl_interface_class), intent(in)  :: self
+      character(len=*),             intent(in)  :: str_in
+      logical,                      intent(out) :: log_out
+
+      call MOM_error(FATAL, error_msg)
+  end subroutine get_setting
+
+  !> Dummy version of MARBL's init() function
     subroutine init(self,                  &
         gcm_num_levels,                    &
         gcm_num_PAR_subcols,               &
