@@ -294,7 +294,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   nz = GV%ke
   marbl_settings_in = 615
 
-  ! (1) Read all relevant parameters and write them to the model log.
+  ! (1) Read parameters necessary for general setup of MARBL
   call log_version(param_file, mdl, version, "")
   call get_param(param_file, mdl, "MARBL_SETTINGS_FILE", CS%marbl_settings_file, &
                  "The name of a file from which to read the run-time "//&
@@ -302,15 +302,12 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
                  "Bottom fluxes are uniformly mixed over layer of this thickness", &
                  default=1., units="m")
-  call get_param(param_file, mdl, "CHL_FROM_FILE", chl_from_file, &
-                 "If true, chl_a is read from a file.", default=.true.)
-  CS%request_Chl_from_MARBL = (.not. chl_from_file)
   call get_param(param_file, mdl, "USE_ICE_CATEGORIES", CS%use_ice_category_fields, &
-       "If true, allocate memory for shortwave and ice fraction split by ice thickness category.", &
-       default=.false.)
+                 "If true, allocate memory for shortwave and ice fraction split by ice thickness category.", &
+                 default=.false.)
   call get_param(param_file, mdl, "ICE_NCAT", CS%ice_ncat, &
-       "Number of ice thickness categories in shortwave and ice fraction forcings.", &
-       default=0)
+                 "Number of ice thickness categories in shortwave and ice fraction forcings.", &
+                 default=0)
   CS%bfmt_r = 1. / CS%bot_flux_mix_thickness
 
   if (CS%use_ice_category_fields .and. (CS%ice_ncat == 0)) &
@@ -357,7 +354,9 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   endif
   if (is_root_PE()) close(marbl_settings_in)
 
-  ! (3) call marbl%init()
+  ! (3) Initialize MARBL and configure MOM6 accordingly
+
+  ! (3a) call marbl%init()
   ! TODO: We want to strip gcm_delta_z, gcm_zw, and gcm_zt values out of
   !       init because MOM updates them every time step / every column
   call MARBL_instances%init(&
@@ -379,14 +378,25 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call marbl_instances%get_setting('abio_dic_on', CS%abio_dic_on)
   call marbl_instances%get_setting('ciso_on',     CS%ciso_on)
 
+  ! (3b) Read parameters that depend on how MARBL is configured
+  if (CS%base_bio_on) then
+    call get_param(param_file, mdl, "CHL_FROM_FILE", chl_from_file, &
+                  "If true, chl_a is read from a file.", default=.true.)
+    CS%request_Chl_from_MARBL = (.not. chl_from_file)
+  else
+    CS%request_Chl_from_MARBL = .false.
+  endif
+
   ! (4) Request fields needed by MOM6
   CS%sfo_cnt = 0
 
   ! CO2 Flux to the atmosphere
-  CS%sfo_cnt = CS%sfo_cnt +1
-  call MARBL_instances%add_output_for_GCM(num_elements=1, &
-                                          field_name="flux_co2", &
-                                          output_id=CS%flux_co2_ind)
+  if (CS%base_bio_on) then
+    CS%sfo_cnt = CS%sfo_cnt +1
+    call MARBL_instances%add_output_for_GCM(num_elements=1, &
+                                            field_name="flux_co2", &
+                                            output_id=CS%flux_co2_ind)
+  end if
 
   ! (5) Initialize forcing fields
   !     i. store all surface forcing indices
@@ -563,64 +573,66 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
                  "Extrapolation over missing ocean values is done using an ICE-9 "//&
                  "procedure with vertical ALE remapping .", &
                  default=.false.)
-  ! ** FESEDFLUX
-  call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
-                 "The file in which the iron sediment flux forcing field can be found.", &
-                 default="fesedflux_total_reduce_oxic_tx0.66v1.c230817.nc")
-  if (scan(CS%fesedflux_file,'/') == 0) then
-    ! Add the directory if CS%fesedflux_file is not already a complete path.
-    CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
-    call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FESEDFLUX_FILE", CS%fesedflux_file)
-  endif
-  ! ** FEVENTFLUX
-  call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
-                 "The file in which the iron vent flux forcing field can be found.", &
-                 default="feventflux_5gmol_tx0.66v1.c230817.nc")
-  if (scan(CS%feventflux_file,'/') == 0) then
-    ! Add the directory if CS%feventflux_file is not already a complete path.
-    CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
-    call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FEVENTFLUX_FILE", CS%feventflux_file)
-  endif
-  ! ** Scale factor for FESEDFLUX
-  call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
-                 "Conversion factor between FESEDFLUX file and MARBL units", &
-                 units="umol/m^2/d -> mmol/m^2/s", default=0.001/86400.)
+  if (CS%base_bio_on) then
+    ! ** FESEDFLUX
+    call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
+                  "The file in which the iron sediment flux forcing field can be found.", &
+                  default="fesedflux_total_reduce_oxic_tx0.66v1.c230817.nc")
+    if (scan(CS%fesedflux_file,'/') == 0) then
+      ! Add the directory if CS%fesedflux_file is not already a complete path.
+      CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
+      call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FESEDFLUX_FILE", CS%fesedflux_file)
+    endif
+    ! ** FEVENTFLUX
+    call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
+                  "The file in which the iron vent flux forcing field can be found.", &
+                  default="feventflux_5gmol_tx0.66v1.c230817.nc")
+    if (scan(CS%feventflux_file,'/') == 0) then
+      ! Add the directory if CS%feventflux_file is not already a complete path.
+      CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
+      call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FEVENTFLUX_FILE", CS%feventflux_file)
+    endif
+    ! ** Scale factor for FESEDFLUX
+    call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
+                  "Conversion factor between FESEDFLUX file and MARBL units", &
+                  units="umol/m^2/d -> mmol/m^2/s", default=0.001/86400.)
 
-  ! ** River fluxes
-  call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
-      "If true, use river fluxes supplied from "//&
-      "an input file", default=.true.)
-  if (CS%read_riv_fluxes) then
-    call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
-                  "The file in which the river fluxes can be found", &
-                  default="riv_nut.gnews_gnm.JRA025m_to_tx0.66v1_nnsm_e333r100_190910.20210405.nc")
-    ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
-    if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
-      ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
-      CS%riv_flux_dataset%file_name = trim(slasher(inputdir)) // trim(CS%riv_flux_dataset%file_name)
-      call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
+    ! ** River fluxes
+    call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
+        "If true, use river fluxes supplied from "//&
+        "an input file", default=.true.)
+    if (CS%read_riv_fluxes) then
+      call get_param(param_file, mdl, "RIV_FLUX_FILE", CS%riv_flux_dataset%file_name, &
+                    "The file in which the river fluxes can be found", &
+                    default="riv_nut.gnews_gnm.JRA025m_to_tx0.66v1_nnsm_e333r100_190910.20210405.nc")
+      ! call get_param(param_file, mdl, "RIV_FLUX_OFFSET_YEAR", CS%riv)
+      if (scan(CS%riv_flux_dataset%file_name,'/') == 0) then
+        ! CS%riv_flux_dataset%file_name = trim(inputdir) // trim(CS%riv_flux_dataset%file_name)
+        CS%riv_flux_dataset%file_name = trim(slasher(inputdir)) // trim(CS%riv_flux_dataset%file_name)
+        call log_param(param_file, mdl, "INPUTDIR/RIV_FLUX_FILE", CS%riv_flux_dataset%file_name)
+      endif
+      call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
+                    ".true. for time-varying forcing, .false. for static forcing", default=.false.)
+      if (CS%riv_flux_dataset%l_time_varying) then
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
+                      "First year of data to read in RIV_FLUX_FILE", default=1900)
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
+                      "Last year of data to read in RIV_FLUX_FILE", default=2000)
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
+                      "Align this year in RIV_FLUX_FILE with RIV_FLUX_FILE_MODEL_REF_YEAR in model", default=1900)
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
+                      "Align this year in model with RIV_FLUX_FILE_DATA_REF_YEAR in RIV_FLUX_FILE",  default=1)
+      else
+        call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
+                      "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
+      endif
+      call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
+                                                riv_flux_file_end_year, &
+                                                riv_flux_file_data_ref_year, &
+                                                riv_flux_file_model_ref_year, &
+                                                riv_flux_forcing_year, &
+                                                CS%riv_flux_dataset)
     endif
-    call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
-                  ".true. for time-varying forcing, .false. for static forcing", default=.false.)
-    if (CS%riv_flux_dataset%l_time_varying) then
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
-                    "First year of data to read in RIV_FLUX_FILE", default=1900)
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
-                    "Last year of data to read in RIV_FLUX_FILE", default=2000)
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
-                    "Align this year in RIV_FLUX_FILE with RIV_FLUX_FILE_MODEL_REF_YEAR in model", default=1900)
-      call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
-                    "Align this year in model with RIV_FLUX_FILE_DATA_REF_YEAR in RIV_FLUX_FILE",  default=1)
-    else
-      call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
-                    "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
-    endif
-    call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
-                                              riv_flux_file_end_year, &
-                                              riv_flux_file_data_ref_year, &
-                                              riv_flux_file_model_ref_year, &
-                                              riv_flux_forcing_year, &
-                                              CS%riv_flux_dataset)
   endif
 
   ! ** Tracer Restoring
@@ -960,71 +972,73 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     enddo
   endif
 
-  ! Read initial fesedflux and feventflux fields
-  ! (1) get vertical dimension
-  !     -- comes from fesedflux_file, assume same dimension in feventflux
-  !        (maybe these fields should be combined?)
-  !     -- note: read_Z_edges treats depth as positive UP => 0 at surface, negative at depth
-  fesedflux_use_missing = .false.
-  call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z_edges, CS%fesedflux_nz, &
-                    fesedflux_has_edges, fesedflux_use_missing, fesedflux_missing, &
-                    scale=US%m_to_Z)
+  if (CS%base_bio_on) then
+    ! Read initial fesedflux and feventflux fields
+    ! (1) get vertical dimension
+    !     -- comes from fesedflux_file, assume same dimension in feventflux
+    !        (maybe these fields should be combined?)
+    !     -- note: read_Z_edges treats depth as positive UP => 0 at surface, negative at depth
+    fesedflux_use_missing = .false.
+    call read_Z_edges(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_z_edges, CS%fesedflux_nz, &
+                      fesedflux_has_edges, fesedflux_use_missing, fesedflux_missing, &
+                      scale=US%m_to_Z)
 
-  ! (2) Allocate memory for fesedflux and feventflux
-  allocate(CS%fesedflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
-  allocate(CS%feventflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
-  allocate(CS%fesedflux_dz(SZI_(G), SZJ_(G), CS%fesedflux_nz))
+    ! (2) Allocate memory for fesedflux and feventflux
+    allocate(CS%fesedflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
+    allocate(CS%feventflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
+    allocate(CS%fesedflux_dz(SZI_(G), SZJ_(G), CS%fesedflux_nz))
 
-  ! (3) Read data
-  !     TODO: Add US term to scale
-  call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in(:,:,:), G%Domain, &
-                     scale=CS%fesedflux_scale_factor)
-  call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in(:,:,:), G%Domain, &
-                     scale=CS%fesedflux_scale_factor)
+    ! (3) Read data
+    !     TODO: Add US term to scale
+    call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in(:,:,:), G%Domain, &
+                      scale=CS%fesedflux_scale_factor)
+    call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in(:,:,:), G%Domain, &
+                      scale=CS%fesedflux_scale_factor)
 
-  ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
-  !     Remember, fesedflux_z_edges = 0 at surface and is < 0 below surface
+    ! (4) Relocate values that are below ocean bottom to layer that intersects bathymetry
+    !     Remember, fesedflux_z_edges = 0 at surface and is < 0 below surface
 
-  do k=CS%fesedflux_nz, 1, -1
-    kbot = k + 1 ! level k is between z(k) and z(k+1)
-    do j=G%jsc, G%jec
-      do i=G%isc, G%iec
-        if (G%mask2dT(i,j) == 0) cycle
-        if (G%bathyT(i,j) + CS%fesedflux_z_edges(1) < 1e-8) then
-          write(log_message, *) "Current implementation of fesedflux assumes G%bathyT >= first edge;", &
-                                "first edge =", -CS%fesedflux_z_edges(1), &
-                                "bathyT =", G%bathyT(i,j)
-          call MOM_error(FATAL, log_message)
-        endif
-        ! Also figure out layer thickness while we're here
-        CS%fesedflux_dz(i,j,k) = CS%fesedflux_z_edges(k) - CS%fesedflux_z_edges(kbot)
-        ! If top interface is at or below ocean bottom, move flux in current layer up one
-        ! and set thickness of current level to 0
-        if (G%bathyT(i,j) + CS%fesedflux_z_edges(k) < 1e-8) then
-          CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
-          CS%fesedflux_in(i,j,k) = 0.
-          CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
-          CS%feventflux_in(i,j,k) = 0.
-          CS%fesedflux_dz(i,j,k) = 0.
-        elseif (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8) then
-          ! Otherwise, if lower interface is below bathymetry move interface to ocean bottom
-          CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z_edges(k)
-        endif
+    do k=CS%fesedflux_nz, 1, -1
+      kbot = k + 1 ! level k is between z(k) and z(k+1)
+      do j=G%jsc, G%jec
+        do i=G%isc, G%iec
+          if (G%mask2dT(i,j) == 0) cycle
+          if (G%bathyT(i,j) + CS%fesedflux_z_edges(1) < 1e-8) then
+            write(log_message, *) "Current implementation of fesedflux assumes G%bathyT >= first edge;", &
+                                  "first edge =", -CS%fesedflux_z_edges(1), &
+                                  "bathyT =", G%bathyT(i,j)
+            call MOM_error(FATAL, log_message)
+          endif
+          ! Also figure out layer thickness while we're here
+          CS%fesedflux_dz(i,j,k) = CS%fesedflux_z_edges(k) - CS%fesedflux_z_edges(kbot)
+          ! If top interface is at or below ocean bottom, move flux in current layer up one
+          ! and set thickness of current level to 0
+          if (G%bathyT(i,j) + CS%fesedflux_z_edges(k) < 1e-8) then
+            CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
+            CS%fesedflux_in(i,j,k) = 0.
+            CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
+            CS%feventflux_in(i,j,k) = 0.
+            CS%fesedflux_dz(i,j,k) = 0.
+          elseif (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8) then
+            ! Otherwise, if lower interface is below bathymetry move interface to ocean bottom
+            CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z_edges(k)
+          endif
+        enddo
       enddo
     enddo
-  enddo
 
-  ! Initialize external field for river fluxes
-  if (CS%read_riv_fluxes) then
-    CS%id_din_riv = init_external_field(CS%riv_flux_dataset%file_name, 'din_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_don_riv = init_external_field(CS%riv_flux_dataset%file_name, 'don_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dip_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dip_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dop_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dop_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dsi_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dfe_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_dic_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dic_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_alk_riv = init_external_field(CS%riv_flux_dataset%file_name, 'alk_riv_flux', domain=G%Domain%mpp_domain)
-    CS%id_doc_riv = init_external_field(CS%riv_flux_dataset%file_name, 'doc_riv_flux', domain=G%Domain%mpp_domain)
+    ! Initialize external field for river fluxes
+    if (CS%read_riv_fluxes) then
+      CS%id_din_riv = init_external_field(CS%riv_flux_dataset%file_name, 'din_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_don_riv = init_external_field(CS%riv_flux_dataset%file_name, 'don_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dip_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dip_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dop_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dop_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dsi_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dsi_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dfe_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dfe_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_dic_riv = init_external_field(CS%riv_flux_dataset%file_name, 'dic_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_alk_riv = init_external_field(CS%riv_flux_dataset%file_name, 'alk_riv_flux', domain=G%Domain%mpp_domain)
+      CS%id_doc_riv = init_external_field(CS%riv_flux_dataset%file_name, 'doc_riv_flux', domain=G%Domain%mpp_domain)
+    endif
   endif
 
   ! Initialize external field for restoring

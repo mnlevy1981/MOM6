@@ -79,7 +79,7 @@ contains
     type(marbl_forcing_CS), pointer, intent(inout) :: CS          !< A pointer that is set to point to control
                                                                   !! structure for MARBL forcing
 
-    character(len=40)  :: mdl = "MOM_forcing_type"  ! This module's name.
+    character(len=40)  :: mdl = "MARBL_forcing_mod"  ! This module's name.
     character(len=15)  :: atm_co2_opt
     character(len=200) :: err_message
 
