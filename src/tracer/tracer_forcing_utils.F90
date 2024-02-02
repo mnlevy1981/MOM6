@@ -75,13 +75,13 @@ contains
 
     end function map_model_time_to_forcing_time
 
-    !> real_to_time converts from seconds since 0000-01-01 to time_type so we need to convert from years -> seconds
+    !> real_to_time converts from seconds since 0001-01-01 to time_type so we need to convert from years -> seconds
     function year_to_sec(year)
 
         integer, intent(in) :: year
         real :: year_to_sec
 
-        year_to_sec = 86400. * 365. * real(year)
+        year_to_sec = 86400. * 365. * real(year-1)
 
     end function year_to_sec
 

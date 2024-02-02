@@ -234,7 +234,7 @@ contains
     if (.not. CS%use_marbl_tracers) return
 
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
-    ndep_conversion = (1000./14.) * ((US%L_to_m)**2 * US%T_to_s)
+    ndep_conversion = (1000./14.) * ((US%L_to_m**2) * US%T_to_s)
     iron_flux_conversion = US%kg_m2s_to_RZ_T * 1.e6 / molw_Fe ! kg / m^2 / s -> mmol / m^2 / s
 
     ! Post fields from coupler to diagnostics

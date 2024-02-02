@@ -131,6 +131,9 @@ type, public :: MARBL_tracers_CS ; private
 
   character(len=200) :: fesedflux_file   !< name of [netCDF] file containing iron sediment flux
   character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
+  type(forcing_timeseries_dataset) :: d14c_dataset(3) !< File and time axis information for d14c forcing
+  real, dimension(3) :: d14c_bands       !< forcing is organized into bands: [30 N, 90 N]; [30 S, 30 N]; [90 S, 30 S]
+  integer :: d14c_id                     !< id for diagnostic field with d14c forcing
   logical :: read_riv_fluxes             !< If true, use river fluxes supplied from an input file.
                                          !! This is temporary, we will always read river fluxes
   type(forcing_timeseries_dataset) :: riv_flux_dataset !< File and time axis information for river fluxes
@@ -202,7 +205,7 @@ type, public :: MARBL_tracers_CS ; private
   integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
   integer :: d14c_ind      !< index of MARBL forcing field array to copy d14C into
 
-  !> Indices for river fluxes (added to surface fluxes)
+  !> external_field types for river fluxes (added to surface fluxes)
   type(external_field) :: id_din_riv     !< id for time_interp_external.
   type(external_field) :: id_don_riv     !< id for time_interp_external.
   type(external_field) :: id_dip_riv     !< id for time_interp_external.
@@ -212,6 +215,9 @@ type, public :: MARBL_tracers_CS ; private
   type(external_field) :: id_dic_riv     !< id for time_interp_external.
   type(external_field) :: id_alk_riv     !< id for time_interp_external.
   type(external_field) :: id_doc_riv     !< id for time_interp_external.
+
+  !> external_field type for d14c (needed if abio_dic_on is True)
+  type(external_field) :: id_d14c(3)        !< id for time_interp_external.
 
   !> Indices for river fluxes (diagnostics)
   integer :: no3_riv_flux          !< NO3 riverine flux
@@ -527,12 +533,13 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   character(len=48)  :: var_name ! The variable's name.
   character(len=128) :: desc_name ! The variable's descriptor.
   character(len=48)  :: units ! The variable's units.
+  character(len=96)  :: file_name ! file name for d14c (looped over three bands)
   real, pointer :: tr_ptr(:,:,:) => NULL()
-  integer :: riv_flux_file_start_year
-  integer :: riv_flux_file_end_year
-  integer :: riv_flux_file_data_ref_year
-  integer :: riv_flux_file_model_ref_year
-  integer :: riv_flux_forcing_year
+  integer :: forcing_file_start_year
+  integer :: forcing_file_end_year
+  integer :: forcing_file_data_ref_year
+  integer :: forcing_file_model_ref_year
+  integer :: forcing_file_forcing_year
   logical :: register_MARBL_tracers
   logical :: restoring_has_edges, restoring_use_missing
   logical :: restoring_timescale_has_edges, restoring_timescale_use_missing
@@ -614,26 +621,64 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
       call get_param(param_file, mdl, "RIV_FLUX_L_TIME_VARYING", CS%riv_flux_dataset%l_time_varying, &
                     ".true. for time-varying forcing, .false. for static forcing", default=.false.)
       if (CS%riv_flux_dataset%l_time_varying) then
-        call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", riv_flux_file_start_year, &
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_START_YEAR", forcing_file_start_year, &
                       "First year of data to read in RIV_FLUX_FILE", default=1900)
-        call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", riv_flux_file_end_year, &
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_END_YEAR", forcing_file_end_year, &
                       "Last year of data to read in RIV_FLUX_FILE", default=2000)
-        call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", riv_flux_file_data_ref_year, &
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_DATA_REF_YEAR", forcing_file_data_ref_year, &
                       "Align this year in RIV_FLUX_FILE with RIV_FLUX_FILE_MODEL_REF_YEAR in model", default=1900)
-        call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", riv_flux_file_model_ref_year, &
+        call get_param(param_file, mdl, "RIV_FLUX_FILE_MODEL_REF_YEAR", forcing_file_model_ref_year, &
                       "Align this year in model with RIV_FLUX_FILE_DATA_REF_YEAR in RIV_FLUX_FILE",  default=1)
       else
-        call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", riv_flux_forcing_year, &
+        call get_param(param_file, mdl, "RIV_FLUX_FORCING_YEAR", forcing_file_forcing_year, &
                       "Year from RIV_FLUX_FILE to use for forcing",  default=1900)
       endif
-      call forcing_timeseries_set_time_type_vars(riv_flux_file_start_year, &
-                                                riv_flux_file_end_year, &
-                                                riv_flux_file_data_ref_year, &
-                                                riv_flux_file_model_ref_year, &
-                                                riv_flux_forcing_year, &
-                                                CS%riv_flux_dataset)
+      call forcing_timeseries_set_time_type_vars(forcing_file_start_year, &
+                                                 forcing_file_end_year, &
+                                                 forcing_file_data_ref_year, &
+                                                 forcing_file_model_ref_year, &
+                                                 forcing_file_forcing_year, &
+                                                 CS%riv_flux_dataset)
     endif
   endif
+
+  if (CS%abio_dic_on) then
+    call get_param(param_file, mdl, "D14C_L_TIME_VARYING", CS%d14c_dataset(1)%l_time_varying, &
+                  ".true. for time-varying forcing, .false. for static forcing", default=.false.)
+    CS%d14c_dataset(2)%l_time_varying = CS%d14c_dataset(1)%l_time_varying
+    CS%d14c_dataset(3)%l_time_varying = CS%d14c_dataset(1)%l_time_varying
+    if (CS%d14c_dataset(1)%l_time_varying) then
+      call get_param(param_file, mdl, "D14C_FILE_START_YEAR", forcing_file_start_year, &
+                    "First year of data to read in D14C_FILE", default=1850)
+      call get_param(param_file, mdl, "D14C_FILE_END_YEAR", forcing_file_end_year, &
+                    "Last year of data to read in D14C_FILE", default=2015)
+      call get_param(param_file, mdl, "D14C_FILE_DATA_REF_YEAR", forcing_file_data_ref_year, &
+                    "Align this year in D14C_FILE with D14C_FILE_MODEL_REF_YEAR in model", default=1850)
+      call get_param(param_file, mdl, "D14C_FILE_MODEL_REF_YEAR", forcing_file_model_ref_year, &
+                    "Align this year in model with D14C_FILE_DATA_REF_YEAR in D14C_FILE",  default=1)
+    else
+      call get_param(param_file, mdl, "D14C_FORCING_YEAR", forcing_file_forcing_year, &
+                    "Year from D14C_FILE to use for forcing",  default=1850)
+    endif
+    do m=1,3
+      write(var_name, "(A,I0)") "MARBL_D14C_FILE_", m
+      write(file_name, "(A,I0,A)"), "atm_delta_C14_CMIP6_sector", m, "_global_1850-2015_yearly_v2.0_c240202.nc"
+      call get_param(param_file, mdl, var_name, CS%d14c_dataset(m)%file_name, &
+                    "The file in which the d14c forcing field can be found.", &
+                    default=file_name)
+      call forcing_timeseries_set_time_type_vars(forcing_file_start_year, &
+                                                forcing_file_end_year, &
+                                                forcing_file_data_ref_year, &
+                                                forcing_file_model_ref_year, &
+                                                forcing_file_forcing_year, &
+                                                CS%d14c_dataset(m))
+      if (scan(CS%d14c_dataset(m)%file_name,'/') == 0) then
+        ! Add the directory if CS%d14c_dataset%file_name is not already a complete path.
+        CS%d14c_dataset(m)%file_name = trim(slasher(inputdir))//trim(CS%d14c_dataset(m)%file_name)
+        call log_param(param_file, mdl, "INPUTDIR/D14C_FILE", CS%d14c_dataset(m)%file_name)
+      endif
+    enddo
+endif
 
   ! ** Tracer Restoring
   call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_SOURCE", CS%restoring_source, &
@@ -946,6 +991,16 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
                                                  "Dissolved Inorganic Carbon Riverine Flux, Alternative CO2", &
                                                  "mmol/m^3 m/s")
 
+  ! Register diagnostics for d14c forcing
+  if (CS%abio_dic_on) then
+    CS%d14c_id = register_diag_field("ocean_model", &
+                                     "D14C_FORCING", &
+                                     diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+                                     day, &
+                                     "Delta-14C in atmospheric CO2", &
+                                     "per mil, relative to Modern")
+  endif
+
   ! Register diagnostics for per-category forcing fields
   if (CS%ice_ncat > 0) then
     allocate(CS%fracr_cat_id(CS%ice_ncat+1))
@@ -1041,6 +1096,13 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     endif
   endif
 
+  if (CS%abio_dic_on) then
+    ! Initialize external field for d14c forcing
+    do m=1,3
+      CS%id_d14c(m) = init_external_field(CS%d14c_dataset(m)%file_name, "Delta14co2_in_air", ignore_axis_atts=.true.)
+    enddo
+  endif
+
   ! Initialize external field for restoring
   if (CS%restoring_rtau_source == "file") then
     select case(CS%restoring_source)
@@ -1050,7 +1112,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
         do m=1,CS%restore_count
           CS%id_tracer_restoring(m) = init_external_field(CS%restoring_file, trim(CS%tracer_restoring_varname(m)), &
                                                           domain=G%Domain%mpp_domain)
-        end do
+        enddo
     end select
     select case(CS%restoring_rtau_source)
       case("file")
@@ -1058,8 +1120,6 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
         call MOM_read_data(CS%restoring_rtau_file, "RTAU", CS%rtau(:,:,:), G%Domain)
     end select
   endif
-
-  ! Set up arrays for tracer restoring
 
 end subroutine initialize_MARBL_tracers
 
@@ -1203,7 +1263,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   ! First two terms get us to mol m-2 s-1; 1e3 gets us mmol m-2 s-1, which is what MARBL wants
-  ndep_conversion = (US%m_to_L)**2 * US%s_to_T * 1.e3
+  ndep_conversion = ((US%m_to_L)**2) * US%s_to_T * 1.e3
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -1227,17 +1287,17 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
       ! MARBL wants u10_sqr in (m/s)^2
       if (CS%u10_sqr_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * (US%L_t_to_m_s)**2
+        MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * ((US%L_t_to_m_s)**2)
       ! mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       ! We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
       if (CS%atmpress_ind > 0) then
         if (associated(fluxes%p_surf_full)) then
           MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = fluxes%p_surf_full(i,j) * &
-                                                                               ((US%R_to_kg_m3 * US%L_T_to_m_s**2) * &
+                                                                               ((US%R_to_kg_m3 * (US%L_T_to_m_s**2)) * &
                                                                                 atm_per_Pa)
         else
           ! hardcode value of 1 atm (can't figure out how to get this from solo_driver)
-          MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = 1 * (US%R_to_kg_m3 * US%L_T_to_m_s**2)
+          MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = 1 * (US%R_to_kg_m3 * (US%L_T_to_m_s**2))
         endif
       endif
       !       These are okay, but need option to come in from coupler
@@ -1444,7 +1504,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = &
               MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(1))%field_1d(1,:)
         endif
-      end do
+      enddo
 
       !        TODO: In POP, pressure comes from a function in state_mod.F90; I don't see a similar function here
       !              This formulation is from Levitus 1994, and I think it belongs in MOM_EOS.F90?
@@ -1615,22 +1675,38 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
   real, parameter :: DOPriv_refract = 0.025
 
   real, dimension(SZI_(G),SZJ_(G)) :: riv_flux_in  !< The field read in from forcing file with time dimension
-  type(time_type) :: Time_riv_flux  !< For reading river flux fields, we use a modified version of Time
-  integer :: k,m
+  type(time_type) :: Time_forcing  !< For reading river flux fields, we use a modified version of Time
+  integer :: i,j,k,m
 
   ! Abiotic DIC forcing
   if (CS%abio_dic_on) then
-    CS%d14c(:,:) = -4.
+    ! Read d14c bands
+    do m=1,3
+      Time_forcing = map_model_time_to_forcing_time(day_start, CS%d14c_dataset(m))
+      call time_interp_external(CS%id_d14c(m),Time_forcing,CS%d14c_bands(m))
+    enddo
+
+    ! Set d14c according to the bands
+    do j=G%jsc, G%jec
+      do i=G%isc, G%iec
+        if (G%geoLatT(i,j) > 30.) then
+          CS%d14c(i,j) = CS%d14c_bands(1)
+        elseif (G%geoLatT(i,j) > -30.) then
+          CS%d14c(i,j) = CS%d14c_bands(2)
+        else
+          CS%d14c(i,j) = CS%d14c_bands(3)
+        endif
+      enddo
+    enddo
   endif
 
   ! River fluxes
   if (CS%read_riv_fluxes) then
     CS%RIV_FLUXES(:,:,:) = 0.
+    Time_forcing = map_model_time_to_forcing_time(day_start, CS%riv_flux_dataset)
 
     ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
-    Time_riv_flux = map_model_time_to_forcing_time(day_start, CS%riv_flux_dataset)
-
-    call time_interp_external(CS%id_din_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_din_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%no3_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
     if (CS%tracer_inds%alk_ind > 0) &
@@ -1639,44 +1715,44 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
       CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) - &
                                                           riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_dip_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_dip_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%po4_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_don_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_don_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%don_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = G%mask2dT(:,:) * (1. - DONriv_refract) * riv_flux_in(:,:)
     if (CS%tracer_inds%donr_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = G%mask2dT(:,:) * DONriv_refract * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_dop_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_dop_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%dop_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = G%mask2dT(:,:) * (1. - DOPriv_refract) * riv_flux_in(:,:)
     if (CS%tracer_inds%dopr_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = G%mask2dT(:,:) * DOPriv_refract * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_dsi_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_dsi_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%sio3_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_dfe_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_dfe_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%fe_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_dic_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_dic_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%dic_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
     if (CS%tracer_inds%dic_alt_co2_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_alk_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_alk_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%alk_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) + riv_flux_in(:,:)
     if (CS%tracer_inds%alk_alt_co2_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) + &
                                                           G%mask2dT(:,:) * riv_flux_in(:,:)
 
-    call time_interp_external(CS%id_doc_riv,Time_riv_flux,riv_flux_in)
+    call time_interp_external(CS%id_doc_riv,Time_forcing,riv_flux_in)
     if (CS%tracer_inds%doc_ind > 0) &
       CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = G%mask2dT(:,:) * (1. - DOCriv_refract) * riv_flux_in(:,:)
     if (CS%tracer_inds%docr_ind > 0) &
@@ -1688,10 +1764,10 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
     call time_interp_external(CS%id_tracer_restoring(m),day_start,CS%restoring_in(:,:,:,m))
     do k=1,CS%restoring_nz
       CS%restoring_in(:,:,k,m) = G%mask2dT(:,:) * CS%restoring_in(:,:,k,m)
-    end do
-  end do
+    enddo
+  enddo
 
-  ! Post River Fluxes to Diagnostics
+  ! Post Forcing to Diagnostics
   if (CS%no3_riv_flux > 0 .and. CS%tracer_inds%no3_ind > 0) &
     call post_data(CS%no3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind), CS%diag)
   if (CS%po4_riv_flux > 0 .and. CS%tracer_inds%po4_ind > 0) &
@@ -1720,6 +1796,8 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
     call post_data(CS%dic_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind), CS%diag)
   if (CS%dic_alt_co2_riv_flux > 0 .and. CS%tracer_inds%dic_alt_co2_ind > 0) &
     call post_data(CS%dic_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind), CS%diag)
+  if (CS%d14c_id > 0) &
+    call post_data(CS%d14c_id, CS%d14c, CS%diag)
 
 end subroutine MARBL_tracers_set_forcing
 
