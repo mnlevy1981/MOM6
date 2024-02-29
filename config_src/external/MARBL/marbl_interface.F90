@@ -39,7 +39,6 @@ module marbl_interface
         procedure, public  :: surface_flux_compute       !< dummy surface flux routine
         procedure, public  :: interior_tendency_compute  !< dummy interior tendency routine
         procedure, public  :: add_output_for_GCM         !< dummy add_output_for_GCM routine
-        procedure, public  :: get_output_for_GCM         !< dummy get_output_for_GCM routine
         procedure, public  :: shutdown                   !< dummy shutdown routine
     end type marbl_interface_class
 
@@ -119,16 +118,6 @@ contains
         output_id = 0
 
     end subroutine add_output_for_GCM
-
-    !> Dummy version of MARBL's get_output_for_GCM() function
-    subroutine get_output_for_GCM(self, field_ind, array_out)
-
-        class (marbl_interface_class),   intent(inout) :: self
-        integer,                         intent(in)    :: field_ind
-        real, dimension(self%domain%km), intent(out)   :: array_out
-        call MOM_error(FATAL, error_msg)
-
-    end subroutine get_output_for_GCM
 
     !> Dummy version of MARBL's shutdown() function
     subroutine shutdown(self)

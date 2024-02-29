@@ -49,7 +49,7 @@ implicit none ; private
 public register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
 public MARBL_tracers_set_forcing
-public MARBL_tracer_stock, MARBL_tracers_get_output_for_GCM, MARBL_tracers_end
+public MARBL_tracer_stock, MARBL_tracers_get, MARBL_tracers_end
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -187,10 +187,12 @@ type, public :: MARBL_tracers_CS ; private
   integer, allocatable :: fracr_cat_id(:) !< register_diag index for per-category ice fraction
   integer, allocatable :: qsw_cat_id(:)   !< register_diag index for per-category shortwave
 
-  real, allocatable :: STF(:,:,:) !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
-                                  !! [conc m/s]
-  real, allocatable :: SFO(:,:,:)  !< surface flux output returned from MARBL for use in GCM
-                                   !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
+  real, allocatable :: STF(:,:,:)    !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
+                                     !! [conc m/s]
+  real, allocatable :: SFO(:,:,:)    !< surface flux output returned from MARBL for use in GCM
+                                     !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
+  real, allocatable :: ITO(:,:,:,:)  !< interior tendency output returned from MARBL for use in GCM
+                                     !! e.g. total chlorophyll to use in shortwave penetration (dims: i, j, k, num_ito)
 
   integer :: u10_sqr_ind   !< index of MARBL forcing field array to copy 10-m wind (squared) into
   integer :: sss_ind       !< index of MARBL forcing field array to copy sea surface salinity into
@@ -262,8 +264,10 @@ type, public :: MARBL_tracers_CS ; private
                                                          !! (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
   !> Number of surface flux outputs as well as specific indices for each one
-  integer :: sfo_cnt      !< number of surface flux outputs from MARBL
-  integer :: flux_co2_ind !< index to co2 flux surface flux output
+  integer :: sfo_cnt       !< number of surface flux outputs from MARBL
+  integer :: ito_cnt       !< number of interior tendency outputs from MARBL
+  integer :: flux_co2_ind  !< index to co2 flux surface flux output
+  integer :: total_Chl_ind !< index to total chlorophyll interior tendency output
 
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
@@ -294,7 +298,7 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   character(len=40)  :: mdl = "MARBL_tracers" ! This module's name.
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
-  character(len=256) :: forcing_sname
+  character(len=256) :: forcing_sname, field_source
   integer :: m, n, nz, marbl_settings_in, read_error, rtau_count, fi
   logical :: chl_from_file, forcing_processed
   nz = GV%ke
@@ -395,13 +399,31 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 
   ! (4) Request fields needed by MOM6
   CS%sfo_cnt = 0
+  CS%ito_cnt = 0
 
-  ! CO2 Flux to the atmosphere
   if (CS%base_bio_on) then
-    CS%sfo_cnt = CS%sfo_cnt +1
+    ! CO2 Flux to the atmosphere
     call MARBL_instances%add_output_for_GCM(num_elements=1, &
                                             field_name="flux_co2", &
-                                            output_id=CS%flux_co2_ind)
+                                            output_id=CS%flux_co2_ind, &
+                                            field_source=field_source)
+    if (trim(field_source) == "surface_flux") then
+      CS%sfo_cnt = CS%sfo_cnt + 1
+    else if (trim(field_source) == "interior_tendency") then
+      CS%ito_cnt = CS%ito_cnt + 1
+    end if
+
+    ! Total 3D Chlorophyll
+    call MARBL_instances%add_output_for_GCM(num_elements=1, &
+                                            num_levels=nz, &
+                                            field_name="total_Chl", &
+                                            output_id=CS%total_Chl_ind, &
+                                            field_source=field_source)
+    if (trim(field_source) == "surface_flux") then
+      CS%sfo_cnt = CS%sfo_cnt + 1
+    else if (trim(field_source) == "interior_tendency") then
+      CS%ito_cnt = CS%ito_cnt + 1
+    end if
   end if
 
   ! (5) Initialize forcing fields
@@ -814,6 +836,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   allocate(CS%STF(SZI_(G), SZJ_(G), CS%ntr), &
            CS%RIV_FLUXES(SZI_(G), SZJ_(G), CS%ntr), &
            CS%SFO(SZI_(G), SZJ_(G), CS%sfo_cnt), &
+           CS%ITO(SZI_(G), SZJ_(G), SZK_(G), CS%ito_cnt), &
            source=0.0)
 
   ! Allocate memory for d14c forcing
@@ -1610,6 +1633,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         endif
       enddo
 
+      !     * Interior tendency output
+      do m=1,CS%ito_cnt
+        CS%ITO(i,j,:,m) = MARBL_instances%interior_tendency_output%outputs_for_GCM(m)%forcing_field_1d(1,:)
+      enddo
+
     enddo
   enddo
 
@@ -1874,9 +1902,7 @@ subroutine MARBL_tracers_surface_state(sfc_state, G, US, CS)
 end subroutine MARBL_tracers_surface_state
 
 !> Copy the requested interior tendency output field into an array.
-subroutine MARBL_tracers_get_output_for_GCM(name, G, GV, array, CS)
-
-  use marbl_settings_mod, only : output_for_GCM_iopt_total_Chl_3d
+subroutine MARBL_tracers_get(name, G, GV, array, CS)
 
   character(len=*),         intent(in)    :: name   !< Name of requested tracer.
   type(ocean_grid_type),    intent(in)    :: G      !< The ocean's grid structure.
@@ -1885,30 +1911,19 @@ subroutine MARBL_tracers_get_output_for_GCM(name, G, GV, array, CS)
                             intent(inout) :: array  !< Array filled by this routine.
   type(MARBL_tracers_CS),   pointer       :: CS     !< Pointer to the control structure for this module.
 
-  character(len=128), parameter :: sub_name = 'MARBL_tracers_get_output_for_GCM'
+  character(len=128), parameter :: sub_name = 'MARBL_tracers_get'
   character(len=128) :: log_message
-  integer :: i, j, is, ie, js, je, m
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
   array(:,:,:) = 0.0
   select case(trim(name))
     case ('Chl')
-      do j=js,je ; do i=is,ie
-        do m=1,size(CS%tracer_data)
-          MARBL_instances%tracers(m,:) = CS%tracer_data(m)%tr(i,j,:)
-        enddo
-        if (G%mask2dT(i,j) /= 0) then
-          call MARBL_instances%get_output_for_GCM(output_for_GCM_iopt_total_Chl_3d, array(i,j,:))
-          if (MARBL_instances%StatusLog%labort_marbl) &
-            call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
-        endif
-      enddo ; enddo
+      array(:,:,:) = CS%ITO(:,:,:,CS%total_Chl_ind)
     case DEFAULT
       write(log_message, "(3A)") "'", trim(name), "' is not a valid interior tendency output field name"
       call MOM_error(FATAL, log_message)
   end select
 
-end subroutine MARBL_tracers_get_output_for_GCM
+end subroutine MARBL_tracers_get
 
 !> Clean up any allocated memory after the run.
 subroutine MARBL_tracers_end(CS)

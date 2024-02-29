@@ -703,7 +703,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% ifrac_n(isc:iec,jsc:jec,1:Ice_ocean_boundary%ice_ncat), &
              source=0.0)
 
-  if (cesm_coupled) &
+  if (cesm_coupled) then
     allocate(Ice_ocean_boundary% hrain (isc:iec,jsc:jec),           &
              Ice_ocean_boundary% hsnow (isc:iec,jsc:jec),           &
              Ice_ocean_boundary% hrofl (isc:iec,jsc:jec),           &
@@ -725,6 +725,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
              Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec),    &
              source=0.0)
+  endif
 
   call query_ocean_state(ocean_state, use_waves=use_waves, wave_method=wave_method)
   if (use_waves) then
