@@ -27,6 +27,7 @@ module marbl_interface
         type(marbl_diagnostics_type)    :: surface_flux_diags             !< dummy diagnostics
         type(marbl_diagnostics_type)    :: interior_tendency_diags        !< dummy diagnostics
         type(marbl_output_for_GCM_type) :: surface_flux_output            !< dummy output
+        type(marbl_output_for_GCM_type) :: interior_tendency_output       !< dummy output
         real, allocatable :: tracers(:,:)  !< dummy tracer array
         real, allocatable :: tracers_at_surface(:,:)  !< dummy tracer surface array
         real, allocatable :: bot_flux_to_tend(:)      !< dummy array for bot flux to tendency wgts
@@ -107,15 +108,17 @@ contains
     end subroutine interior_tendency_compute
 
     !> Dummy version of MARBL's add_output_for_GCM() function
-    subroutine add_output_for_GCM(self, num_elements, field_name, output_id, num_levels)
+    subroutine add_output_for_GCM(self, num_elements, field_name, output_id, field_source, num_levels)
 
         class (marbl_interface_class), intent(inout) :: self
         integer,                       intent(in)    :: num_elements
         character(len=*),              intent(in)    :: field_name
         integer,                       intent(out)   :: output_id
+        character(len=*),              intent(out)   :: field_source
         integer,             optional, intent(in) :: num_levels
 
         output_id = 0
+        field_source = ""
 
     end subroutine add_output_for_GCM
 
