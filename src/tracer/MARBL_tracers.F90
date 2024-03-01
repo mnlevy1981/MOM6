@@ -187,8 +187,8 @@ type, public :: MARBL_tracers_CS ; private
   integer, allocatable :: fracr_cat_id(:) !< register_diag index for per-category ice fraction
   integer, allocatable :: qsw_cat_id(:)   !< register_diag index for per-category shortwave
 
-  real, allocatable :: STF(:,:,:)    !< surface fluxes returned from MARBL to use in tracer_vertdiff (dims: i, j, tracer)
-                                     !! [conc m/s]
+  real, allocatable :: STF(:,:,:)    !< surface fluxes returned from MARBL to use in tracer_vertdiff
+                                     !! (dims: i, j, tracer) [conc m/s]
   real, allocatable :: SFO(:,:,:)    !< surface flux output returned from MARBL for use in GCM
                                      !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
   real, allocatable :: ITO(:,:,:,:)  !< interior tendency output returned from MARBL for use in GCM
