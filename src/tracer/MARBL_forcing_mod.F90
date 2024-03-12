@@ -84,8 +84,7 @@ contains
     character(len=200) :: err_message
 
     if (associated(CS)) then
-      call MOM_error(WARNING, "marbl_forcing_init called with an associated "// &
-                              "control structure.")
+      call MOM_error(WARNING, "marbl_forcing_init called with an associated control structure.")
       return
     endif
 
@@ -100,7 +99,8 @@ contains
 
     call get_param(param_file, mdl, "DUST_RATIO_THRES", CS%dust_ratio_thres, &
         "TODO: Add description", units="add_units", default=69.00594)
-    call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", CS%dust_ratio_to_fe_bioavail_frac, &
+    call get_param(param_file, mdl, "DUST_RATIO_TO_FE_BIOAVAIL_FRAC", &
+        CS%dust_ratio_to_fe_bioavail_frac, &
         "TODO: Add description", units="add_units", default=1./366.314)
     call get_param(param_file, mdl, "FE_BIOAVAIL_FRAC_OFFSET", CS%fe_bioavail_frac_offset, &
         "TODO: Add description", units="add_units", default=0.0146756)
@@ -114,8 +114,10 @@ contains
         "TODO: Add description", units="add_units", default=0.06)
     call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_FINE_DUST", CS%iron_frac_in_atm_fine_dust, &
         "Fraction of fine dust from the atmosphere that is iron", units="add_units", default=0.035)
-    call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_COARSE_DUST", CS%iron_frac_in_atm_coarse_dust, &
-        "Fraction of coarse dust from the atmosphere that is iron", units="add_units", default=0.035)
+    call get_param(param_file, mdl, "IRON_FRAC_IN_ATM_COARSE_DUST", &
+        CS%iron_frac_in_atm_coarse_dust, &
+        "Fraction of coarse dust from the atmosphere that is iron", units="add_units", &
+        default=0.035)
     call get_param(param_file, mdl, "IRON_FRAC_IN_SEAICE_DUST", CS%iron_frac_in_seaice_dust, &
         "Fraction of dust from sea ice that is iron", units="add_units", default=0.035)
     call get_param(param_file, mdl, "ATM_CO2_OPT", atm_co2_opt, &
@@ -158,37 +160,22 @@ contains
     endif
 
     ! Register diagnostic fields for outputing forcing values
-    CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", &
-                                                    "ATM_FINE_DUST_FLUX_CPL", &
-                                                    CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-                                                    day, &
-                                                    "ATM_FINE_DUST_FLUX from cpl", &
-                                                    "kg/m^2/s")
-    CS%diag_ids%atm_coarse_dust = register_diag_field("ocean_model", &
-                                                      "ATM_COARSE_DUST_FLUX_CPL", &
-                                                      CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-                                                      day, &
-                                                      "ATM_COARSE_DUST_FLUX from cpl", &
-                                                      "kg/m^2/s")
-    CS%diag_ids%atm_bc = register_diag_field("ocean_model", &
-                                             "ATM_BLACK_CARBON_FLUX_CPL", &
-                                             CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-                                             day, &
-                                             "ATM_BLACK_CARBON_FLUX from cpl", &
-                                             "kg/m^2/s")
+    CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", "ATM_FINE_DUST_FLUX_CPL", &
+        CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+        day, "ATM_FINE_DUST_FLUX from cpl", "kg/m^2/s")
+    CS%diag_ids%atm_coarse_dust = register_diag_field("ocean_model", "ATM_COARSE_DUST_FLUX_CPL", &
+        CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+        day, "ATM_COARSE_DUST_FLUX from cpl", "kg/m^2/s")
+    CS%diag_ids%atm_bc = register_diag_field("ocean_model", "ATM_BLACK_CARBON_FLUX_CPL", &
+        CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+        day, "ATM_BLACK_CARBON_FLUX from cpl",  "kg/m^2/s")
 
-    CS%diag_ids%ice_dust = register_diag_field("ocean_model", &
-                                               "SEAICE_DUST_FLUX_CPL", &
-                                               CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-                                               day, &
-                                               "SEAICE_DUST_FLUX from cpl", &
-                                               "kg/m^2/s")
-    CS%diag_ids%ice_bc = register_diag_field("ocean_model", &
-                                             "SEAICE_BLACK_CARBON_FLUX_CPL", &
-                                             CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-                                             day, &
-                                             "SEAICE_BLACK_CARBON_FLUX from cpl", &
-                                             "kg/m^2/s")
+    CS%diag_ids%ice_dust = register_diag_field("ocean_model", "SEAICE_DUST_FLUX_CPL", &
+        CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+        day, "SEAICE_DUST_FLUX from cpl", "kg/m^2/s")
+    CS%diag_ids%ice_bc = register_diag_field("ocean_model", "SEAICE_BLACK_CARBON_FLUX_CPL", &
+        CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
+        day, "SEAICE_BLACK_CARBON_FLUX from cpl", "kg/m^2/s")
 
   end subroutine MARBL_forcing_init
 
@@ -241,21 +228,23 @@ contains
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
     if (CS%diag_ids%atm_fine_dust > 0) &
       call post_data(CS%diag_ids%atm_fine_dust, &
-                     US%kg_m2s_to_RZ_T * atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
-                     CS%diag, mask=G%mask2dT(is:ie,js:je))
+          US%kg_m2s_to_RZ_T * atm_fine_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, &
+          mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_coarse_dust > 0) &
       call post_data(CS%diag_ids%atm_coarse_dust, &
-                     US%kg_m2s_to_RZ_T * atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
-                     CS%diag, mask=G%mask2dT(is:ie,js:je))
+          US%kg_m2s_to_RZ_T * atm_coarse_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, &
+          mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%atm_bc > 0) &
       call post_data(CS%diag_ids%atm_bc, US%kg_m2s_to_RZ_T * atm_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
-                     CS%diag, mask=G%mask2dT(is:ie,js:je))
+          CS%diag, mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_dust > 0) &
-      call post_data(CS%diag_ids%ice_dust, US%kg_m2s_to_RZ_T * seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), &
-                     CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%ice_dust, &
+          US%kg_m2s_to_RZ_T * seaice_dust_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, &
+          mask=G%mask2dT(is:ie,js:je))
     if (CS%diag_ids%ice_bc > 0) &
-      call post_data(CS%diag_ids%ice_bc, US%kg_m2s_to_RZ_T * seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), &
-                     CS%diag, mask=G%mask2dT(is:ie,js:je))
+      call post_data(CS%diag_ids%ice_bc, &
+          US%kg_m2s_to_RZ_T * seaice_bc_flux(is-i0:ie-i0,js-j0:je-j0), CS%diag, &
+          mask=G%mask2dT(is:ie,js:je))
 
     do j=js,je ; do i=is,ie
       ! Nitrogen Deposition
@@ -271,7 +260,8 @@ contains
             fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
           enddo ; enddo
         else
-          call MOM_error(FATAL, "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+          call MOM_error(FATAL, &
+              "ATM_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
         endif
       case (atm_co2_diagnostic_iopt)
         if (associated(atm_co2_diag)) then
@@ -279,7 +269,8 @@ contains
             fluxes%atm_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
           enddo ; enddo
         else
-          call MOM_error(FATAL, "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+          call MOM_error(FATAL, &
+              "ATM_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
         endif
       case (atm_co2_constant_iopt)
         do j=js,je ; do i=is,ie
@@ -295,7 +286,8 @@ contains
             fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_prog(i-i0,j-j0)
           enddo ; enddo
         else
-          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
+          call MOM_error(FATAL, &
+              "ATM_ALT_CO2_OPT = 'prognostic' but atmosphere is not providing this field")
         endif
       case (atm_co2_diagnostic_iopt)
         if (associated(atm_co2_diag)) then
@@ -303,7 +295,8 @@ contains
             fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * atm_co2_diag(i-i0,j-j0)
           enddo ; enddo
         else
-          call MOM_error(FATAL, "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
+          call MOM_error(FATAL, &
+              "ATM_ALT_CO2_OPT = 'diagnostic' but atmosphere is not providing this field")
         endif
       case (atm_co2_constant_iopt)
         do j=js,je ; do i=is,ie
@@ -314,9 +307,8 @@ contains
     if (associated(atm_fine_dust_flux)) then
       do j=js,je ; do i=is,ie
         fluxes%dust_flux(i,j) = (G%mask2dT(i,j) * US%kg_m2s_to_RZ_T) * &
-                                       (atm_fine_dust_flux(i-i0,j-j0) + &
-                                        atm_coarse_dust_flux(i-i0,j-j0) + &
-                                        seaice_dust_flux(i-i0,j-j0))
+            (atm_fine_dust_flux(i-i0,j-j0) + atm_coarse_dust_flux(i-i0,j-j0) + &
+            seaice_dust_flux(i-i0,j-j0))
       enddo ; enddo
     endif
 
@@ -331,21 +323,24 @@ contains
         else
           atm_fe_bioavail_frac = CS%fe_bioavail_frac_offset
         endif
+
         ! Contribution of atmospheric dust to iron flux
         fluxes%iron_flux(i,j) = (atm_fe_bioavail_frac * &
-                                 (CS%iron_frac_in_atm_fine_dust * atm_fine_dust_flux(i-i0,j-j0) + &
-                                  CS%iron_frac_in_atm_coarse_dust * atm_coarse_dust_flux(i-i0,j-j0)))
+            (CS%iron_frac_in_atm_fine_dust * atm_fine_dust_flux(i-i0,j-j0) + &
+            CS%iron_frac_in_atm_coarse_dust * atm_coarse_dust_flux(i-i0,j-j0)))
+
         ! Contribution of atmospheric black carbon to iron flux
         fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%atm_bc_fe_bioavail_frac * &
-                                 (CS%atm_fe_to_bc_ratio * atm_bc_flux(i-i0,j-j0)))
+            (CS%atm_fe_to_bc_ratio * atm_bc_flux(i-i0,j-j0)))
 
         seaice_fe_bioavail_frac = atm_fe_bioavail_frac
         ! Contribution of seaice dust to iron flux
         fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (seaice_fe_bioavail_frac * &
-                                 (CS%iron_frac_in_seaice_dust * seaice_dust_flux(i-i0,j-j0)))
+            (CS%iron_frac_in_seaice_dust * seaice_dust_flux(i-i0,j-j0)))
+
         ! Contribution of seaice black carbon to iron flux
         fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
-                                 (CS%seaice_fe_to_bc_ratio * seaice_bc_flux(i-i0,j-j0)))
+            (CS%seaice_fe_to_bc_ratio * seaice_bc_flux(i-i0,j-j0)))
 
         ! Unit conversion (kg / m^2 / s -> mmol / m^2 / s)
         fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
