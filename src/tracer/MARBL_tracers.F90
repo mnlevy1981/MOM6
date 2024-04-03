@@ -1756,38 +1756,42 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
   enddo
 
   ! Post Forcing to Diagnostics
-  if (CS%no3_riv_flux > 0 .and. CS%tracer_inds%no3_ind > 0) &
-    call post_data(CS%no3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind), CS%diag)
-  if (CS%po4_riv_flux > 0 .and. CS%tracer_inds%po4_ind > 0) &
-    call post_data(CS%po4_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind), CS%diag)
-  if (CS%don_riv_flux > 0 .and. CS%tracer_inds%don_ind > 0) &
-    call post_data(CS%don_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind), CS%diag)
-  if (CS%donr_riv_flux > 0 .and. CS%tracer_inds%donr_ind > 0) &
-    call post_data(CS%donr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind), CS%diag)
-  if (CS%dop_riv_flux > 0 .and. CS%tracer_inds%dop_ind > 0) &
-    call post_data(CS%dop_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind), CS%diag)
-  if (CS%dopr_riv_flux > 0 .and. CS%tracer_inds%dopr_ind > 0) &
-    call post_data(CS%dopr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind), CS%diag)
-  if (CS%sio3_riv_flux > 0 .and. CS%tracer_inds%sio3_ind > 0) &
-    call post_data(CS%sio3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind), CS%diag)
-  if (CS%fe_riv_flux > 0 .and. CS%tracer_inds%fe_ind > 0) &
-    call post_data(CS%fe_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind), CS%diag)
-  if (CS%doc_riv_flux > 0 .and. CS%tracer_inds%doc_ind > 0) &
-    call post_data(CS%doc_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind), CS%diag)
-  if (CS%docr_riv_flux > 0 .and. CS%tracer_inds%docr_ind > 0) &
-    call post_data(CS%docr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind), CS%diag)
-  if (CS%alk_riv_flux > 0 .and. CS%tracer_inds%alk_ind > 0) &
-    call post_data(CS%alk_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind), CS%diag)
-  if (CS%alk_alt_co2_riv_flux > 0  .and. CS%tracer_inds%alk_alt_co2_ind > 0) &
-    call post_data(CS%alk_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind), &
-        CS%diag)
-  if (CS%dic_riv_flux > 0 .and. CS%tracer_inds%dic_ind > 0) &
-    call post_data(CS%dic_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind), CS%diag)
-  if (CS%dic_alt_co2_riv_flux > 0 .and. CS%tracer_inds%dic_alt_co2_ind > 0) &
-    call post_data(CS%dic_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind), &
-        CS%diag)
-  if (CS%d14c_id > 0) &
-    call post_data(CS%d14c_id, CS%d14c, CS%diag)
+  if (CS%read_riv_fluxes) then
+    if (CS%no3_riv_flux > 0 .and. CS%tracer_inds%no3_ind > 0) &
+      call post_data(CS%no3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind), CS%diag)
+    if (CS%po4_riv_flux > 0 .and. CS%tracer_inds%po4_ind > 0) &
+      call post_data(CS%po4_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind), CS%diag)
+    if (CS%don_riv_flux > 0 .and. CS%tracer_inds%don_ind > 0) &
+      call post_data(CS%don_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind), CS%diag)
+    if (CS%donr_riv_flux > 0 .and. CS%tracer_inds%donr_ind > 0) &
+      call post_data(CS%donr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind), CS%diag)
+    if (CS%dop_riv_flux > 0 .and. CS%tracer_inds%dop_ind > 0) &
+      call post_data(CS%dop_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind), CS%diag)
+    if (CS%dopr_riv_flux > 0 .and. CS%tracer_inds%dopr_ind > 0) &
+      call post_data(CS%dopr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind), CS%diag)
+    if (CS%sio3_riv_flux > 0 .and. CS%tracer_inds%sio3_ind > 0) &
+      call post_data(CS%sio3_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind), CS%diag)
+    if (CS%fe_riv_flux > 0 .and. CS%tracer_inds%fe_ind > 0) &
+      call post_data(CS%fe_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind), CS%diag)
+    if (CS%doc_riv_flux > 0 .and. CS%tracer_inds%doc_ind > 0) &
+      call post_data(CS%doc_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind), CS%diag)
+    if (CS%docr_riv_flux > 0 .and. CS%tracer_inds%docr_ind > 0) &
+      call post_data(CS%docr_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind), CS%diag)
+    if (CS%alk_riv_flux > 0 .and. CS%tracer_inds%alk_ind > 0) &
+      call post_data(CS%alk_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind), CS%diag)
+    if (CS%alk_alt_co2_riv_flux > 0  .and. CS%tracer_inds%alk_alt_co2_ind > 0) &
+      call post_data(CS%alk_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind), &
+          CS%diag)
+    if (CS%dic_riv_flux > 0 .and. CS%tracer_inds%dic_ind > 0) &
+      call post_data(CS%dic_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind), CS%diag)
+    if (CS%dic_alt_co2_riv_flux > 0 .and. CS%tracer_inds%dic_alt_co2_ind > 0) &
+      call post_data(CS%dic_alt_co2_riv_flux, CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind), &
+          CS%diag)
+  endif
+  if (CS%abio_dic_on) then
+    if (CS%d14c_id > 0) &
+      call post_data(CS%d14c_id, CS%d14c, CS%diag)
+  endif
 
 end subroutine MARBL_tracers_set_forcing
 

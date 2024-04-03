@@ -1624,6 +1624,7 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
                                      nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
                                      afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
                                      day, G, US, 0, 0, fluxes, CS%marbl_forcing_CSp)
+
   deallocate ( atm_co2_prog,         &
                atm_co2_diag,         &
                atm_fine_dust_flux,   &
@@ -1633,6 +1634,8 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
                seaice_bc_flux,       &
                nhx_dep,              &
                noy_dep)
+
+  call callTree_leave("MARBL_forcing_from_data_override")
 
 end subroutine MARBL_forcing_from_data_override
 
