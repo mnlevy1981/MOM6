@@ -187,11 +187,15 @@ contains
                                            afracr, swnet_afracr, ifrac_n, &
                                            swpen_ifrac_n, Time, G, US, i0, j0, fluxes, CS)
 
-    real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB [R Z T-1]
-    real, dimension(:,:),   pointer, intent(in)    :: atm_coarse_dust_flux !< atmosphere coarse dust flux from IOB [R Z T-1]
+    real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
+                                                                           !! [R Z T-1]
+    real, dimension(:,:),   pointer, intent(in)    :: atm_coarse_dust_flux !< atmosphere coarse dust flux from IOB
+                                                                           !! [R Z T-1]
     real, dimension(:,:),   pointer, intent(in)    :: seaice_dust_flux     !< sea ice dust flux from IOB [R Z T-1]
-    real, dimension(:,:),   pointer, intent(in)    :: atm_bc_flux          !< atmosphere black carbon flux from IOB [R Z T-1]
-    real, dimension(:,:),   pointer, intent(in)    :: seaice_bc_flux       !< sea ice black carbon flux from IOB [R Z T-1]
+    real, dimension(:,:),   pointer, intent(in)    :: atm_bc_flux          !< atmosphere black carbon flux from IOB
+                                                                           !! [R Z T-1]
+    real, dimension(:,:),   pointer, intent(in)    :: seaice_bc_flux       !< sea ice black carbon flux from IOB
+                                                                           !! [R Z T-1]
     real, dimension(:,:),   pointer, intent(in)    :: afracr               !< open ocean fraction
     real, dimension(:,:),   pointer, intent(in)    :: nhx_dep              !< NHx flux from atmosphere [R Z T-1]
     real, dimension(:,:),   pointer, intent(in)    :: noy_dep              !< NOy flux from atmosphere [R Z T-1]
