@@ -8,6 +8,7 @@ module MARBL_tracers
 ! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms,            only : root_PE, broadcast
+use MOM_debugging,       only : hchksum
 use MOM_diag_mediator,   only : diag_ctrl
 use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
 use MOM_file_parser,     only : get_param, log_param, log_version, param_file_type
@@ -104,6 +105,7 @@ end type MARBL_tracer_data
 !> The control structure for the MARBL tracer package
 type, public :: MARBL_tracers_CS ; private
   integer :: ntr          !< The number of tracers that are actually used.
+  logical :: debug        !< If true, write verbose checksums for debugging purposes.
   logical :: base_bio_on  !< Will MARBL use base biotic tracers?
   logical :: abio_dic_on  !< Will MARBL use abiotic DIC / DI14C tracers?
   logical :: ciso_on      !< Will MARBL use isotopic tracers?
@@ -188,7 +190,7 @@ type, public :: MARBL_tracers_CS ; private
   integer, allocatable :: qsw_cat_id(:)   !< register_diag index for per-category shortwave
 
   real, allocatable :: STF(:,:,:)    !< surface fluxes returned from MARBL to use in tracer_vertdiff
-                                     !! (dims: i, j, tracer) [conc m/s]
+                                     !! (dims: i, j, tracer) [conc Z T-1 ~> conc m s-1]
   real, allocatable :: SFO(:,:,:)    !< surface flux output returned from MARBL for use in GCM
                                      !! e.g. CO2 flux to pass to atmosphere (dims: i, j, num_sfo)
   real, allocatable :: ITO(:,:,:,:)  !< interior tendency output returned from MARBL for use in GCM
@@ -257,7 +259,7 @@ type, public :: MARBL_tracers_CS ; private
   real, allocatable :: d14c(:,:)         !< d14c forcing for abiotic DIC and carbon isotope tracer modules
   real, allocatable :: RIV_FLUXES(:,:,:) !< river flux forcing for applyTracerBoundaryFluxesInOut
                                          !! (needs to be time-integrated when passed to function!)
-                                         !! (dims: i, j, tracer) [conc m/s]
+                                         !! (dims: i, j, tracer) [conc m s-1]
   character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
   real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
   real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file
@@ -306,6 +308,9 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
 
   ! (1) Read parameters necessary for general setup of MARBL
   call log_version(param_file, mdl, version, "")
+  call get_param(param_file, mdl, "DEBUG", CS%debug, &
+                 "If true, write out verbose debugging data.", &
+                 default=.false., debuggingParam=.true.)
   call get_param(param_file, mdl, "MARBL_SETTINGS_FILE", CS%marbl_settings_file, &
       "The name of a file from which to read the run-time settings for MARBL.", default="marbl_in")
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
@@ -675,7 +680,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     endif
     do m=1,3
       write(var_name, "(A,I0)") "MARBL_D14C_FILE_", m
-      write(file_name, "(A,I0,A)"), "atm_delta_C14_CMIP6_sector", m, &
+      write(file_name, "(A,I0,A)") "atm_delta_C14_CMIP6_sector", m, &
           "_global_1850-2015_yearly_v2.0_c240202.nc"
       call get_param(param_file, mdl, var_name, CS%d14c_dataset(m)%file_name, &
           "The file in which the d14c forcing field can be found.", default=file_name)
@@ -846,7 +851,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
     write(units, "(2A)") trim(MARBL_instances%tracer_metadata(m)%units), " m/s"
     CS%id_surface_flux_out(m) = register_diag_field("ocean_model", trim(name), &
         diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
-        day, trim(longname), trim(units))
+        day, trim(longname), trim(units), conversion=US%Z_to_m*US%s_to_T)
 
     write(name, "(2A)") "J_", trim(MARBL_instances%tracer_metadata(m)%short_name)
     write(longname, "(2A)") trim(MARBL_instances%tracer_metadata(m)%long_name), " Source Sink Term"
@@ -1218,11 +1223,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
   real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
   integer :: i, j, k, is, ie, js, je, nz, m
-  real :: ndep_conversion ! mol L-2 T-1 -> mmol m-2 s-1
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  ! First two terms get us to mol m-2 s-1; 1e3 gets us mmol m-2 s-1, which is what MARBL wants
-  ndep_conversion = ((US%m_to_L)**2) * US%s_to_T * 1.e3
 
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
@@ -1250,7 +1252,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       MARBL wants u10_sqr in (m/s)^2
       if (CS%u10_sqr_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%u10_sqr_ind)%field_0d(1) = fluxes%u10_sqr(i,j) * &
-            ((US%L_t_to_m_s)**2)
+            ((US%L_T_to_m_s)**2)
 
       !       mct_driver/ocn_cap_methods:93 -- ice_ocean_boundary%p(i,j) comes from coupler
       !       We may need a new ice_ocean_boundary%p_atm because %p includes ice in GFDL driver
@@ -1260,8 +1262,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
               fluxes%p_surf_full(i,j) * ((US%R_to_kg_m3 * (US%L_T_to_m_s**2)) * atm_per_Pa)
         else
           !   hardcode value of 1 atm (can't figure out how to get this from solo_driver)
-          MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = &
-              1. * (US%R_to_kg_m3 * (US%L_T_to_m_s**2))
+          MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = 1.
         endif
       endif
 
@@ -1273,18 +1274,20 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
       !       These are okay, but need option to read in from file
       if (CS%dust_dep_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = fluxes%dust_flux(i,j)
+        MARBL_instances%surface_flux_forcings(CS%dust_dep_ind)%field_0d(1) = &
+            fluxes%dust_flux(i,j) * US%RZ_T_to_kg_m2s
 
       if (CS%fe_dep_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = fluxes%iron_flux(i,j)
+        MARBL_instances%surface_flux_forcings(CS%fe_dep_ind)%field_0d(1) = &
+            fluxes%iron_flux(i,j) * (US%Z_to_m * US%s_to_T)
 
       !       MARBL wants ndep in (mmol/m^2/s)
       if (CS%nox_flux_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%nox_flux_ind)%field_0d(1) = fluxes%noy_dep(i,j) * &
-            ndep_conversion
+            (US%Z_to_m * US%s_to_T)
       if (CS%nhy_flux_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%nhy_flux_ind)%field_0d(1) = fluxes%nhx_dep(i,j) * &
-            ndep_conversion
+            (US%Z_to_m * US%s_to_T)
 
       if (CS%d14c_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%d14c_ind)%field_0d(1) = CS%d14c(i,j)
@@ -1327,7 +1330,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       enddo
 
       !     * Surface tracer flux
-      CS%STF(i,j,:) = MARBL_instances%surface_fluxes(1,:)
+      CS%STF(i,j,:) = MARBL_instances%surface_fluxes(1,:) * (US%m_to_Z * US%T_to_s)
 
       !     * Surface flux output
       do m=1,CS%sfo_cnt
@@ -1336,6 +1339,14 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
     enddo
   enddo
+
+  if (CS%debug) then
+    do m=1,CS%ntr
+      call hchksum(CS%STF(:,:,m), &
+          trim(MARBL_instances%tracer_metadata(m)%short_name)//" sfc_flux", G%HI, &
+          scale=US%Z_to_m*US%s_to_T)
+    enddo
+  endif
 
   ! (2) Post surface fluxes and their diagnostics (currently all 2D)
   do m=1,CS%ntr
@@ -1354,7 +1365,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       do m=1,CS%ntr
         call KPP_NonLocalTransport(KPP_CSp, G, GV, h_old, nonLocalTrans, CS%STF(:,:,m), dt, &
             CS%diag, CS%tracer_data(m)%tr_ptr, CS%tracer_data(m)%tr(:,:,:), &
-            flux_scale=GV%Z_to_H * US%T_to_s)
+            flux_scale=GV%Z_to_H)
+      enddo
+    endif
+    if (CS%debug) then
+      do m=1,CS%ntr
+        call hchksum(CS%tracer_data(m)%tr(:,:,m), &
+            trim(MARBL_instances%tracer_metadata(m)%short_name)//' post KPP', G%HI)
       enddo
     endif
   endif
@@ -1369,12 +1386,19 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tracer_data(m)%tr(:,:,:) , dt, fluxes, h_work, &
           evap_CFL_limit, minimum_forcing_depth, in_flux_optional=riv_flux_loc)
       call tracer_vertdiff(h_work, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &
-          sfc_flux=GV%Rho0 * CS%STF(:,:,m) * US%T_to_s)
+          sfc_flux=GV%Rho0 * CS%STF(:,:,m))
     enddo
   else
     do m=1,CS%ntr
       call tracer_vertdiff(h_old, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &
-          sfc_flux=GV%Rho0 * CS%STF(:,:,m) * US%T_to_s)
+          sfc_flux=GV%Rho0 * CS%STF(:,:,m))
+    enddo
+  endif
+
+  if (CS%debug) then
+    do m=1,CS%ntr
+      call hchksum(CS%tracer_data(m)%tr(:,:,m), &
+          trim(MARBL_instances%tracer_metadata(m)%short_name)//' post tracer_vertdiff', G%HI)
     enddo
   endif
 
@@ -1584,6 +1608,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
     enddo
   enddo
+
+  if (CS%debug) then
+    do m=1,CS%ntr
+      call hchksum(CS%tracer_data(m)%tr(:,:,m), &
+          trim(MARBL_instances%tracer_metadata(m)%short_name)//' post source-sink', G%HI)
+    enddo
+  endif
 
   ! (5) Post diagnostics from our buffer
   !     i. Interior tendency diagnostics (mix of 2D and 3D)

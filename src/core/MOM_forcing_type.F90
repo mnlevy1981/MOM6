@@ -220,12 +220,12 @@ type, public :: forcing
 
   ! Forcing fields required for MARBL
   real, pointer, dimension(:,:) :: &
-    noy_dep => NULL(),               & !< NOy Deposition [R Z T-1 ~> kgN m-2 s-1]
-    nhx_dep => NULL(),               & !< NHx Deposition [R Z T-1 ~> kgN m-2 s-1]
+    noy_dep => NULL(),               & !< NOy Deposition [conc Z T-1 ~> conc m s-1]
+    nhx_dep => NULL(),               & !< NHx Deposition [conc Z T-1 ~> conc m s-1]
     atm_co2 => NULL(),               & !< Atmospheric CO2 Concentration [ppm]
     atm_alt_co2 => NULL(),           & !< Alternate atmospheric CO2 Concentration [ppm]
-    dust_flux => NULL(),             & !< Flux of dust into the ocean [m2 m-2]
-    iron_flux => NULL()                !< Flux of dust into the ocean [m2 m-2]
+    dust_flux => NULL(),             & !< Flux of dust into the ocean [R Z T-1 ~> kgN m-2 s-1]
+    iron_flux => NULL()                !< Flux of dust into the ocean [conc Z T-1 ~> conc m s-1]
 
   real, pointer, dimension(:,:,:) :: &
     fracr_cat   => NULL(),           & !< per-category ice fraction

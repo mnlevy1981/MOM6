@@ -1562,13 +1562,13 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
   ! Local variables
   real, pointer, dimension(:,:) :: atm_co2_prog         =>NULL() !< Prognostic atmospheric CO2 concentration [ppm]
   real, pointer, dimension(:,:) :: atm_co2_diag         =>NULL() !< Diagnostic atmospheric CO2 concentration [ppm]
-  real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s]
-  real, pointer, dimension(:,:) :: atm_bc_flux          =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s]
-  real, pointer, dimension(:,:) :: seaice_bc_flux       =>NULL() !< Black carbon flux from seaice [kg/m^2/s]
-  real, pointer, dimension(:,:) :: nhx_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s]
-  real, pointer, dimension(:,:) :: noy_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s]
+  real, pointer, dimension(:,:) :: atm_fine_dust_flux   =>NULL() !< Fine dust flux from atmosphere [kg/m^2/s ~> RZ/T]
+  real, pointer, dimension(:,:) :: atm_coarse_dust_flux =>NULL() !< Coarse dust flux from atmosphere [kg/m^2/s ~> RZ/T]
+  real, pointer, dimension(:,:) :: seaice_dust_flux     =>NULL() !< Dust flux from seaice [kg/m^2/s ~> RZ/T]
+  real, pointer, dimension(:,:) :: atm_bc_flux          =>NULL() !< Black carbon flux from atmosphere [kg/m^2/s ~> RZ/T]
+  real, pointer, dimension(:,:) :: seaice_bc_flux       =>NULL() !< Black carbon flux from seaice [kg/m^2/s ~> RZ/T]
+  real, pointer, dimension(:,:) :: nhx_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s ~> RZ/T]
+  real, pointer, dimension(:,:) :: noy_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s ~> RZ/T]
   integer :: isc, iec, jsc, jec
 
   ! Necessary null pointers for arguments to convert_marbl_IOB_to_forcings()
@@ -1608,16 +1608,18 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
   noy_dep(:,:) = 0.0
 
   call data_override(G%Domain, 'ice_fraction', fluxes%ice_fraction, day)
-  call data_override(G%Domain, 'u10_sqr', fluxes%u10_sqr, day)
+  call data_override(G%Domain, 'u10_sqr', fluxes%u10_sqr, day, scale=US%m_s_to_L_T**2)
   call data_override(G%Domain, 'atm_co2_prog', atm_co2_prog, day)
   call data_override(G%Domain, 'atm_co2_diag', atm_co2_diag, day)
-  call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day)
-  call data_override(G%Domain, 'atm_coarse_dust_flux', atm_coarse_dust_flux, day)
-  call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day)
-  call data_override(G%Domain, 'seaice_dust_flux', seaice_dust_flux, day)
-  call data_override(G%Domain, 'seaice_bc_flux', seaice_bc_flux, day)
-  call data_override(G%Domain, 'nhx_dep', nhx_dep, day)
-  call data_override(G%Domain, 'noy_dep', noy_dep, day)
+  call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day, &
+      scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'atm_coarse_dust_flux', atm_coarse_dust_flux, day, &
+      scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day, scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'seaice_dust_flux', seaice_dust_flux, day, scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'seaice_bc_flux', seaice_bc_flux, day, scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'nhx_dep', nhx_dep, day, scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'noy_dep', noy_dep, day, scale=US%kg_m2s_to_RZ_T)
 
   call convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                      seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
@@ -2078,7 +2080,8 @@ subroutine surface_forcing_init(Time, G, US, param_file, diag, CS, tracer_flow_C
   endif
 
   ! Set up MARBL forcing control structure
-  call MARBL_forcing_init(G, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, CS%marbl_forcing_CSp)
+  call MARBL_forcing_init(G, US, param_file, diag, Time, CS%inputdir, CS%use_marbl_tracers, &
+      CS%marbl_forcing_CSp)
 
   call register_forcing_type_diags(Time, diag, US, CS%use_temperature, CS%handles)
 
