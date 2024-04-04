@@ -145,12 +145,12 @@ type, public :: MARBL_tracers_CS ; private
   real, allocatable, dimension(:) :: &
       restoring_z_edges  !< The depths of the cell interfaces in the tracer restoring file [Z ~> m]
   real, allocatable, dimension(:) :: &
-      restoring_dz  !< The thickness of the cell layers in the tracer restoring file [Z ~> m]
+      restoring_dz  !< The thickness of the cell layers in the tracer restoring file [H ~> m]
   integer :: restoring_timescale_nz  !< number of levels in tracer restoring timescale file
   real, allocatable, dimension(:) :: &
       restoring_timescale_z_edges  !< The depths of the cell interfaces in the tracer restoring timescale file [Z ~> m]
   real, allocatable, dimension(:) :: &
-      restoring_timescale_dz  !< The thickness of the cell layers in the tracer restoring timescale file [Z ~> m]
+      restoring_timescale_dz  !< The thickness of the cell layers in the tracer restoring timescale file [H ~> m]
   character(len=14) :: restoring_rtau_source !< location of tracer restoring timescale data
                                              !! valid values: file, grid_dependent
   character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
@@ -159,8 +159,8 @@ type, public :: MARBL_tracers_CS ; private
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
 
   real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
-                                 !! bottom layer of prescribed thickness
-  real :: bfmt_r                 !< Reciprocal of above
+                                 !! bottom layer of prescribed thickness [Z ~> m]
+  real :: Ibfmt                  !< Reciprocal of bot_flux_mix_thickness [Z-1 ~> m-1]
 
   type(temp_MARBL_diag), allocatable :: surface_flux_diags(:)  !< collect surface flux diagnostics from all columns
                                                                !! before posting
@@ -274,13 +274,13 @@ type, public :: MARBL_tracers_CS ; private
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
   integer :: fesedflux_nz  !< number of levels in iron sediment flux file
-  real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into
-  real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into
+  real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into [conc m/s]
+  real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into [conc m/s]
   real, allocatable, dimension(:) :: &
     fesedflux_z_edges  !< The depths of the cell interfaces in the input data [Z ~> m]
   ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
   real, allocatable, dimension(:,:,:) :: &
-    fesedflux_dz  !< The thickness of the cell layers in the input data [Z ~> m]
+    fesedflux_dz  !< The thickness of the cell layers in the input data [H ~> m]
 end type MARBL_tracers_CS
 
 ! Module parameters
@@ -290,8 +290,9 @@ contains
 
 !> This subroutine is used to read marbl_in, configure MARBL accordingly, and then
 !! call MARBL's initialization routine
-subroutine configure_MARBL_tracers(GV, param_file, CS)
+subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),      intent(in) :: US   !< A dimensional unit scaling type
   type(param_file_type),      intent(in) :: param_file !< A structure to parse for run-time parameters
   type(MARBL_tracers_CS),     pointer    :: CS   !< A pointer that is set to point to the control
                                                  !! structure for this module
@@ -314,13 +315,14 @@ subroutine configure_MARBL_tracers(GV, param_file, CS)
   call get_param(param_file, mdl, "MARBL_SETTINGS_FILE", CS%marbl_settings_file, &
       "The name of a file from which to read the run-time settings for MARBL.", default="marbl_in")
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
-      "Bottom fluxes are uniformly mixed over layer of this thickness", default=1., units="m")
+      "Bottom fluxes are uniformly mixed over layer of this thickness", default=1., units="m", &
+      scale=US%m_to_Z)
   call get_param(param_file, mdl, "USE_ICE_CATEGORIES", CS%use_ice_category_fields, &
       "If true, allocate memory for shortwave and ice fraction split by ice thickness category.", &
       default=.false.)
   call get_param(param_file, mdl, "ICE_NCAT", CS%ice_ncat, &
       "Number of ice thickness categories in shortwave and ice fraction forcings.", default=0)
-  CS%bfmt_r = 1. / CS%bot_flux_mix_thickness
+  CS%Ibfmt = 1. / CS%bot_flux_mix_thickness
 
   if (CS%use_ice_category_fields .and. (CS%ice_ncat == 0)) &
     call MOM_error(FATAL, &
@@ -572,7 +574,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   endif
   allocate(CS)
 
-  call configure_MARBL_tracers(GV, param_file, CS)
+  call configure_MARBL_tracers(GV, US, param_file, CS)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
@@ -715,7 +717,7 @@ endif
       allocate(CS%restoring_dz(CS%restoring_nz))
       do k=CS%restoring_nz,1,-1
         kbot = k + 1 ! level k is between z(k) and z(k+1)
-        CS%restoring_dz(k) = CS%restoring_z_edges(k) - CS%restoring_z_edges(kbot)
+        CS%restoring_dz(k) = (CS%restoring_z_edges(k) - CS%restoring_z_edges(kbot)) * GV%Z_to_H
       enddo
 
       select case(CS%restoring_rtau_source)
@@ -730,8 +732,8 @@ endif
           allocate(CS%restoring_timescale_dz(CS%restoring_timescale_nz))
           do k=CS%restoring_timescale_nz,1,-1
             kbot = k + 1 ! level k is between z(k) and z(k+1)
-            CS%restoring_timescale_dz(k) = CS%restoring_timescale_z_edges(k) - &
-                CS%restoring_timescale_z_edges(kbot)
+            CS%restoring_timescale_dz(k) = (CS%restoring_timescale_z_edges(k) - &
+                CS%restoring_timescale_z_edges(kbot)) * GV%Z_to_H
           enddo
         case DEFAULT
           write(log_message, "(3A)") "'", trim(CS%restoring_rtau_source), &
@@ -1009,24 +1011,24 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
       do j=G%jsc, G%jec
         do i=G%isc, G%iec
           if (G%mask2dT(i,j) == 0) cycle
-          if (G%bathyT(i,j) + CS%fesedflux_z_edges(1) < 1e-8) then
+          if (G%bathyT(i,j) + CS%fesedflux_z_edges(1) < 1e-8 * US%m_to_Z) then
             write(log_message, *) "Current implementation of fesedflux assumes G%bathyT >=", &
                 " first edge;first edge = ", -CS%fesedflux_z_edges(1), "bathyT = ", G%bathyT(i,j)
             call MOM_error(FATAL, log_message)
           endif
           ! Also figure out layer thickness while we're here
-          CS%fesedflux_dz(i,j,k) = CS%fesedflux_z_edges(k) - CS%fesedflux_z_edges(kbot)
+          CS%fesedflux_dz(i,j,k) = (CS%fesedflux_z_edges(k) - CS%fesedflux_z_edges(kbot)) * GV%Z_to_H
           ! If top interface is at or below ocean bottom, move flux in current layer up one
           ! and set thickness of current level to 0
-          if (G%bathyT(i,j) + CS%fesedflux_z_edges(k) < 1e-8) then
+          if (G%bathyT(i,j) + CS%fesedflux_z_edges(k) < 1e-8 * US%m_to_Z) then
             CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
             CS%fesedflux_in(i,j,k) = 0.
             CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
             CS%feventflux_in(i,j,k) = 0.
             CS%fesedflux_dz(i,j,k) = 0.
-          elseif (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8) then
+          elseif (G%bathyT(i,j) + CS%fesedflux_z_edges(kbot) < 1e-8 * US%m_to_Z) then
             ! Otherwise, if lower interface is below bathymetry move interface to ocean bottom
-            CS%fesedflux_dz(i,j,k) = G%bathyT(i,j) + CS%fesedflux_z_edges(k)
+            CS%fesedflux_dz(i,j,k) = (G%bathyT(i,j) + CS%fesedflux_z_edges(k)) * GV%Z_to_H
           endif
         enddo
       enddo
@@ -1197,7 +1199,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
                                               !! added [H ~> m or kg m-2].
   type(forcing),           intent(in) :: fluxes !< A structure containing pointers to thermodynamic
                                               !! and tracer forcing fields.  Unused fields have NULL ptrs.
-  real,                    intent(in) :: dt   !< The amount of time covered by this call [s]
+  real,                    intent(in) :: dt   !< The amount of time covered by this call [T ~> s]
   type(unit_scale_type),   intent(in) :: US   !< A dimensional unit scaling type
   type(MARBL_tracers_CS),     pointer :: CS   !< The control structure returned by a previous
                                               !! call to register_MARBL_tracers.
@@ -1220,8 +1222,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real :: Isecs_per_year  ! The number of seconds in a year.
   real :: year            ! The time in years.
   integer :: secs, days   ! Integer components of the time type.
-  real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth
-  real, dimension(GV%ke) :: zc, dz  ! z-coordinate layer center depth and cell thickness
+  real, dimension(0:GV%ke) :: zi  ! z-coordinate interface depth [Z ~> m]
+  real, dimension(GV%ke) :: zc  ! z-coordinate layer center depth [Z ~> m]
+  real, dimension(GV%ke) :: dz  ! z-coordinate cell thickness [H ~> m]
   integer :: i, j, k, is, ie, js, je, nz, m
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -1243,9 +1246,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       TODO: if top layer is vanishly thin, do we actually want (e.g.) top 5m average temp / salinity?
       !             How does MOM pass SST and SSS to GFDL coupler? (look in core.F90?)
       if (CS%sss_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1)
+        MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1) * US%S_to_ppt
       if (CS%sst_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1)
+        MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1) * US%C_to_degC
       if (CS%ifrac_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
 
@@ -1420,15 +1423,15 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       cum_bftt_dz = 0.
       do k = GV%ke, 1, -1
         ! TODO: if we move this above vertical mixing, use h_old
-        dz(k) = h_new(i,j,k)*GV%H_to_Z ! cell thickness
-        zc(k) = zi(k) - 0.5 * dz(k)
-        zi(k-1) = zi(k) - dz(k)
+        dz(k) = h_new(i,j,k) ! cell thickness
+        zc(k) = zi(k) - 0.5 * (dz(k)*GV%H_to_Z)
+        zi(k-1) = zi(k) - (dz(k)*GV%H_to_Z)
         if (G%bathyT(i,j) - zi(k-1) <= CS%bot_flux_mix_thickness) then
-          MARBL_instances%bot_flux_to_tend(k) = CS%bfmt_r
-          cum_bftt_dz = cum_bftt_dz + MARBL_instances%bot_flux_to_tend(k) * dz(k)
+          MARBL_instances%bot_flux_to_tend(k) = US%m_to_Z * CS%Ibfmt
+          cum_bftt_dz = cum_bftt_dz + MARBL_instances%bot_flux_to_tend(k) * (GV%H_to_m * dz(k))
         elseif (G%bathyT(i,j) - zi(k) < CS%bot_flux_mix_thickness) then
-          ! MARBL_instances%bot_flux_to_tend(k) = (1. - (G%bathyT(i,j) - zi(k)) * CS%bfmt_r) / dz(k)
-          MARBL_instances%bot_flux_to_tend(k) = (1. - cum_bftt_dz) / dz(k)
+          ! MARBL_instances%bot_flux_to_tend(k) = (1. - (G%bathyT(i,j) - zi(k)) * CS%Ibfmt) / dz(k)
+          MARBL_instances%bot_flux_to_tend(k) = (1. - cum_bftt_dz) / (GV%H_to_m * dz(k))
         endif
       enddo
       if (G%bathyT(i,j) - zi(0) < CS%bot_flux_mix_thickness) &
@@ -1438,23 +1441,23 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         bot_flux_to_tend(i, j, :) = MARBL_instances%bot_flux_to_tend(:)
 
       ! zw(1:nz) is bottom cell depth so no element of zw = 0, it is assumed to be top layer depth
-      MARBL_instances%domain%zw(:) = zi(1:GV%ke)
-      MARBL_instances%domain%zt(:) = zc(:)
-      MARBL_instances%domain%delta_z(:) = dz(:)
+      MARBL_instances%domain%zw(:) = US%Z_to_m * zi(1:GV%ke)
+      MARBL_instances%domain%zt(:) = US%Z_to_m * zc(:)
+      MARBL_instances%domain%delta_z(:) = GV%H_to_m * dz(:)
 
       ! iii. Load proper column data
       !      * Forcing Fields
       !       These fields are getting the correct data
       if (CS%potemp_ind > 0) &
-        MARBL_instances%interior_tendency_forcings(CS%potemp_ind)%field_1d(1,:) = tv%T(i,j,:)
+        MARBL_instances%interior_tendency_forcings(CS%potemp_ind)%field_1d(1,:) = tv%T(i,j,:) * US%C_to_degC
       if (CS%salinity_ind > 0) &
-        MARBL_instances%interior_tendency_forcings(CS%salinity_ind)%field_1d(1,:) = tv%S(i,j,:)
+        MARBL_instances%interior_tendency_forcings(CS%salinity_ind)%field_1d(1,:) = tv%S(i,j,:) * US%S_to_ppt
 
       !       This are okay, but need option to read in from file
       !       (Same as dust_dep_ind for surface_flux_forcings)
       if (CS%dustflux_ind > 0) &
         MARBL_instances%interior_tendency_forcings(CS%dustflux_ind)%field_0d(1) = &
-            fluxes%dust_flux(i,j)
+            fluxes%dust_flux(i,j) * US%RZ_T_to_kg_m2s
 
       !        TODO: Support PAR (currently just using single subcolumn)
       !              (Look for Pen_sw_bnd?)
@@ -1476,7 +1479,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
               fluxes%qsw_cat(i,j,:)
         else
           MARBL_instances%interior_tendency_forcings(CS%surf_shortwave_ind)%field_1d(1,1) = &
-              fluxes%sw(i,j)
+              fluxes%sw(i,j) * US%QRZ_T_to_W_m2
         endif
       endif
       ! Tracer restoring
@@ -1501,12 +1504,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !        NOTE: Andrew recommends using GV%H_to_Pa
       if (CS%pressure_ind > 0) &
         MARBL_instances%interior_tendency_forcings(CS%pressure_ind)%field_1d(1,:) = &
-            (0.0598088 * (exp(-0.025*zc(:)) - 1.)) + (0.100766 * zc(:)) + (2.28405e-7*(zc(:)**2))
+            (0.0598088 * (exp(-0.025*US%Z_to_m * zc(:)) - 1.)) + &
+            (0.100766 * US%Z_to_m * zc(:)) + (2.28405e-7*((US%Z_to_m * zc(:))**2))
 
       if (CS%fesedflux_ind > 0) then
         MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0.
         call reintegrate_column(CS%fesedflux_nz, &
-            CS%fesedflux_dz(i,j,:) * (sum(dz(:)) / G%bathyT(i,j)), &
+            CS%fesedflux_dz(i,j,:) * (sum(dz(:) * GV%H_to_Z) / G%bathyT(i,j)), &
             CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), GV%ke, dz(:), &
             MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:))
       endif
@@ -1543,8 +1547,8 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       ! v. Apply tendencies immediately
       !    First pass - Euler step; if stability issues, we can do something different (subcycle?)
       do m=1,CS%ntr
-        CS%tracer_data(m)%tr(i,j,:) = CS%tracer_data(m)%tr(i,j,:) + G%mask2dT(i,j) * (dt * &
-            MARBL_instances%interior_tendencies(m,:))
+        CS%tracer_data(m)%tr(i,j,:) = CS%tracer_data(m)%tr(i,j,:) + (dt * US%T_to_s) * &
+            MARBL_instances%interior_tendencies(m,:)
       enddo
 
       ! vi. Copy output that MOM6 needs to hold on to
@@ -1573,30 +1577,28 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !     * tendency values themselves (and vertical integrals of them)
       do m=1,CS%ntr
         if (allocated(CS%interior_tendency_out(m)%field_3d)) &
-          CS%interior_tendency_out(m)%field_3d(i,j,:) = &
-              G%mask2dT(i,j)*MARBL_instances%interior_tendencies(m,:)
+          CS%interior_tendency_out(m)%field_3d(i,j,:) = MARBL_instances%interior_tendencies(m,:)
 
         if (allocated(CS%interior_tendency_out_zint(m)%field_2d)) &
-          CS%interior_tendency_out_zint(m)%field_2d(i,j) = G%mask2dT(i,j) * (sum(dz(:) * &
+          CS%interior_tendency_out_zint(m)%field_2d(i,j) = (sum(dz(:) * &
               MARBL_instances%interior_tendencies(m,:)))
 
         if (allocated(CS%interior_tendency_out_zint_100m(m)%field_2d)) then
           CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = 0.
           do k=1,GV%ke
-            if (zi(k) < 100.) then
+            if (zi(k) < US%m_to_Z * 100.) then
               CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
-                  CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * &
+                  CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + GV%H_to_m * dz(k) * &
                   MARBL_instances%interior_tendencies(m,k)
-            elseif (zi(k-1) < 100.) then
+            elseif (zi(k-1) < US%m_to_Z * 100.) then
               CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
-                  CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + dz(k) * &
-                  ((100. - zi(k-1)) / (zi(k) - zi(k-1))) * MARBL_instances%interior_tendencies(m,k)
+                  CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) + GV%H_to_m * dz(k) * &
+                  ((US%m_to_Z * 100. - zi(k-1)) / (zi(k) - zi(k-1))) * &
+                  MARBL_instances%interior_tendencies(m,k)
             else
               exit
             endif
           enddo
-          CS%interior_tendency_out_zint_100m(m)%field_2d(i,j) = &
-              G%mask2dT(i,j)*CS%interior_tendency_out_zint_100m(m)%field_2d(i,j)
         endif
       enddo
 
