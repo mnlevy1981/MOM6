@@ -161,22 +161,24 @@ contains
     endif
 
     ! Register diagnostic fields for outputing forcing values
+    ! These fields are posted from convert_marbl_IOB_to_forcings(), and they are received
+    ! in physical units so no conversion is necessary here.
     CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", "ATM_FINE_DUST_FLUX_CPL", &
         CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-        day, "ATM_FINE_DUST_FLUX from cpl", "kg/m^2/s", conversion=US%RZ_T_to_kg_m2s)
+        day, "ATM_FINE_DUST_FLUX from cpl", "kg/m^2/s")
     CS%diag_ids%atm_coarse_dust = register_diag_field("ocean_model", "ATM_COARSE_DUST_FLUX_CPL", &
         CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-        day, "ATM_COARSE_DUST_FLUX from cpl", "kg/m^2/s", conversion=US%RZ_T_to_kg_m2s)
+        day, "ATM_COARSE_DUST_FLUX from cpl", "kg/m^2/s")
     CS%diag_ids%atm_bc = register_diag_field("ocean_model", "ATM_BLACK_CARBON_FLUX_CPL", &
         CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-        day, "ATM_BLACK_CARBON_FLUX from cpl",  "kg/m^2/s", conversion=US%RZ_T_to_kg_m2s)
+        day, "ATM_BLACK_CARBON_FLUX from cpl",  "kg/m^2/s")
 
     CS%diag_ids%ice_dust = register_diag_field("ocean_model", "SEAICE_DUST_FLUX_CPL", &
         CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-        day, "SEAICE_DUST_FLUX from cpl", "kg/m^2/s", conversion=US%RZ_T_to_kg_m2s)
+        day, "SEAICE_DUST_FLUX from cpl", "kg/m^2/s")
     CS%diag_ids%ice_bc = register_diag_field("ocean_model", "SEAICE_BLACK_CARBON_FLUX_CPL", &
         CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
-        day, "SEAICE_BLACK_CARBON_FLUX from cpl", "kg/m^2/s", conversion=US%RZ_T_to_kg_m2s)
+        day, "SEAICE_BLACK_CARBON_FLUX from cpl", "kg/m^2/s")
 
   end subroutine MARBL_forcing_init
 
@@ -188,17 +190,17 @@ contains
                                            swpen_ifrac_n, Time, G, US, i0, j0, fluxes, CS)
 
     real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
-                                                                           !! [R Z T-1]
+                                                                           !! [kg m-2 s-1]
     real, dimension(:,:),   pointer, intent(in)    :: atm_coarse_dust_flux !< atmosphere coarse dust flux from IOB
-                                                                           !! [R Z T-1]
-    real, dimension(:,:),   pointer, intent(in)    :: seaice_dust_flux     !< sea ice dust flux from IOB [R Z T-1]
+                                                                           !! [kg m-2 s-1]
+    real, dimension(:,:),   pointer, intent(in)    :: seaice_dust_flux     !< sea ice dust flux from IOB [kg m-2 s-1]
     real, dimension(:,:),   pointer, intent(in)    :: atm_bc_flux          !< atmosphere black carbon flux from IOB
-                                                                           !! [R Z T-1]
+                                                                           !! [kg m-2 s-1]
     real, dimension(:,:),   pointer, intent(in)    :: seaice_bc_flux       !< sea ice black carbon flux from IOB
-                                                                           !! [R Z T-1]
+                                                                           !! [kg m-2 s-1]
     real, dimension(:,:),   pointer, intent(in)    :: afracr               !< open ocean fraction
-    real, dimension(:,:),   pointer, intent(in)    :: nhx_dep              !< NHx flux from atmosphere [R Z T-1]
-    real, dimension(:,:),   pointer, intent(in)    :: noy_dep              !< NOy flux from atmosphere [R Z T-1]
+    real, dimension(:,:),   pointer, intent(in)    :: nhx_dep              !< NHx flux from atmosphere [kg m-2 s-1]
+    real, dimension(:,:),   pointer, intent(in)    :: noy_dep              !< NOy flux from atmosphere [kg m-2 s-1]
     real, dimension(:,:),   pointer, intent(in)    :: atm_co2_prog         !< Prognostic atmospheric CO2 concentration
     real, dimension(:,:),   pointer, intent(in)    :: atm_co2_diag         !< Diagnostic atmospheric CO2 concentration
     real, dimension(:,:),   pointer, intent(in)    :: swnet_afracr         !< shortwave flux * open ocean fraction
@@ -226,8 +228,8 @@ contains
     if (.not. CS%use_marbl_tracers) return
 
     is   = G%isc   ; ie   = G%iec    ; js   = G%jsc   ; je   = G%jec
-    ndep_conversion = (US%RZ_T_to_kg_m2s * US%m_to_Z * US%T_to_s) * (1.e6/14.) ! R Z / T -> mmol / m^3 Z / T
-    iron_flux_conversion = (US%RZ_T_to_kg_m2s * US%m_to_Z * US%T_to_s) * 1.e6 / molw_Fe ! R Z / T -> mmol / m^3 Z / T
+    ndep_conversion = (1.e6/14.) * (US%m_to_Z * US%T_to_s)  ! kg / m^2 / s -> conc Z / T
+    iron_flux_conversion = (1.e6 / molw_Fe) * (US%m_to_Z * US%T_to_s) ! kg / m^2 / s -> conc Z / T
 
     ! Post fields from coupler to diagnostics
     ! TODO: units from diag register are incorrect; we should be converting these in the cap, I think
@@ -305,10 +307,12 @@ contains
         enddo ; enddo
     end select
 
+    ! Dust flux
     if (associated(atm_fine_dust_flux)) then
       do j=js,je ; do i=is,ie
-        fluxes%dust_flux(i,j) = G%mask2dT(i,j) * (atm_fine_dust_flux(i-i0,j-j0) + &
-            atm_coarse_dust_flux(i-i0,j-j0) + seaice_dust_flux(i-i0,j-j0))
+        fluxes%dust_flux(i,j) = US%kg_m2s_to_RZ_T * G%mask2dT(i,j) * &
+            (atm_fine_dust_flux(i-i0,j-j0) + atm_coarse_dust_flux(i-i0,j-j0) + &
+            seaice_dust_flux(i-i0,j-j0))
       enddo ; enddo
     endif
 
@@ -342,7 +346,7 @@ contains
         fluxes%iron_flux(i,j) = fluxes%iron_flux(i,j) + (CS%seaice_bc_fe_bioavail_frac * &
             (CS%seaice_fe_to_bc_ratio * seaice_bc_flux(i-i0,j-j0)))
 
-        ! Unit conversion (kg / m^2 / s -> mmol / m^2 / s)
+        ! Unit conversion (kg / m^2 / s -> conc Z/T)
         fluxes%iron_flux(i,j) = (G%mask2dT(i,j) * iron_flux_conversion) * fluxes%iron_flux(i,j)
 
       enddo ; enddo

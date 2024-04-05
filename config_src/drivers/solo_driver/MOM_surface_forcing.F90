@@ -1607,19 +1607,23 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
   nhx_dep(:,:) = 0.0
   noy_dep(:,:) = 0.0
 
+  ! fluxes used directly as MARBL inputs
+  ! (should be scaled)
   call data_override(G%Domain, 'ice_fraction', fluxes%ice_fraction, day)
   call data_override(G%Domain, 'u10_sqr', fluxes%u10_sqr, day, scale=US%m_s_to_L_T**2)
+
+  ! fluxes used to compute MARBL inputs
+  ! These are kept in physical units, and will be scaled appropriately in
+  ! convert_marbl_IOB_to_forcings()
   call data_override(G%Domain, 'atm_co2_prog', atm_co2_prog, day)
   call data_override(G%Domain, 'atm_co2_diag', atm_co2_diag, day)
-  call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day, &
-      scale=US%kg_m2s_to_RZ_T)
-  call data_override(G%Domain, 'atm_coarse_dust_flux', atm_coarse_dust_flux, day, &
-      scale=US%kg_m2s_to_RZ_T)
-  call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day, scale=US%kg_m2s_to_RZ_T)
-  call data_override(G%Domain, 'seaice_dust_flux', seaice_dust_flux, day, scale=US%kg_m2s_to_RZ_T)
-  call data_override(G%Domain, 'seaice_bc_flux', seaice_bc_flux, day, scale=US%kg_m2s_to_RZ_T)
-  call data_override(G%Domain, 'nhx_dep', nhx_dep, day, scale=US%kg_m2s_to_RZ_T)
-  call data_override(G%Domain, 'noy_dep', noy_dep, day, scale=US%kg_m2s_to_RZ_T)
+  call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day)
+  call data_override(G%Domain, 'atm_coarse_dust_flux', atm_coarse_dust_flux, day)
+  call data_override(G%Domain, 'atm_bc_flux', atm_bc_flux, day)
+  call data_override(G%Domain, 'seaice_dust_flux', seaice_dust_flux, day)
+  call data_override(G%Domain, 'seaice_bc_flux', seaice_bc_flux, day)
+  call data_override(G%Domain, 'nhx_dep', nhx_dep, day)
+  call data_override(G%Domain, 'noy_dep', noy_dep, day)
 
   call convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
                                      seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
