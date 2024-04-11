@@ -1384,8 +1384,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       do k=1,nz ;do j=js,je ; do i=is,ie
         h_work(i,j,k) = h_old(i,j,k)
       enddo ; enddo ; enddo
-      ! CS%RIV_FLUXES is conc m/s, in_flux_optional expects time-integrated flux (conc m)
-      riv_flux_loc = CS%RIV_FLUXES(:,:,m) * dt
+      ! CS%RIV_FLUXES is conc m/s, in_flux_optional expects time-integrated flux (conc H)
+      riv_flux_loc = (CS%RIV_FLUXES(:,:,m) * (dt*US%T_to_s)) * GV%m_to_H
+      if (CS%debug) &
+        call hchksum(riv_flux_loc(:,:), &
+            trim(MARBL_instances%tracer_metadata(m)%short_name)//' riv flux', G%HI, scale=GV%H_to_m)
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tracer_data(m)%tr(:,:,:) , dt, fluxes, h_work, &
           evap_CFL_limit, minimum_forcing_depth, in_flux_optional=riv_flux_loc)
       call tracer_vertdiff(h_work, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &
