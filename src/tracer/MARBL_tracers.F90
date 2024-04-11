@@ -115,6 +115,7 @@ type, public :: MARBL_tracers_CS ; private
   logical :: use_ice_category_fields    !< Forcing will include multiple ice categories for ice_frac and shortwave
   logical :: request_Chl_from_MARBL     !< MARBL can provide Chl to use in set_pen_shortwave()
   integer :: ice_ncat                   !< Number of ice categories when use_ice_category_fields = True
+  real    :: IC_min                     !< Minimum value for tracer initial conditions
   character(len=200) :: IC_file !< The file in which the age-tracer initial values cam be found.
   logical :: ongrid                     !< True if IC_file is already interpolated to MOM grid
   type(tracer_registry_type), pointer :: tr_Reg => NULL() !< A pointer to the tracer registry
@@ -309,9 +310,11 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
 
   ! (1) Read parameters necessary for general setup of MARBL
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "DEBUG", CS%debug, &
-                 "If true, write out verbose debugging data.", &
-                 default=.false., debuggingParam=.true.)
+  call get_param(param_file, mdl, "DEBUG", CS%debug, "If true, write out verbose debugging data.", &
+       default=.false., debuggingParam=.true.)
+  call get_param(param_file, mdl, "MARBL_IC_MIN_VAL", CS%IC_min, &
+      "Minimum value of tracer initial conditions (set to 1e-100 for dim scaling tests)", &
+      default=0., units="tracer units")
   call get_param(param_file, mdl, "MARBL_SETTINGS_FILE", CS%marbl_settings_file, &
       "The name of a file from which to read the run-time settings for MARBL.", default="marbl_in")
   call get_param(param_file, mdl, "BOT_FLUX_MIX_THICKNESS", CS%bot_flux_mix_thickness, &
@@ -902,8 +905,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
       do k=1,GV%ke
         do j=G%jsc, G%jec
           do i=G%isc, G%iec
-            ! Set negative tracer concentrations to 0
-            if (CS%tracer_data(m)%tr(i,j,k) < 0) CS%tracer_data(m)%tr(i,j,k) = 0.
+            ! Ensure tracer concentrations are at / above minimum value
+            if (CS%tracer_data(m)%tr(i,j,k) < CS%IC_min) CS%tracer_data(m)%tr(i,j,k) = CS%IC_min
           enddo
         enddo
       enddo
