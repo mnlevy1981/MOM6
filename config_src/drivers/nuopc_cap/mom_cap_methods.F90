@@ -313,15 +313,13 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   if (associated(ice_ocean_boundary%atm_co2_prog)) then
     ice_ocean_boundary%atm_co2_prog(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Sa_co2prog',  &
-        isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_prog(:,:), &
-        areacor=med2mod_areacor, rc=rc)
+        isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_prog(:,:), rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
   endif
   if (associated(ice_ocean_boundary%atm_co2_diag)) then
     ice_ocean_boundary%atm_co2_diag(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Sa_co2diag',  &
-        isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_diag(:,:), &
-        areacor=med2mod_areacor, rc=rc)
+        isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_diag(:,:), rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
     line=__LINE__, &
     file=__FILE__)) &
@@ -794,8 +792,8 @@ subroutine mom_export(ocean_public, ocean_grid, ocean_state, exportState, clock,
   ! -------
   call ESMF_StateGet(exportState, 'Faoo_fco2_ocn', itemFlag, rc=rc)
   if (itemFlag /= ESMF_STATEITEM_NOTFOUND) then
-    call State_SetExport(exportState, 'Faoo_fco2_ocn', &
-         isc, iec, jsc, jec, ocean_public%fco2_ocn, ocean_grid, rc=rc)
+    call State_SetExport(exportState, 'Faoo_fco2_ocn', isc, iec, jsc, jec, &
+        ocean_public%fco2_ocn, ocean_grid, areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
   endif
 
