@@ -380,7 +380,7 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   call MARBL_instances%init(gcm_num_levels = nz, gcm_num_PAR_subcols = CS%ice_ncat + 1, &
       gcm_num_elements_surface_flux = 1, & ! FIXME: change to number of grid cells on MPI task
       gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), gcm_zw = GV%sInterface(2:nz+1), &
-      gcm_zt = GV%sLayer, unit_system_opt = "mks", lgcm_has_global_ops = .true.)
+      gcm_zt = GV%sLayer, unit_system_opt = "mks", lgcm_has_global_ops = .false.) ! FIXME: add global ops
   if (MARBL_instances%StatusLog%labort_marbl) &
     call MARBL_instances%StatusLog%log_error_trace("MARBL_instances%init", &
         "configure_MARBL_tracers")
