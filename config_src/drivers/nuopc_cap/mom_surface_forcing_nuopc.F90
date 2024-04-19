@@ -1533,6 +1533,60 @@ subroutine ice_ocn_bnd_type_chksum(id, timestep, iobt)
     chks = field_chksum( iobt%mass_berg  ) ; if (root) write(outunit,100) 'iobt%mass_berg      ', chks
   endif
 
+  ! MARBL forcing
+  if (associated(iobt%atm_fine_dust_flux)) then
+    chks = field_chksum(iobt%atm_fine_dust_flux)
+    if (root) write(outunit,110) 'iobt%atm_fine_dust_flux   ', chks
+  endif
+  if (associated(iobt%atm_coarse_dust_flux)) then
+    chks = field_chksum(iobt%atm_coarse_dust_flux)
+    if (root) write(outunit,110) 'iobt%atm_coarse_dust_flux ', chks
+  endif
+  if (associated(iobt%seaice_dust_flux)) then
+    chks = field_chksum(iobt%seaice_dust_flux)
+    if (root) write(outunit,110) 'iobt%seaice_dust_flux     ', chks
+  endif
+  if (associated(iobt%atm_bc_flux)) then
+    chks = field_chksum(iobt%atm_bc_flux)
+    if (root) write(outunit,110) 'iobt%atm_bc_flux          ', chks
+  endif
+  if (associated(iobt%seaice_bc_flux)) then
+    chks = field_chksum(iobt%seaice_bc_flux)
+    if (root) write(outunit,110) 'iobt%seaice_bc_flux       ', chks
+  endif
+  if (associated(iobt%nhx_dep)) then
+    chks = field_chksum(iobt%nhx_dep)
+    if (root) write(outunit,100) 'iobt%nhx_dep    ', chks
+  endif
+  if (associated(iobt%noy_dep)) then
+    chks = field_chksum(iobt%noy_dep)
+    if (root) write(outunit,100) 'iobt%noy_dep    ', chks
+  endif
+  if (associated(iobt%atm_co2_prog)) then
+    chks = field_chksum(iobt%atm_co2_prog)
+    if (root) write(outunit,110) 'iobt%atm_co2_prog         ', chks
+  endif
+  if (associated(iobt%atm_co2_diag)) then
+    chks = field_chksum(iobt%atm_co2_diag)
+    if (root) write(outunit,110) 'iobt%atm_co2_diag         ', chks
+  endif
+  if (associated(iobt%afracr)) then
+    chks = field_chksum(iobt%afracr)
+    if (root) write(outunit,100) 'iobt%afracr     ', chks
+  endif
+  if (associated(iobt%swnet_afracr)) then
+    chks = field_chksum(iobt%swnet_afracr)
+    if (root) write(outunit,110) 'iobt%swnet_afracr         ', chks
+  endif
+  if (associated(iobt%ifrac_n)) then
+    chks = field_chksum(iobt%ifrac_n)
+    if (root) write(outunit,100) 'iobt%ifrac_n    ', chks
+  endif
+  if (associated(iobt%swpen_ifrac_n)) then
+    chks = field_chksum(iobt%swpen_ifrac_n)
+    if (root) write(outunit,110) 'iobt%swpen_ifrac_n        ', chks
+  endif
+
   ! enthalpy
   if (associated(iobt%hrofl)) then
     chks = field_chksum( iobt%hrofl  ) ; if (root) write(outunit,100) 'iobt%hrofl      ', chks
@@ -1554,6 +1608,7 @@ subroutine ice_ocn_bnd_type_chksum(id, timestep, iobt)
   endif
 
 100 FORMAT("   CHECKSUM::",A20," = ",Z20)
+110 FORMAT("   CHECKSUM::",A30," = ",Z20)
 
   call coupler_type_write_chksums(iobt%fluxes, outunit, 'iobt%')
 
