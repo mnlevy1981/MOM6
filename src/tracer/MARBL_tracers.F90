@@ -582,9 +582,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
   ! ** Input directory
-  ! TODO: just use DIN_LOC_ROOT
-  call get_param(param_file, mdl, "CESM_INPUTDIR", inputdir, &
-      default="/glade/work/mlevy/cesm_inputdata")
+  call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
   ! ** Tracer initial conditions
   call get_param(param_file, mdl, "MARBL_TRACERS_IC_FILE", CS%IC_file, &
       "The file in which the MARBL tracers initial values can be found.", &
