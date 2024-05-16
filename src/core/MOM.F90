@@ -23,7 +23,7 @@ use MOM_diag_mediator,        only : set_masks_for_axes
 use MOM_diag_mediator,        only : diag_grid_storage, diag_grid_storage_init
 use MOM_diag_mediator,        only : diag_save_grids, diag_restore_grids
 use MOM_diag_mediator,        only : diag_copy_storage_to_diag, diag_copy_diag_to_storage
-use MOM_domains,              only : MOM_domains_init
+use MOM_domains,              only : MOM_domains_init, MOM_domain_type
 use MOM_domains,              only : sum_across_PEs, pass_var, pass_vector
 use MOM_domains,              only : clone_MOM_domain, deallocate_MOM_domain
 use MOM_domains,              only : To_North, To_East, To_South, To_West
@@ -2011,9 +2011,11 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   type(ocean_grid_type),  pointer :: G_in => NULL() ! Pointer to the input grid
   type(hor_index_type),   pointer :: HI => NULL()   ! A hor_index_type for array extents
   type(hor_index_type),   target  :: HI_in          ! HI on the input grid
+  type(hor_index_type)            :: HI_in_unmasked ! HI on the unmasked input grid
   type(verticalGrid_type), pointer :: GV => NULL()
   type(dyn_horgrid_type), pointer :: dG => NULL(), test_dG => NULL()
   type(dyn_horgrid_type), pointer :: dG_in => NULL()
+  type(dyn_horgrid_type), pointer :: dG_unmasked_in => NULL()
   type(diag_ctrl),        pointer :: diag => NULL()
   type(unit_scale_type),  pointer :: US => NULL()
   type(MOM_restart_CS),   pointer :: restart_CSp => NULL()
@@ -2113,6 +2115,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   type(vardesc) :: vd_T, vd_S  ! Structures describing temperature and salinity variables.
   type(time_type)                 :: Start_time
   type(ocean_internal_state)      :: MOM_internal_state
+  type(MOM_domain_type), pointer  :: MOM_dom_unmasked => null() ! Unmasked MOM domain instance
+                                                                ! (To be used for writing out ocean geometry)
+  character(len=240) :: geom_file ! Name of the ocean geometry file
 
   CS%Time => Time
 
@@ -2460,6 +2465,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                  "vertical grid files. Other values are invalid.", default=1)
   if (write_geom<0 .or. write_geom>2) call MOM_error(FATAL,"MOM: "//&
          "WRITE_GEOM must be equal to 0, 1 or 2.")
+  call get_param(param_file, "MOM", "GEOM_FILE", geom_file, &
+                 "The file into which to write the ocean geometry.", &
+                 default="ocean_geometry")
   call get_param(param_file, "MOM", "USE_DBCLIENT", CS%use_dbclient, &
                  "If true, initialize a client to a remote database that can "//&
                  "be used for online analysis and machine-learning inference.",&
@@ -2541,10 +2549,10 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call MOM_domains_init(G_in%domain, US, param_file, symmetric=symmetric, &
             static_memory=.true., NIHALO=NIHALO_, NJHALO=NJHALO_, &
             NIGLOBAL=NIGLOBAL_, NJGLOBAL=NJGLOBAL_, NIPROC=NIPROC_, &
-            NJPROC=NJPROC_)
+            NJPROC=NJPROC_, MOM_dom_unmasked=MOM_dom_unmasked)
 #else
   call MOM_domains_init(G_in%domain, US, param_file, symmetric=symmetric, &
-                        domain_name="MOM_in")
+                        domain_name="MOM_in", MOM_dom_unmasked=MOM_dom_unmasked)
 #endif
 
   ! Copy input grid (G_in) domain to active grid G
@@ -2842,8 +2850,20 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   ! Write out all of the grid data used by this run.
   new_sim = determine_is_new_run(dirs%input_filename, dirs%restart_input_dir, G_in, restart_CSp)
   write_geom_files = ((write_geom==2) .or. ((write_geom==1) .and. new_sim))
-  if (write_geom_files) call write_ocean_geometry_file(dG_in, param_file, dirs%output_directory, US=US)
-
+  if (write_geom_files) then
+    if (associated(MOM_dom_unmasked)) then
+      call hor_index_init(MOM_dom_unmasked, HI_in_unmasked, param_file, &
+                          local_indexing=.not.global_indexing)
+      call create_dyn_horgrid(dG_unmasked_in, HI_in_unmasked, bathymetry_at_vel=bathy_at_vel)
+      call clone_MOM_domain(MOM_dom_unmasked, dG_unmasked_in%Domain)
+      call MOM_initialize_fixed(dG_unmasked_in, US, OBC_in, param_file, .false., dirs%output_directory)
+      call write_ocean_geometry_file(dG_unmasked_in, param_file, dirs%output_directory, US=US, geom_file=geom_file)
+      call deallocate_MOM_domain(MOM_dom_unmasked)
+      call destroy_dyn_horgrid(dG_unmasked_in)
+    else
+      call write_ocean_geometry_file(dG_in, param_file, dirs%output_directory, US=US, geom_file=geom_file)
+    endif
+  endif
   call destroy_dyn_horgrid(dG_in)
 
   ! Initialize dynamically evolving fields, perhaps from restart files.
