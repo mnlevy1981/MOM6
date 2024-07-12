@@ -543,7 +543,7 @@ subroutine update_ocean_model(Ice_ocean_boundary, OS, Ocean_sfc, &
 
   if (OS%fluxes%fluxes_used) then
 
-    ! MNL: Necessary for averaging some MARBL forcing fields
+    ! enable_averages() is necessary to post forcing fields to diagnostics
     call enable_averages(dt_coupling, OS%Time + Ocean_coupling_time_step, OS%diag)
 
     if (do_thermo) &
@@ -789,7 +789,7 @@ subroutine ocean_model_end(Ocean_sfc, Ocean_state, Time, write_restart)
   type(time_type),         intent(in)    :: Time        !< The model time, used for writing restarts.
   logical,                 intent(in)    :: write_restart !< true => write restart file
 
-  if (write_restart)call ocean_model_save_restart(Ocean_state, Time)
+  if (write_restart) call ocean_model_save_restart(Ocean_state, Time)
   call diag_mediator_end(Time, Ocean_state%diag, end_diag_manager=.true.)
   call MOM_end(Ocean_state%MOM_CSp)
   if (Ocean_state%use_ice_shelf) call ice_shelf_end(Ocean_state%Ice_shelf_CSp)

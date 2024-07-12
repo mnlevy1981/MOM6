@@ -1,5 +1,5 @@
-GFDL_ocean_BGC
-==============
+MARBL
+=====
 
 These APIs reflect those for the MARBL library available at https://github.com/marbl-ecosys/MARBL
 

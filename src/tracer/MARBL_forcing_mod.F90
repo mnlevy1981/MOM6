@@ -22,7 +22,7 @@ implicit none ; private
 #include <MOM_memory.h>
 
 public :: MARBL_forcing_init
-public :: convert_marbl_IOB_to_forcings
+public :: convert_driver_fields_to_forcings
 
 !> Data type used to store diagnostic index returned from register_diag_field()
 !! For the forcing fields that can be written via post_data()
@@ -161,7 +161,7 @@ contains
     endif
 
     ! Register diagnostic fields for outputing forcing values
-    ! These fields are posted from convert_marbl_IOB_to_forcings(), and they are received
+    ! These fields are posted from convert_driver_fields_to_forcings(), and they are received
     ! in physical units so no conversion is necessary here.
     CS%diag_ids%atm_fine_dust = register_diag_field("ocean_model", "ATM_FINE_DUST_FLUX_CPL", &
         CS%diag%axesT1, & ! T=> tracer grid? 1 => no vertical grid
@@ -183,11 +183,11 @@ contains
   end subroutine MARBL_forcing_init
 
   ! Note: ice fraction and u10_sqr are handled in mom_surface_forcing because of CFCs
-  subroutine convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
-                                           seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
-                                           nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
-                                           afracr, swnet_afracr, ifrac_n, &
-                                           swpen_ifrac_n, Time, G, US, i0, j0, fluxes, CS)
+  subroutine convert_driver_fields_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
+                                               seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
+                                               nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
+                                               afracr, swnet_afracr, ifrac_n, &
+                                               swpen_ifrac_n, Time, G, US, i0, j0, fluxes, CS)
 
     real, dimension(:,:),   pointer, intent(in)    :: atm_fine_dust_flux   !< atmosphere fine dust flux from IOB
                                                                            !! [kg m-2 s-1]
@@ -223,7 +223,7 @@ contains
     real :: seaice_fe_bioavail_frac  !< TODO: define this (local) term
     real :: iron_flux_conversion     !< TODO: define this (local) term
     real :: ndep_conversion          !< Combination of unit conversion factors for rescaling
-                                     !! nitrogen deposition [kg(N) m-2 s-1 ~> mol L-2 T-1]
+                                     !! nitrogen deposition [kg(N) m-2 s-1 ~> mol m-3 Z T-1]
 
     if (.not. CS%use_marbl_tracers) return
 
@@ -373,6 +373,6 @@ contains
       enddo; enddo
     endif
 
-  end subroutine convert_marbl_IOB_to_forcings
+  end subroutine convert_driver_fields_to_forcings
 
 end module MARBL_forcing_mod

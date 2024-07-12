@@ -287,7 +287,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   ! nhx deposition
   !----
   if (associated(ice_ocean_boundary%nhx_dep)) then
-    ice_ocean_boundary%nhx_dep(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Faxa_ndep',  &
         isc, iec, jsc, jec, ice_ocean_boundary%nhx_dep(:,:), &
         areacor=med2mod_areacor, esmf_ind=1, rc=rc)
@@ -298,7 +297,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
     ! noy deposition
     !----
   if (associated(ice_ocean_boundary%noy_dep)) then
-    ice_ocean_boundary%noy_dep(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Faxa_ndep',  &
         isc, iec, jsc, jec, ice_ocean_boundary%noy_dep(:,:), &
         areacor=med2mod_areacor, esmf_ind=2, rc=rc)
@@ -311,13 +309,11 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   ! in which the pointer(s) will not be associated
   !----
   if (associated(ice_ocean_boundary%atm_co2_prog)) then
-    ice_ocean_boundary%atm_co2_prog(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Sa_co2prog',  &
         isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_prog(:,:), rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
   endif
   if (associated(ice_ocean_boundary%atm_co2_diag)) then
-    ice_ocean_boundary%atm_co2_diag(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Sa_co2diag',  &
         isc, iec, jsc, jec, ice_ocean_boundary%atm_co2_diag(:,:), rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, &
@@ -362,7 +358,6 @@ subroutine mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,
   ! dust flux from sea ice
   !----
   if (associated(ice_ocean_boundary%seaice_dust_flux)) then
-    ice_ocean_boundary%seaice_dust_flux(:,:) = 0._ESMF_KIND_R8
     call state_getimport(importState, 'Fioi_flxdst',  &
         isc, iec, jsc, jec, ice_ocean_boundary%seaice_dust_flux, &
         areacor=med2mod_areacor, rc=rc)
@@ -921,25 +916,25 @@ subroutine State_GetImport_2d(state, fldname, isc, iec, jsc, jec, output, do_sum
       ! determine output array and apply area correction if present
       n = 0
       do j = jsc,jec
-         do i = isc,iec
-            n = n + 1
-            if (do_sum_loc) then
-               if (present(areacor)) then
-                  output(i,j)  = output(i,j) + dataPtr1d(n) * areacor(n)
-               else
-                  output(i,j)  = output(i,j) + dataPtr1d(n)
-               endif
+        do i = isc,iec
+          n = n + 1
+          if (do_sum_loc) then
+            if (present(areacor)) then
+              output(i,j)  = output(i,j) + dataPtr1d(n) * areacor(n)
             else
-               if (present(areacor)) then
-                  output(i,j)  = dataPtr1d(n) * areacor(n)
-               else
-                  output(i,j)  = dataPtr1d(n)
-               endif
+              output(i,j)  = output(i,j) + dataPtr1d(n)
             endif
-         enddo
+          else
+            if (present(areacor)) then
+              output(i,j)  = dataPtr1d(n) * areacor(n)
+            else
+              output(i,j)  = dataPtr1d(n)
+            endif
+          endif
+        enddo
       enddo
 
-    else if (geomtype == ESMF_GEOMTYPE_GRID) then
+    elseif (geomtype == ESMF_GEOMTYPE_GRID) then
 
       call state_getfldptr(state, trim(fldname), dataptr2d, rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -948,15 +943,15 @@ subroutine State_GetImport_2d(state, fldname, isc, iec, jsc, jec, output, do_sum
       lbnd2 = lbound(dataPtr2d,2)
 
       do j = jsc, jec
-         j1 = j + lbnd2 - jsc
-         do i = isc, iec
-            i1 = i + lbnd1 - isc
-            if (do_sum_loc) then
-               output(i,j) = output(i,j) + dataPtr2d(i1,j1)
-            else
-               output(i,j) = dataPtr2d(i1,j1)
-            endif
-         enddo
+        j1 = j + lbnd2 - jsc
+        do i = isc, iec
+          i1 = i + lbnd1 - isc
+          if (do_sum_loc) then
+            output(i,j) = output(i,j) + dataPtr2d(i1,j1)
+          else
+            output(i,j) = dataPtr2d(i1,j1)
+          endif
+        enddo
       enddo
 
     endif

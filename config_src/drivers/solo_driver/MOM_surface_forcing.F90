@@ -57,7 +57,7 @@ use BFB_surface_forcing,    only : BFB_surface_forcing_init, BFB_surface_forcing
 use dumbbell_surface_forcing,    only : dumbbell_surface_forcing_init, dumbbell_surface_forcing_CS
 use dumbbell_surface_forcing, only    : dumbbell_buoyancy_forcing
 use MARBL_forcing_mod,    only : marbl_forcing_CS, MARBL_forcing_init
-use MARBL_forcing_mod,    only : convert_marbl_IOB_to_forcings
+use MARBL_forcing_mod,    only : convert_driver_fields_to_forcings
 
 implicit none ; private
 
@@ -1571,7 +1571,7 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
   real, pointer, dimension(:,:) :: noy_dep              =>NULL() !< Nitrogen deposition [kg/m^2/s ~> RZ/T]
   integer :: isc, iec, jsc, jec
 
-  ! Necessary null pointers for arguments to convert_marbl_IOB_to_forcings()
+  ! Necessary null pointers for arguments to convert_driver_fields_to_forcings()
   ! Since they are null, MARBL will not use multiple ice categories
   real, pointer, dimension(:,:)   :: afracr        =>NULL()
   real, pointer, dimension(:,:)   :: swnet_afracr  =>NULL()
@@ -1595,17 +1595,9 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
              atm_bc_flux (isc:iec,jsc:jec),          &
              seaice_bc_flux (isc:iec,jsc:jec),       &
              nhx_dep (isc:iec,jsc:jec),              &
-             noy_dep (isc:iec,jsc:jec))
+             noy_dep (isc:iec,jsc:jec),              &
+             source=0.0)
 
-  atm_co2_prog(:,:) = 0.0
-  atm_co2_diag(:,:) = 0.0
-  atm_fine_dust_flux(:,:) = 0.0
-  atm_coarse_dust_flux(:,:) = 0.0
-  atm_bc_flux(:,:) = 0.0
-  seaice_dust_flux(:,:) = 0.0
-  seaice_bc_flux(:,:) = 0.0
-  nhx_dep(:,:) = 0.0
-  noy_dep(:,:) = 0.0
 
   ! fluxes used directly as MARBL inputs
   ! (should be scaled)
@@ -1614,7 +1606,7 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
 
   ! fluxes used to compute MARBL inputs
   ! These are kept in physical units, and will be scaled appropriately in
-  ! convert_marbl_IOB_to_forcings()
+  ! convert_driver_fields_to_forcings()
   call data_override(G%Domain, 'atm_co2_prog', atm_co2_prog, day)
   call data_override(G%Domain, 'atm_co2_diag', atm_co2_diag, day)
   call data_override(G%Domain, 'atm_fine_dust_flux', atm_fine_dust_flux, day)
@@ -1625,11 +1617,11 @@ subroutine MARBL_forcing_from_data_override(fluxes, day, G, US, CS)
   call data_override(G%Domain, 'nhx_dep', nhx_dep, day)
   call data_override(G%Domain, 'noy_dep', noy_dep, day)
 
-  call convert_marbl_IOB_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
-                                     seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
-                                     nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
-                                     afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
-                                     day, G, US, 0, 0, fluxes, CS%marbl_forcing_CSp)
+  call convert_driver_fields_to_forcings(atm_fine_dust_flux, atm_coarse_dust_flux, &
+                                         seaice_dust_flux, atm_bc_flux, seaice_bc_flux, &
+                                         nhx_dep, noy_dep, atm_co2_prog, atm_co2_diag, &
+                                         afracr, swnet_afracr, ifrac_n, swpen_ifrac_n, &
+                                         day, G, US, 0, 0, fluxes, CS%marbl_forcing_CSp)
 
   deallocate ( atm_co2_prog,         &
                atm_co2_diag,         &

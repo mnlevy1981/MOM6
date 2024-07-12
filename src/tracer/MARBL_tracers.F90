@@ -152,11 +152,11 @@ type, public :: MARBL_tracers_CS ; private
       restoring_timescale_z_edges  !< The depths of the cell interfaces in the tracer restoring timescale file [Z ~> m]
   real, allocatable, dimension(:) :: &
       restoring_timescale_dz  !< The thickness of the cell layers in the tracer restoring timescale file [H ~> m]
-  character(len=14) :: restoring_rtau_source !< location of tracer restoring timescale data
-                                             !! valid values: file, grid_dependent
+  character(len=14) :: restoring_I_tau_source !< location of inverse restoring timescale data
+                                              !! valid values: file, grid_dependent
   character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
   type(remapping_CS) :: restoring_remapCS !< Remapping parameters and work arrays for tracer restoring / timescale
-  character(len=200) :: restoring_rtau_file !< name of [netCDF] file containing tracer restoring timescale
+  character(len=200) :: restoring_I_tau_file !< name of [netCDF] file containing inverse restoring timescale
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
 
   real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
@@ -253,8 +253,8 @@ type, public :: MARBL_tracers_CS ; private
   type(external_field), allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
   integer, allocatable :: tracer_restoring_ind(:) !< index of MARBL forcing field to copy
                                                   !! per-tracer restoring field into
-  integer, allocatable :: tracer_rtau_ind(:) !< index of MARBL forcing field to copy per-tracer
-                                             !! restoring timescale into
+  integer, allocatable :: tracer_I_tau_ind(:) !< index of MARBL forcing field to copy per-tracer
+                                              !! inverse restoring timescale into
 
   !> Memory for storing river fluxes, tracer restoring fields, and abiotic forcing
   real, allocatable :: d14c(:,:)         !< d14c forcing for abiotic DIC and carbon isotope tracer modules
@@ -262,7 +262,7 @@ type, public :: MARBL_tracers_CS ; private
                                          !! (needs to be time-integrated when passed to function!)
                                          !! (dims: i, j, tracer) [conc m s-1]
   character(len=15), allocatable :: tracer_restoring_varname(:) !< name of variable being restored
-  real, allocatable :: rtau(:,:,:)  !< 1 / restoring time scale for marbl tracers (dims: i, j, k) [1/s]
+  real, allocatable :: I_tau(:,:,:)  !< inverse restoring timescale for marbl tracers (dims: i, j, k) [1/s]
   real, allocatable, dimension(:,:,:,:) :: restoring_in  !< Restoring fields read from file
                                                          !! (dims: i, j, restoring_nz, restoring_cnt) [tracer units]
 
@@ -275,8 +275,8 @@ type, public :: MARBL_tracers_CS ; private
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
   integer :: fesedflux_nz  !< number of levels in iron sediment flux file
-  real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into [conc m/s]
-  real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into [conc m/s]
+  real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into [conc m s-1]
+  real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into [conc m s-1]
   real, allocatable, dimension(:) :: &
     fesedflux_z_edges  !< The depths of the cell interfaces in the input data [Z ~> m]
   ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
@@ -303,7 +303,7 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   character(len=256) :: log_message
   character(len=256) :: marbl_in_line(1)
   character(len=256) :: forcing_sname, field_source
-  integer :: m, n, nz, marbl_settings_in, read_error, rtau_count, fi
+  integer :: m, n, nz, marbl_settings_in, read_error, I_tau_count, fi
   logical :: chl_from_file, forcing_processed
   nz = GV%ke
   marbl_settings_in = 615
@@ -381,6 +381,8 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
       gcm_num_elements_surface_flux = 1, & ! FIXME: change to number of grid cells on MPI task
       gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), gcm_zw = GV%sInterface(2:nz+1), &
       gcm_zt = GV%sLayer, unit_system_opt = "mks", lgcm_has_global_ops = .false.) ! FIXME: add global ops
+  ! Regardless of vertical grid, MOM6 will always use GV%ke levels in all columns
+  MARBL_instances%domain%kmt = GV%ke
   if (MARBL_instances%StatusLog%labort_marbl) &
     call MARBL_instances%StatusLog%log_error_trace("MARBL_instances%init", &
         "configure_MARBL_tracers")
@@ -486,9 +488,9 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   allocate(CS%tracer_restoring_varname(CS%ntr), source='               ') ! gfortran 13.2 bug?
                                                                           ! source = '' does not blank out strings
   allocate(CS%tracer_restoring_ind(CS%ntr), source=-1)
-  allocate(CS%tracer_rtau_ind(CS%ntr), source=-1)
+  allocate(CS%tracer_I_tau_ind(CS%ntr), source=-1)
   CS%restore_count = 0
-  rtau_count = 0
+  I_tau_count = 0
   do m=1,size(MARBL_instances%interior_tendency_forcings)
     select case (trim(MARBL_instances%interior_tendency_forcings(m)%metadata%varname))
       case('Dust Flux')
@@ -522,8 +524,8 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
           fi = index(MARBL_instances%interior_tendency_forcings(m)%metadata%varname, &
               'Restoring Inverse Timescale')
           if (fi > 0) then
-            rtau_count = rtau_count + 1
-            CS%tracer_rtau_ind(rtau_count) = m
+            I_tau_count = I_tau_count + 1
+            CS%tracer_I_tau_ind(I_tau_count) = m
           else
             write(log_message, "(A,1X,A)") &
                 trim(MARBL_instances%interior_tendency_forcings(m)%metadata%varname), &
@@ -621,8 +623,8 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
     endif
     ! ** Scale factor for FESEDFLUX
     call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
-        "Conversion factor between FESEDFLUX file and MARBL units", &
-        units="umol/m^2/d -> mmol/m^2/s", default=0.001/86400.)
+        "Conversion factor between FESEDFLUX file units and MARBL units", &
+        units="umol m-1 d-1 -> mmol m-2 s-1", default=0.001/86400.)
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
@@ -706,8 +708,8 @@ endif
     case("file")
       call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_FILE", CS%restoring_file, &
           "File containing fields to restore MARBL tracers towards")
-      call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_SOURCE", &
-          CS%restoring_rtau_source, "Source of data for  1/timescale for restoring MARBL tracers")
+      call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_I_TAU_SOURCE", &
+          CS%restoring_I_tau_source, "Source of data for  inverse timescale for restoring MARBL tracers")
 
       ! Initialize remapping type
       call initialize_remapping(CS%restoring_remapCS, 'PCM', boundary_extrapolation=.false., answer_date=99991231)
@@ -721,13 +723,13 @@ endif
         CS%restoring_dz(k) = (CS%restoring_z_edges(k) - CS%restoring_z_edges(kbot)) * GV%Z_to_H
       enddo
 
-      select case(CS%restoring_rtau_source)
+      select case(CS%restoring_I_tau_source)
         case("file")
-          call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_RTAU_FILE", &
-              CS%restoring_rtau_file, &
+          call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_I_TAU_FILE", &
+              CS%restoring_I_tau_file, &
               "File containing the inverse timescale for restoring MARBL tracers")
           ! Set up array for thicknesses in restoring timescale file
-          call read_Z_edges(CS%restoring_rtau_file, "RTAU", CS%restoring_timescale_z_edges, &
+          call read_Z_edges(CS%restoring_I_tau_file, "I_TAU", CS%restoring_timescale_z_edges, &
               CS%restoring_timescale_nz, restoring_timescale_has_edges, &
               restoring_timescale_use_missing, restoring_timescale_missing, scale=US%m_to_Z)
           allocate(CS%restoring_timescale_dz(CS%restoring_timescale_nz))
@@ -737,8 +739,8 @@ endif
                 CS%restoring_timescale_z_edges(kbot)) * GV%Z_to_H
           enddo
         case DEFAULT
-          write(log_message, "(3A)") "'", trim(CS%restoring_rtau_source), &
-              "' is not a valid option for MARBL_TRACER_RESTORING_RTAU_SOURCE"
+          write(log_message, "(3A)") "'", trim(CS%restoring_I_tau_source), &
+              "' is not a valid option for MARBL_TRACER_RESTORING_I_TAU_SOURCE"
           call MOM_error(FATAL, log_message)
      end select
     case DEFAULT
@@ -1067,7 +1069,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   endif
 
   ! Initialize external field for restoring
-  if (CS%restoring_rtau_source == "file") then
+  if (CS%restoring_I_tau_source == "file") then
     select case(CS%restoring_source)
       case("file")
         ! Set up array for reading in raw restoring data
@@ -1077,10 +1079,10 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
               trim(CS%tracer_restoring_varname(m)), domain=G%Domain%mpp_domain)
         enddo
     end select
-    select case(CS%restoring_rtau_source)
+    select case(CS%restoring_I_tau_source)
       case("file")
-        allocate(CS%rtau(SZI_(G), SZJ_(G), CS%restoring_timescale_nz), source=0.)
-        call MOM_read_data(CS%restoring_rtau_file, "RTAU", CS%rtau(:,:,:), G%Domain)
+        allocate(CS%I_tau(SZI_(G), SZJ_(G), CS%restoring_timescale_nz), source=0.)
+        call MOM_read_data(CS%restoring_I_tau_file, "RTAU", CS%I_tau(:,:,:), G%Domain)
     end select
   endif
 
@@ -1116,13 +1118,24 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
     else ! 3D field
       ! TODO: MARBL should provide v_extensive through MARBL_diags
       !       (for now, FESEDFLUX is the only one that should be true)
-      id_diags(m)%id = register_diag_field("ocean_model", &
-        trim(MARBL_diags%diags(m)%short_name), &
-        diag%axesTL, & ! T=> tracer grid? L => layer center
-        day, &
-        trim(MARBL_diags%diags(m)%long_name), &
-        trim(MARBL_diags%diags(m)%units), &
-        v_extensive=(trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX"))
+      !       Also, known issue where passing v_extensive=.false. isn't
+      !       treated the same as not passing v_extensive
+      if (trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX") then
+        id_diags(m)%id = register_diag_field("ocean_model", &
+          trim(MARBL_diags%diags(m)%short_name), &
+          diag%axesTL, & ! T=> tracer grid? L => layer center
+          day, &
+          trim(MARBL_diags%diags(m)%long_name), &
+          trim(MARBL_diags%diags(m)%units), &
+          v_extensive=.true.)
+      else
+        id_diags(m)%id = register_diag_field("ocean_model", &
+          trim(MARBL_diags%diags(m)%short_name), &
+          diag%axesTL, & ! T=> tracer grid? L => layer center
+          day, &
+          trim(MARBL_diags%diags(m)%long_name), &
+          trim(MARBL_diags%diags(m)%units))
+      endif
       if (id_diags(m)%id > 0) allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)), source=0.0)
     endif
   enddo
@@ -1231,7 +1244,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
   if (.not.associated(CS)) return
-  if (CS%ntr < 1) return
 
   ! (1) Compute surface fluxes
   ! FIXME: MARBL can handle computing surface fluxes for all columns simultaneously
@@ -1418,8 +1430,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       if (G%mask2dT(i,j) == 0) cycle
 
       ! ii. Set up vertical domain and bot_flux_to_tend
-      !     TODO: why doesn't ke have (i,j) coordinate?
-      MARBL_instances%domain%kmt = GV%ke
       ! Calculate depth of interface by building up thicknesses from the bottom (top interface is always 0)
       ! MARBL wants this to be positive-down
       zi(GV%ke) = G%bathyT(i,j)
@@ -1494,11 +1504,11 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
             MARBL_instances%interior_tendency_forcings(CS%tracer_restoring_ind(m))%field_1d(1,:))
         if (m==1) then
           call remapping_core_h(CS%restoring_remapCS, CS%restoring_timescale_nz, &
-              CS%restoring_timescale_dz(:), CS%rtau(i,j,:), GV%ke, dz(:), &
-              MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:))
+              CS%restoring_timescale_dz(:), CS%I_tau(i,j,:), GV%ke, dz(:), &
+              MARBL_instances%interior_tendency_forcings(CS%tracer_I_tau_ind(m))%field_1d(1,:))
         else
-          MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(m))%field_1d(1,:) = &
-              MARBL_instances%interior_tendency_forcings(CS%tracer_rtau_ind(1))%field_1d(1,:)
+          MARBL_instances%interior_tendency_forcings(CS%tracer_I_tau_ind(m))%field_1d(1,:) = &
+              MARBL_instances%interior_tendency_forcings(CS%tracer_I_tau_ind(1))%field_1d(1,:)
         endif
       enddo
 
@@ -1527,7 +1537,6 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         MARBL_instances%interior_tendency_forcings(CS%remin_scalef_ind)%field_1d(1,:) = 1.
 
       !      * Column Tracers
-      !        NOTE: POP averages previous two timesteps, should we do that too?
       do m=1,CS%ntr
         MARBL_instances%tracers(m, :) = CS%tracer_data(m)%tr(i,j,:)
       enddo
@@ -1686,7 +1695,7 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
   type(ocean_grid_type),   intent(in)    :: G         !< The ocean's grid structure.
   type(MARBL_tracers_CS),  pointer       :: CS        !< The control structure returned by a
 
-  ! These are Fortran parameters in POP
+  ! Fraction of river nutrients in refractory pools
   real, parameter :: DONriv_refract = 0.1
   real, parameter :: DOCriv_refract = 0.2
   real, parameter :: DOPriv_refract = 0.025
@@ -1961,10 +1970,10 @@ subroutine MARBL_tracers_end(CS)
     if (allocated(CS%RIV_FLUXES)) deallocate(CS%RIV_FLUXES)
     if (allocated(CS%SFO)) deallocate(CS%SFO)
     if (allocated(CS%tracer_restoring_ind)) deallocate(CS%tracer_restoring_ind)
-    if (allocated(CS%tracer_rtau_ind)) deallocate(CS%tracer_rtau_ind)
+    if (allocated(CS%tracer_I_tau_ind)) deallocate(CS%tracer_I_tau_ind)
     if (allocated(CS%fesedflux_in)) deallocate(CS%fesedflux_in)
     if (allocated(CS%feventflux_in)) deallocate(CS%feventflux_in)
-    if (allocated(CS%rtau)) deallocate(CS%rtau)
+    if (allocated(CS%I_tau)) deallocate(CS%I_tau)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end

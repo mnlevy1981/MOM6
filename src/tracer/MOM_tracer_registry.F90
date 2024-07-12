@@ -726,7 +726,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
                               intent(in) :: h_diag !< Layer thicknesses on which to post fields [H ~> m or kg m-2]
   type(diag_ctrl),            intent(in) :: diag !< structure to regulate diagnostic output
 
-  integer :: i, j, k, is, ie, js, je, nz, m,khi
+  integer :: i, j, k, is, ie, js, je, nz, m, khi
   real    :: frac_under_100m(SZI_(G),SZJ_(G),SZK_(GV))
   real    :: work2d(SZI_(G),SZJ_(G)), ztop(SZI_(G),SZJ_(G)), zbot(SZI_(G),SZJ_(G))
   type(tracer_type), pointer :: Tr=>NULL()
@@ -735,6 +735,9 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
 
   ! If any tracers are posting 100m vertical integrals, compute weights
   frac_under_100m(:,:,:) = 0.0
+  ! khi will be the largest layer index corresponding where ztop < 100m and ztop >= 100m
+  ! in any column (we can reduce computation of 100m integrals by only looping through khi
+  ! rather than GV%ke)
   khi = 0
   do m=1,Reg%ntr ; if (Reg%Tr(m)%registry_diags) then
     Tr => Reg%Tr(m)
@@ -761,7 +764,7 @@ subroutine post_tracer_transport_diagnostics(G, GV, Reg, h_diag, diag)
 
   do m=1,Reg%ntr ; if (Reg%Tr(m)%registry_diags) then
     Tr => Reg%Tr(m)
-    if (Tr%id_tr_post_horzn> 0) call post_data(Tr%id_tr_post_horzn, Tr%t, diag) ! Tr%t is tracer concentration
+    if (Tr%id_tr_post_horzn> 0) call post_data(Tr%id_tr_post_horzn, Tr%t, diag)
     if (Tr%id_adx > 0) call post_data(Tr%id_adx, Tr%ad_x, diag, alt_h=h_diag)
     if (Tr%id_ady > 0) call post_data(Tr%id_ady, Tr%ad_y, diag, alt_h=h_diag)
     if (Tr%id_dfx > 0) call post_data(Tr%id_dfx, Tr%df_x, diag, alt_h=h_diag)
