@@ -7,7 +7,7 @@ module MARBL_tracers
 
 ! This file is part of MOM6. See LICENSE.md for the license.
 
-use MOM_coms,            only : root_PE, broadcast
+use MOM_coms,            only : EFP_type, root_PE, broadcast
 use MOM_debugging,       only : hchksum
 use MOM_diag_mediator,   only : diag_ctrl
 use MOM_error_handler,   only : is_root_PE, MOM_error, FATAL, WARNING, NOTE
@@ -22,6 +22,7 @@ use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_remapping,       only : reintegrate_column
 use MOM_remapping,       only : remapping_CS, initialize_remapping, remapping_core_h
 use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
+use MOM_spatial_means,   only : global_mass_int_EFP
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
 use MOM_tracer_registry, only : register_tracer
@@ -50,7 +51,7 @@ implicit none ; private
 public register_MARBL_tracers, initialize_MARBL_tracers
 public MARBL_tracers_column_physics, MARBL_tracers_surface_state
 public MARBL_tracers_set_forcing
-public MARBL_tracer_stock, MARBL_tracers_get, MARBL_tracers_end
+public MARBL_tracers_stock, MARBL_tracers_get, MARBL_tracers_end
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -1844,26 +1845,26 @@ end subroutine MARBL_tracers_set_forcing
 !> This function calculates the mass-weighted integral of all tracer stocks,
 !! returning the number of stocks it has calculated.  If the stock_index
 !! is present, only the stock corresponding to that coded index is returned.
-function MARBL_tracer_stock(h, stocks, G, GV, CS, names, units, stock_index)
-  real, dimension(NIMEM_,NJMEM_,NKMEM_), intent(in) :: h    !< Layer thicknesses [H ~> m or kg m-2]
-  real, dimension(:),                 intent(out)   :: stocks !< the mass-weighted integrated amount of
-                                                            !! each tracer, in kg times concentration units [kg conc].
-  type(ocean_grid_type),              intent(in)    :: G    !< The ocean's grid structure
-  type(verticalGrid_type),            intent(in)    :: GV   !< The ocean's vertical grid structure
-  type(MARBL_tracers_CS),                pointer       :: CS   !< The control structure returned by a
-                                                            !! previous call to register_MARBL_tracers.
-  character(len=*), dimension(:),     intent(out)   :: names !< the names of the stocks calculated.
-  character(len=*), dimension(:),     intent(out)   :: units !< the units of the stocks calculated.
-  integer, optional,                  intent(in)    :: stock_index !< the coded index of a specific stock
-                                                                   !! being sought.
-  integer                                           :: MARBL_tracer_stock   !< Return value: the number of stocks
-                                                                   !! calculated here.
+function MARBL_tracers_stock(h, stocks, G, GV, CS, names, units, stock_index)
+  real, dimension(NIMEM_,NJMEM_,NKMEM_), intent(in)    :: h      !< Layer thicknesses [H ~> m or kg m-2]
+  type(EFP_type), dimension(:),          intent(out)   :: stocks !< the mass-weighted integrated amount of
+                                                                 !! each tracer, in kg times concentration units [kg conc].
+  type(ocean_grid_type),                 intent(in)    :: G      !< The ocean's grid structure
+  type(verticalGrid_type),               intent(in)    :: GV     !< The ocean's vertical grid structure
+  type(MARBL_tracers_CS),                pointer       :: CS     !< The control structure returned by a
+                                                                 !! previous call to register_MARBL_tracers.
+  character(len=*), dimension(:),        intent(out)   :: names  !< the names of the stocks calculated.
+  character(len=*), dimension(:),        intent(out)   :: units  !< the units of the stocks calculated.
+  integer, optional,                     intent(in)    :: stock_index !< the coded index of a specific stock
+                                                                      !! being sought.
+  integer                                              :: MARBL_tracers_stock   !< Return value: the number of stocks
+                                                                                !! calculated here.
 
 ! Local variables
   integer :: i, j, k, is, ie, js, je, nz, m
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
-  MARBL_tracer_stock = 0
+  MARBL_tracers_stock = 0
   if (.not.associated(CS)) return
   if (CS%ntr < 1) return
 
@@ -1875,18 +1876,13 @@ function MARBL_tracer_stock(h, stocks, G, GV, CS, names, units, stock_index)
   endif ; endif
 
   do m=1,CS%ntr
-    call query_vardesc(CS%tr_desc(m), name=names(m), units=units(m), caller="MARBL_tracer_stock")
+    call query_vardesc(CS%tr_desc(m), name=names(m), units=units(m), caller="MARBL_tracers_stock")
     units(m) = trim(units(m))//" kg"
-    stocks(m) = 0.0
-    do k=1,nz ; do j=js,je ; do i=is,ie
-      stocks(m) = stocks(m) + CS%tracer_data(m)%tr(i,j,k) * (G%mask2dT(i,j) * G%areaT(i,j) * &
-          h(i,j,k))
-    enddo ; enddo ; enddo
-    stocks(m) = GV%H_to_kg_m2 * stocks(m)
+    stocks(m) = global_mass_int_EFP(h, G, GV, CS%tracer_data(m)%tr(:,:,:), on_PE_only=.true.)
   enddo
-  MARBL_tracer_stock = CS%ntr
+  MARBL_tracers_stock = CS%ntr
 
-end function MARBL_tracer_stock
+end function MARBL_tracers_stock
 
 !> This subroutine extracts the surface fields from this tracer package that
 !! are to be shared with the atmosphere in coupled configurations.

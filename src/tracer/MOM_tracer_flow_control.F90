@@ -41,7 +41,7 @@ use ideal_age_example, only : ideal_age_stock, ideal_age_example_end, ideal_age_
 use MARBL_tracers, only : register_MARBL_tracers, initialize_MARBL_tracers
 use MARBL_tracers, only : MARBL_tracers_column_physics, MARBL_tracers_set_forcing
 use MARBL_tracers, only : MARBL_tracers_surface_state, MARBL_tracers_get
-use MARBL_tracers, only : MARBL_tracers_end, MARBL_tracers_CS
+use MARBL_tracers, only : MARBL_tracers_stock, MARBL_tracers_end, MARBL_tracers_CS
 use regional_dyes, only : register_dye_tracer, initialize_dye_tracer
 use regional_dyes, only : dye_tracer_column_physics, dye_tracer_surface_state
 use regional_dyes, only : dye_stock, regional_dyes_end, dye_tracer_CS
@@ -721,6 +721,12 @@ subroutine call_tracer_stocks(h, stock_values, G, GV, US, CS, stock_names, stock
     ns = ideal_age_stock(h, values_EFP, G, GV, CS%ideal_age_tracer_CSp, &
                          names, units, stock_index)
     call store_stocks("ideal_age_example", ns, names, units, values_EFP, index, stock_val_EFP, &
+                      set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
+  endif
+  if (CS%use_MARBL_tracers) then
+    ns = MARBL_tracers_stock(h, values_EFP, G, GV, CS%MARBL_tracers_CSp, &
+                             names, units, stock_index)
+    call store_stocks("MARBL_tracers", ns, names, units, values_EFP, index, stock_val_EFP, &
                       set_pkg_name, max_ns, ns_tot, stock_names, stock_units)
   endif
   if (CS%use_regional_dyes) then
