@@ -17,6 +17,9 @@ use MOM_grid,            only : ocean_grid_type
 use MOM_interpolate,     only : external_field, init_external_field, time_interp_external
 use MOM_CVMix_KPP,       only : KPP_NonLocalTransport, KPP_CS
 use MOM_hor_index,       only : hor_index_type
+use MOM_interpolate,     only : forcing_timeseries_dataset
+use MOM_interpolate,     only : forcing_timeseries_set_time_type_vars
+use MOM_interpolate,     only : map_model_time_to_forcing_time
 use MOM_io,              only : file_exists, MOM_read_data, slasher, vardesc, var_desc, query_vardesc
 use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_remapping,       only : reintegrate_column
@@ -29,9 +32,6 @@ use MOM_tracer_registry, only : register_tracer
 use MOM_tracer_types,    only : tracer_type, tracer_registry_type
 use MOM_tracer_diabatic, only : tracer_vertdiff, applyTracerBoundaryFluxesInOut
 use MOM_tracer_initialization_from_Z, only : MOM_initialize_tracer_from_Z
-use tracer_forcing_utils_mod, only : forcing_timeseries_dataset
-use tracer_forcing_utils_mod, only : forcing_timeseries_set_time_type_vars
-use tracer_forcing_utils_mod, only : map_model_time_to_forcing_time
 use MOM_tracer_Z_init,   only : read_Z_edges
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface, thermo_var_ptrs
