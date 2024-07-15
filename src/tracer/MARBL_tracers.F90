@@ -1851,7 +1851,8 @@ end subroutine MARBL_tracers_set_forcing
 function MARBL_tracers_stock(h, stocks, G, GV, CS, names, units, stock_index)
   real, dimension(NIMEM_,NJMEM_,NKMEM_), intent(in)    :: h      !< Layer thicknesses [H ~> m or kg m-2]
   type(EFP_type), dimension(:),          intent(out)   :: stocks !< the mass-weighted integrated amount of
-                                                                 !! each tracer, in kg times concentration units [kg conc].
+                                                                 !! each tracer, in kg times concentration units
+                                                                 !! [kg conc].
   type(ocean_grid_type),                 intent(in)    :: G      !< The ocean's grid structure
   type(verticalGrid_type),               intent(in)    :: GV     !< The ocean's vertical grid structure
   type(MARBL_tracers_CS),                pointer       :: CS     !< The control structure returned by a
