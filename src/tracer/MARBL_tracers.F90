@@ -540,7 +540,7 @@ end subroutine configure_MARBL_tracers
 
 !> This subroutine is used to register tracer fields and subroutines
 !! to be used with MOM.
-function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
+function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS, MARBL_computes_chl)
   type(hor_index_type),       intent(in) :: HI   !< A horizontal index type structure.
   type(verticalGrid_type),    intent(in) :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),      intent(in) :: US   !< A dimensional unit scaling type
@@ -550,6 +550,8 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   type(tracer_registry_type), pointer    :: tr_Reg !< A pointer that is set to point to the control
                                                  !! structure for the tracer advection and diffusion module.
   type(MOM_restart_CS), target, intent(inout) :: restart_CS !< MOM restart control struct
+  logical,                      intent(out)   :: MARBL_computes_chl  !< If MARBL is computing chlorophyll, MOM
+                                                                     !! may use it to compute SW penetration
 
 ! Local variables
 ! This include declares and sets the variable "version".
@@ -581,6 +583,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS)
   allocate(CS)
 
   call configure_MARBL_tracers(GV, US, param_file, CS)
+  MARBL_computes_chl = CS%base_bio_on
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")

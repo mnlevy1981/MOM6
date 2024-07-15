@@ -100,6 +100,7 @@ type, public :: tracer_flow_control_CS ; private
   logical :: use_boundary_impulse_tracer = .false. !< If true, use the boundary impulse tracer package
   logical :: use_dyed_obc_tracer = .false.         !< If true, use the dyed OBC tracer package
   logical :: use_nw2_tracers = .false.             !< If true, use the NW2 tracer package
+  logical :: get_chl_from_MARBL = .false.          !< If true, use the MARBL-provided Chl for shortwave penetration
   !>@{ Pointers to the control strucures for the tracer packages
   type(USER_tracer_example_CS), pointer :: USER_tracer_example_CSp => NULL()
   type(DOME_tracer_CS), pointer :: DOME_tracer_CSp => NULL()
@@ -254,7 +255,7 @@ subroutine call_tracer_register(G, GV, US, param_file, CS, tr_Reg, restart_CS)
                               tr_Reg, restart_CS)
   if (CS%use_MARBL_tracers) CS%use_MARBL_tracers = &
     register_MARBL_tracers(G%HI, GV, US, param_file,  CS%MARBL_tracers_CSp, &
-                        tr_Reg, restart_CS)
+                        tr_Reg, restart_CS, CS%get_chl_from_MARBL)
   if (CS%use_regional_dyes) CS%use_regional_dyes = &
     register_dye_tracer(G%HI, GV, US, param_file, CS%dye_tracer_CSp, &
                         tr_Reg, restart_CS)
@@ -401,10 +402,10 @@ subroutine get_chl_from_model(Chl_array, G, GV, CS)
   type(tracer_flow_control_CS), pointer     :: CS        !< The control structure returned by a
                                                          !! previous call to call_tracer_register.
 
-  if (CS%use_MOM_generic_tracer) then
-    call MOM_generic_tracer_get('chl', 'field', Chl_array, CS%MOM_generic_tracer_CSp)
-  elseif (CS%use_MARBL_tracers) then
+  if (CS%get_chl_from_MARBL) then
     call MARBL_tracers_get('Chl', G, GV, Chl_array, CS%MARBL_tracers_CSp)
+  elseif (CS%use_MOM_generic_tracer) then
+    call MOM_generic_tracer_get('chl', 'field', Chl_array, CS%MOM_generic_tracer_CSp)
   else
     call MOM_error(FATAL, "get_chl_from_model was called in a configuration "// &
              "that is unable to provide a sensible model-based value.\n"// &
