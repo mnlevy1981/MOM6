@@ -39,13 +39,13 @@ type, public :: marbl_forcing_CS
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
                                              !! regulate the timing of diagnostic output.
 
-  real    :: dust_ratio_thres               !< TODO: Add description
-  real    :: dust_ratio_to_fe_bioavail_frac !< TODO: Add description
-  real    :: fe_bioavail_frac_offset        !< TODO: Add description
-  real    :: atm_fe_to_bc_ratio             !< TODO: Add description
-  real    :: atm_bc_fe_bioavail_frac        !< TODO: Add description
-  real    :: seaice_fe_to_bc_ratio          !< TODO: Add description
-  real    :: seaice_bc_fe_bioavail_frac     !< TODO: Add description
+  real    :: dust_ratio_thres               !< coarse/fine dust ratio threshold
+  real    :: dust_ratio_to_fe_bioavail_frac !< ratio of dust to iron bioavailability fraction
+  real    :: fe_bioavail_frac_offset        !< offset for iron bioavailability fraction
+  real    :: atm_fe_to_bc_ratio             !< atmospheric iron to black carbon ratio
+  real    :: atm_bc_fe_bioavail_frac        !< atmospheric black carbon to iron bioavailablity fraction ratio
+  real    :: seaice_fe_to_bc_ratio          !< sea-ice iron to black carbon ratio
+  real    :: seaice_bc_fe_bioavail_frac     !< sea-ice black carbon to iron bioavailablity fraction ratio
   real    :: iron_frac_in_atm_fine_dust     !< Fraction of fine dust from the atmosphere that is iron
   real    :: iron_frac_in_atm_coarse_dust   !< Fraction of coarse dust from the atmosphere that is iron
   real    :: iron_frac_in_seaice_dust       !< Fraction of dust from the sea ice that is iron
