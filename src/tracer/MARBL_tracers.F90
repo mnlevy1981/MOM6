@@ -1402,7 +1402,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         h_work(i,j,k) = h_old(i,j,k)
       enddo ; enddo ; enddo
       ! CS%RIV_FLUXES is conc m/s, in_flux_optional expects time-integrated flux (conc H)
-      riv_flux_loc = (CS%RIV_FLUXES(:,:,m) * (dt*US%T_to_s)) * GV%m_to_H
+      do j=js,je ; do i=is,ie
+        riv_flux_loc(i,j) = (CS%RIV_FLUXES(i,j,m) * (dt*US%T_to_s)) * GV%m_to_H
+      enddo ; enddo
       if (CS%debug) &
         call hchksum(riv_flux_loc(:,:), &
             trim(MARBL_instances%tracer_metadata(m)%short_name)//' riv flux', G%HI, scale=GV%H_to_m)
@@ -1706,7 +1708,9 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
 
   real, dimension(SZI_(G),SZJ_(G)) :: riv_flux_in  !< The field read in from forcing file with time dimension
   type(time_type) :: Time_forcing  !< For reading river flux fields, we use a modified version of Time
-  integer :: i,j,k,m
+  integer :: i, j, k, is, ie, js, je, m
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
 
   ! Abiotic DIC forcing
   if (CS%abio_dic_on) then
@@ -1717,17 +1721,15 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
     enddo
 
     ! Set d14c according to the bands
-    do j=G%jsc, G%jec
-      do i=G%isc, G%iec
-        if (G%geoLatT(i,j) > 30.) then
-          CS%d14c(i,j) = CS%d14c_bands(1)
-        elseif (G%geoLatT(i,j) > -30.) then
-          CS%d14c(i,j) = CS%d14c_bands(2)
-        else
-          CS%d14c(i,j) = CS%d14c_bands(3)
-        endif
-      enddo
-    enddo
+    do j=js,je ; do i=is,ie
+      if (G%geoLatT(i,j) > 30.) then
+        CS%d14c(i,j) = CS%d14c_bands(1)
+      elseif (G%geoLatT(i,j) > -30.) then
+        CS%d14c(i,j) = CS%d14c_bands(2)
+      else
+        CS%d14c(i,j) = CS%d14c_bands(3)
+      endif
+    enddo ; enddo
   endif
 
   ! River fluxes
@@ -1737,72 +1739,121 @@ subroutine MARBL_tracers_set_forcing(day_start, G, CS)
 
     ! DIN river flux affects NO3, ALK, and ALK_ALT_CO2
     call time_interp_external(CS%id_din_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%no3_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%no3_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
-    if (CS%tracer_inds%alk_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) - &
-          riv_flux_in(:,:)
-    if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = &
-          CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) - riv_flux_in(:,:)
+
+    if (CS%tracer_inds%no3_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%no3_ind) = G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%alk_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_ind) - &
+            G%mask2dT(i,j) *riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%alk_alt_co2_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_alt_co2_ind) = &
+            CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_alt_co2_ind) - G%mask2dT(i,j) *riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_dip_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%po4_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%po4_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%po4_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%po4_ind) = G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_don_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%don_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%don_ind) = G%mask2dT(:,:) * (1. - DONriv_refract) * &
-          riv_flux_in(:,:)
-    if (CS%tracer_inds%donr_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%donr_ind) = G%mask2dT(:,:) * DONriv_refract * &
-          riv_flux_in(:,:)
+    if (CS%tracer_inds%don_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%don_ind) = G%mask2dT(i,j) * (1. - DONriv_refract) * &
+            riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%donr_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%donr_ind) = G%mask2dT(i,j) * DONriv_refract * &
+            riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_dop_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%dop_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%dop_ind) = G%mask2dT(:,:) * (1. - DOPriv_refract) * &
-          riv_flux_in(:,:)
-    if (CS%tracer_inds%dopr_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%dopr_ind) = G%mask2dT(:,:) * DOPriv_refract * &
-          riv_flux_in(:,:)
+    if (CS%tracer_inds%dop_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%dop_ind) = G%mask2dT(i,j) * (1. - DOPriv_refract) * &
+            riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%dopr_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%dopr_ind) = G%mask2dT(i,j) * DOPriv_refract * &
+            riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_dsi_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%sio3_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%sio3_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%sio3_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%sio3_ind) = G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_dfe_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%fe_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%fe_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%fe_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%fe_ind) = G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_dic_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%dic_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
-    if (CS%tracer_inds%dic_alt_co2_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%dic_alt_co2_ind) = G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%dic_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%dic_ind) = G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%dic_alt_co2_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%dic_alt_co2_ind) = G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_alk_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%alk_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_ind) + &
-          riv_flux_in(:,:)
-    if (CS%tracer_inds%alk_alt_co2_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) = &
-          CS%RIV_FLUXES(:,:,CS%tracer_inds%alk_alt_co2_ind) + G%mask2dT(:,:) * riv_flux_in(:,:)
+    if (CS%tracer_inds%alk_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_ind) = CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_ind) + &
+            G%mask2dT(i,j) *riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%alk_alt_co2_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_alt_co2_ind) = &
+            CS%RIV_FLUXES(i,j,CS%tracer_inds%alk_alt_co2_ind) + G%mask2dT(i,j) * riv_flux_in(i,j)
+      enddo ; enddo
+    endif
 
     call time_interp_external(CS%id_doc_riv,Time_forcing,riv_flux_in)
-    if (CS%tracer_inds%doc_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%doc_ind) = G%mask2dT(:,:) * (1. - DOCriv_refract) * &
-          riv_flux_in(:,:)
-    if (CS%tracer_inds%docr_ind > 0) &
-      CS%RIV_FLUXES(:,:,CS%tracer_inds%docr_ind) = G%mask2dT(:,:) * DOCriv_refract * &
-          riv_flux_in(:,:)
+    if (CS%tracer_inds%doc_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%doc_ind) = G%mask2dT(i,j) * (1. - DOCriv_refract) * &
+            riv_flux_in(i,j)
+      enddo ; enddo
+    endif
+    if (CS%tracer_inds%docr_ind > 0) then
+      do j=js,je ; do i=is,ie
+        CS%RIV_FLUXES(i,j,CS%tracer_inds%docr_ind) = G%mask2dT(i,j) * DOCriv_refract * &
+            riv_flux_in(i,j)
+      enddo ; enddo
+    endif
   endif
 
   ! Tracer restoring
   do m=1,CS%restore_count
     call time_interp_external(CS%id_tracer_restoring(m),day_start,CS%restoring_in(:,:,:,m))
-    do k=1,CS%restoring_nz
-      CS%restoring_in(:,:,k,m) = G%mask2dT(:,:) * CS%restoring_in(:,:,k,m)
-    enddo
+    do k=1,CS%restoring_nz ; do j=js,je ; do i=is,ie
+      CS%restoring_in(i,j,k,m) = G%mask2dT(i,j) * CS%restoring_in(i,j,k,m)
+    enddo ; enddo ; enddo
   enddo
 
   ! Post Forcing to Diagnostics
