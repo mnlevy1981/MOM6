@@ -20,6 +20,7 @@ use MOM_io,                    only : MOM_read_data, slasher
 use MOM_MEKE_types,            only : MEKE_type
 use MOM_open_boundary,         only : ocean_OBC_type, OBC_DIRECTION_E, OBC_DIRECTION_W
 use MOM_open_boundary,         only : OBC_DIRECTION_N, OBC_DIRECTION_S, OBC_NONE
+use MOM_stochastics,           only : stochastic_CS
 use MOM_unit_scaling,          only : unit_scale_type
 use MOM_verticalGrid,          only : verticalGrid_type
 use MOM_variables,             only : accel_diag_ptrs
@@ -30,7 +31,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public horizontal_viscosity, hor_visc_init, hor_visc_end
+public horizontal_viscosity, hor_visc_init, hor_visc_end, hor_visc_vel_stencil
 
 !> Control structure for horizontal viscosity
 type, public :: hor_visc_CS ; private
@@ -241,7 +242,7 @@ contains
 !!   v[is-2:ie+2,js-2:je+2]
 !!   h[is-1:ie+1,js-1:je+1]
 subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, &
-                                CS, OBC, BT, TD, ADp)
+                                CS, OBC, BT, TD, ADp, STOCH)
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
@@ -265,6 +266,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   type(barotropic_CS), intent(in), optional  :: BT     !< Barotropic control structure
   type(thickness_diffuse_CS), intent(in), optional :: TD  !< Thickness diffusion control structure
   type(accel_diag_ptrs), intent(in), optional :: ADp   !< Acceleration diagnostics
+  type(stochastic_CS), intent(inout), optional :: STOCH !< Stochastic control structure
 
   ! Local variables
   real, dimension(SZIB_(G),SZJ_(G)) :: &
@@ -395,6 +397,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   logical :: apply_OBC = .false.
   logical :: use_MEKE_Ku
   logical :: use_MEKE_Au
+  logical :: skeb_use_frict
   integer :: is_vort, ie_vort, js_vort, je_vort  ! Loop ranges for vorticity terms
   integer :: is_Kh, ie_Kh, js_Kh, je_Kh  ! Loop ranges for thickness point viscosities
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
@@ -425,6 +428,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   inv_PI3 = 1.0/((4.0*atan(1.0))**3)
   inv_PI2 = 1.0/((4.0*atan(1.0))**2)
   inv_PI6 = inv_PI3 * inv_PI3
+
+  skeb_use_frict = .false.
+  if (present(STOCH)) skeb_use_frict = STOCH%skeb_use_frict
 
   m_leithy(:,:) = 0.0 ! Initialize
 
@@ -588,12 +594,12 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
   !$OMP   CS, G, GV, US, OBC, VarMix, MEKE, u, v, h, &
   !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, is_vort, ie_vort, js_vort, je_vort, &
   !$OMP   is_Kh, ie_Kh, js_Kh, je_Kh, apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, &
-  !$OMP   use_MEKE_Ku, use_MEKE_Au, u_smooth, v_smooth, &
+  !$OMP   use_MEKE_Ku, use_MEKE_Au, u_smooth, v_smooth, skeb_use_frict, &
   !$OMP   backscat_subround, GME_effic_h, GME_effic_q, &
   !$OMP   h_neglect, h_neglect3, inv_PI3, inv_PI6, &
   !$OMP   diffu, diffv, Kh_h, Kh_q, Ah_h, Ah_q, FrictWork, FrictWork_GME, &
   !$OMP   div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, GME_coeff_h, GME_coeff_q, &
-  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt &
+  !$OMP   KH_u_GME, KH_v_GME, grid_Re_Kh, grid_Re_Ah, NoSt, ShSt, STOCH &
   !$OMP ) &
   !$OMP private( &
   !$OMP   i, j, k, n, &
@@ -1192,10 +1198,9 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
       if ((CS%Smagorinsky_Ah) .or. (CS%Leith_Ah) .or. (CS%use_Leithy)) then
         if (CS%Smagorinsky_Ah) then
           if (CS%bound_Coriolis) then
-           do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+            do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
               AhSm = Shear_mag(i,j) * (CS%Biharm_const_xx(i,j) &
-                  + CS%Biharm_const2_xx(i,j) * Shear_mag(i,j) &
-              )
+                  + CS%Biharm_const2_xx(i,j) * Shear_mag(i,j))
               Ah(i,j) = max(Ah(i,j), AhSm)
             enddo ; enddo
           else
@@ -1426,10 +1431,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
     ! Pass the velocity gradients and thickness to ZB2020
     if (CS%use_ZB2020) then
-      call ZB2020_copy_gradient_and_thickness( &
-           sh_xx, sh_xy, vort_xy,              &
-           hq,                                 &
-           G, GV, CS%ZB2020, k)
+      call ZB2020_copy_gradient_and_thickness(sh_xx, sh_xy, vort_xy, hq, G, GV, CS%ZB2020, k)
     endif
 
     if (CS%Laplacian) then
@@ -1569,8 +1571,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
           if (CS%bound_Coriolis) then
             do J=js-1,Jeq ; do I=is-1,Ieq
               AhSm = Shear_mag(I,J) * (CS%Biharm_const_xy(I,J) &
-                  + CS%Biharm_const2_xy(I,J) * Shear_mag(I,J) &
-              )
+                  + CS%Biharm_const2_xy(I,J) * Shear_mag(I,J))
               Ah(I,J) = max(Ah(I,J), AhSm)
             enddo ; enddo
           else
@@ -1599,8 +1600,7 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
         ! *Add* the MEKE contribution
         do J=js-1,Jeq ; do I=is-1,Ieq
           Ah(I,J) = Ah(I,J) + 0.25 * ( &
-              (MEKE%Au(i,j) + MEKE%Au(i+1,j+1)) + (MEKE%Au(i+1,j) + MEKE%Au(i,j+1)) &
-          )
+              (MEKE%Au(i,j) + MEKE%Au(i+1,j+1)) + (MEKE%Au(i+1,j) + MEKE%Au(i,j+1)) )
         enddo ; enddo
       endif
 
@@ -1786,6 +1786,12 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
                     + (v(i+1,J-1,k)-v(i,J-1,k))*G%IdxBu(I,J-1)) ) ) )
     enddo ; enddo ; endif
 
+    if (skeb_use_frict) then ; do j=js,je ; do i=is,ie
+      ! Note that the sign convention is FrictWork < 0 means energy dissipation.
+      STOCH%skeb_diss(i,j,k) = STOCH%skeb_diss(i,j,k) - STOCH%skeb_frict_coef * &
+                               FrictWork(i,j,k) / (GV%H_to_RZ * (h(i,j,k) + h_neglect))
+    enddo ; enddo ; endif
+
     ! Make a similar calculation as for FrictWork above but accumulating into
     ! the vertically integrated MEKE source term, and adjusting for any
     ! energy loss seen as a reduction in the (biharmonic) frictional source term.
@@ -1885,11 +1891,15 @@ subroutine horizontal_viscosity(u, v, h, diffu, diffv, MEKE, VarMix, G, GV, US, 
 
   if (CS%debug) then
     if (CS%Laplacian) then
+      ! In symmetric memory mode, Kh_h should also be valid with a haloshift of 1.
       call hchksum(Kh_h, "Kh_h", G%HI, haloshift=0, scale=US%L_to_m**2*US%s_to_T)
-      call Bchksum(Kh_q, "Kh_q", G%HI, haloshift=0, scale=US%L_to_m**2*US%s_to_T)
+      call Bchksum(Kh_q, "Kh_q", G%HI, haloshift=0, symmetric=.true., scale=US%L_to_m**2*US%s_to_T)
     endif
-    if (CS%biharmonic) call hchksum(Ah_h, "Ah_h", G%HI, haloshift=0, scale=US%L_to_m**4*US%s_to_T)
-    if (CS%biharmonic) call Bchksum(Ah_q, "Ah_q", G%HI, haloshift=0, scale=US%L_to_m**4*US%s_to_T)
+    if (CS%biharmonic) then
+      ! In symmetric memory mode, Ah_h should also be valid with a haloshift of 1.
+      call hchksum(Ah_h, "Ah_h", G%HI, haloshift=0, scale=US%L_to_m**4*US%s_to_T)
+      call Bchksum(Ah_q, "Ah_q", G%HI, haloshift=0, symmetric=.true., scale=US%L_to_m**4*US%s_to_T)
+    endif
   endif
 
   if (CS%id_FrictWorkIntz > 0) then
@@ -2391,14 +2401,31 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
       ALLOC_(CS%m_leithy_max(isd:ied,jsd:jed)) ; CS%m_leithy_max(:,:) = 0.0
     endif
     if (CS%Re_Ah > 0.0) then
-      ALLOC_(CS%Re_Ah_const_xx(isd:ied,jsd:jed)); CS%Re_Ah_const_xx(:,:) = 0.0
-      ALLOC_(CS%Re_Ah_const_xy(IsdB:IedB,JsdB:JedB)); CS%Re_Ah_const_xy(:,:) = 0.0
+      ALLOC_(CS%Re_Ah_const_xx(isd:ied,jsd:jed)) ; CS%Re_Ah_const_xx(:,:) = 0.0
+      ALLOC_(CS%Re_Ah_const_xy(IsdB:IedB,JsdB:JedB)) ; CS%Re_Ah_const_xy(:,:) = 0.0
     endif
   endif
   do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
     CS%dx2q(I,J) = G%dxBu(I,J)*G%dxBu(I,J) ; CS%dy2q(I,J) = G%dyBu(I,J)*G%dyBu(I,J)
-    CS%DX_dyBu(I,J) = G%dxBu(I,J)*G%IdyBu(I,J) ; CS%DY_dxBu(I,J) = G%dyBu(I,J)*G%IdxBu(I,J)
   enddo ; enddo
+
+  if (((CS%Leith_Kh) .or. (CS%Leith_Ah) .or. (CS%use_Leithy)) .and. &
+      ((G%isc-G%isd < 3) .or. (G%isc-G%isd < 3))) call MOM_error(FATAL, &
+          "The minimum halo size is 3 when a Leith viscosity is being used.")
+  if (CS%use_Leithy) then
+    do J=js-3,Jeq+2 ; do I=is-3,Ieq+2
+      CS%DX_dyBu(I,J) = G%dxBu(I,J)*G%IdyBu(I,J) ; CS%DY_dxBu(I,J) = G%dyBu(I,J)*G%IdxBu(I,J)
+    enddo ; enddo
+  elseif ((CS%Leith_Kh) .or. (CS%Leith_Ah)) then
+    do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
+      CS%DX_dyBu(I,J) = G%dxBu(I,J)*G%IdyBu(I,J) ; CS%DY_dxBu(I,J) = G%dyBu(I,J)*G%IdxBu(I,J)
+    enddo ; enddo
+  else
+    do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+      CS%DX_dyBu(I,J) = G%dxBu(I,J)*G%IdyBu(I,J) ; CS%DY_dxBu(I,J) = G%dyBu(I,J)*G%IdxBu(I,J)
+    enddo ; enddo
+  endif
+
   do j=js-2,Jeq+2 ; do i=is-2,Ieq+2
     CS%dx2h(i,j) = G%dxT(i,j)*G%dxT(i,j) ; CS%dy2h(i,j) = G%dyT(i,j)*G%dyT(i,j)
     CS%DX_dyT(i,j) = G%dxT(i,j)*G%IdyT(i,j) ; CS%DY_dxT(i,j) = G%dyT(i,j)*G%IdxT(i,j)
@@ -2529,12 +2556,12 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
         endif
       endif
       if (CS%Leith_Ah) then
-         CS%biharm6_const_xx(i,j) = Leith_bi_const * (grid_sp_h3 * grid_sp_h3)
+        CS%biharm6_const_xx(i,j) = Leith_bi_const * (grid_sp_h3 * grid_sp_h3)
       endif
       if (CS%use_Leithy) then
-         CS%biharm6_const_xx(i,j) = Leith_bi_const * max(G%dxT(i,j),G%dyT(i,j))**6
-         CS%m_const_leithy(i,j) = 0.5 * sqrt(CS%c_K) * max(G%dxT(i,j),G%dyT(i,j))
-         CS%m_leithy_max(i,j) = 4. / max(G%dxT(i,j),G%dyT(i,j))**2
+        CS%biharm6_const_xx(i,j) = Leith_bi_const * max(G%dxT(i,j),G%dyT(i,j))**6
+        CS%m_const_leithy(i,j) = 0.5 * sqrt(CS%c_K) * max(G%dxT(i,j),G%dyT(i,j))
+        CS%m_leithy_max(i,j) = 4. / max(G%dxT(i,j),G%dyT(i,j))**2
       endif
       CS%Ah_bg_xx(i,j) = MAX(Ah, Ah_vel_scale * grid_sp_h2 * sqrt(grid_sp_h2))
       if (CS%Re_Ah > 0.0) CS%Re_Ah_const_xx(i,j) = grid_sp_h3 / CS%Re_Ah
@@ -2559,12 +2586,12 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
         endif
       endif
       if ((CS%Leith_Ah) .or. (CS%use_Leithy))then
-         CS%biharm6_const_xy(I,J) = Leith_bi_const * (grid_sp_q3 * grid_sp_q3)
+        CS%biharm6_const_xy(I,J) = Leith_bi_const * (grid_sp_q3 * grid_sp_q3)
       endif
       CS%Ah_bg_xy(I,J) = MAX(Ah, Ah_vel_scale * grid_sp_q2 * sqrt(grid_sp_q2))
       if (CS%Re_Ah > 0.0) CS%Re_Ah_const_xy(i,j) = grid_sp_q3 / CS%Re_Ah
       if (Ah_time_scale > 0.) CS%Ah_bg_xy(i,j) = &
-           MAX(CS%Ah_bg_xy(i,j), (grid_sp_q2 * grid_sp_q2) / Ah_time_scale)
+            MAX(CS%Ah_bg_xy(i,j), (grid_sp_q2 * grid_sp_q2) / Ah_time_scale)
       if (CS%bound_Ah .and. .not.CS%better_bound_Ah) then
         CS%Ah_Max_xy(I,J) = Ah_Limit * (grid_sp_q2 * grid_sp_q2)
         CS%Ah_bg_xy(I,J) = MIN(CS%Ah_bg_xy(I,J), CS%Ah_Max_xy(I,J))
@@ -2809,6 +2836,18 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
       cmor_standard_name='ocean_kinetic_energy_dissipation_per_unit_area_due_to_xy_friction')
 
 end subroutine hor_visc_init
+
+!> hor_visc_vel_stencil returns the horizontal viscosity input velocity stencil size
+function hor_visc_vel_stencil(CS) result(stencil)
+  type(hor_visc_CS), intent(in) :: CS !< Control structure for horizontal viscosity
+  integer ::  stencil !< The horizontal viscosity velocity stencil size with the current settings.
+
+  stencil = 2
+
+  if ((CS%Leith_Kh) .or. (CS%Leith_Ah) .or. (CS%use_Leithy)) then
+    stencil = 3
+  endif
+end function hor_visc_vel_stencil
 
 !> Calculates factors in the anisotropic orientation tensor to be align with the grid.
 !! With n1=1 and n2=0, this recovers the approach of Large et al, 2001.
