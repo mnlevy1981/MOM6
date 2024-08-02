@@ -158,6 +158,7 @@ type, public :: MARBL_tracers_CS ; private
   character(len=200) :: restoring_file !< name of [netCDF] file containing tracer restoring data
   type(remapping_CS) :: restoring_remapCS !< Remapping parameters and work arrays for tracer restoring / timescale
   character(len=200) :: restoring_I_tau_file !< name of [netCDF] file containing inverse restoring timescale
+  character(len=200) :: restoring_I_tau_var_name !< name of field containing inverse restoring timescale
   character(len=35) :: marbl_settings_file  !< name of [text] file containing MARBL settings
 
   real :: bot_flux_mix_thickness !< for bottom flux -> tendency conversion, assume uniform mixing over
@@ -732,8 +733,12 @@ endif
           call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_I_TAU_FILE", &
               CS%restoring_I_tau_file, &
               "File containing the inverse timescale for restoring MARBL tracers")
+          call get_param(param_file, mdl, "MARBL_TRACER_RESTORING_I_TAU_VAR_NAME", &
+              CS%restoring_I_tau_var_name, &
+              "Field containing the inverse timescale for restoring MARBL tracers", &
+              default="I_TAU")
           ! Set up array for thicknesses in restoring timescale file
-          call read_Z_edges(CS%restoring_I_tau_file, "I_TAU", CS%restoring_timescale_z_edges, &
+          call read_Z_edges(CS%restoring_I_tau_file, CS%restoring_I_tau_var_name, CS%restoring_timescale_z_edges, &
               CS%restoring_timescale_nz, restoring_timescale_has_edges, &
               restoring_timescale_use_missing, restoring_timescale_missing, scale=US%m_to_Z)
           allocate(CS%restoring_timescale_dz(CS%restoring_timescale_nz))
