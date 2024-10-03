@@ -205,18 +205,24 @@ type, public :: MARBL_tracers_CS ; private
   real, allocatable :: ITO(:,:,:,:)  !< interior tendency output returned from MARBL for use in GCM
                                      !! e.g. total chlorophyll to use in shortwave penetration (dims: i, j, k, num_ito)
 
-  integer :: u10_sqr_ind   !< index of MARBL forcing field array to copy 10-m wind (squared) into
-  integer :: sss_ind       !< index of MARBL forcing field array to copy sea surface salinity into
-  integer :: sst_ind       !< index of MARBL forcing field array to copy sea surface temperature into
-  integer :: ifrac_ind     !< index of MARBL forcing field array to copy ice fraction into
-  integer :: dust_dep_ind  !< index of MARBL forcing field array to copy dust flux into
-  integer :: fe_dep_ind    !< index of MARBL forcing field array to copy iron flux into
-  integer :: nox_flux_ind  !< index of MARBL forcing field array to copy NOx flux into
-  integer :: nhy_flux_ind  !< index of MARBL forcing field array to copy NHy flux into
-  integer :: atmpress_ind  !< index of MARBL forcing field array to copy atmospheric pressure into
-  integer :: xco2_ind      !< index of MARBL forcing field array to copy CO2 flux into
-  integer :: xco2_alt_ind  !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
-  integer :: d14c_ind      !< index of MARBL forcing field array to copy d14C into
+  integer :: u10_sqr_ind      !< index of MARBL forcing field array to copy 10-m wind (squared) into
+  integer :: sss_ind          !< index of MARBL forcing field array to copy sea surface salinity into
+  integer :: sst_ind          !< index of MARBL forcing field array to copy sea surface temperature into
+  integer :: ifrac_ind        !< index of MARBL forcing field array to copy ice fraction into
+  integer :: dust_dep_ind     !< index of MARBL forcing field array to copy dust flux into
+  integer :: fe_dep_ind       !< index of MARBL forcing field array to copy iron flux into
+  integer :: nox_flux_ind     !< index of MARBL forcing field array to copy NOx flux into
+  integer :: nhy_flux_ind     !< index of MARBL forcing field array to copy NHy flux into
+  integer :: atmpress_ind     !< index of MARBL forcing field array to copy atmospheric pressure into
+  integer :: xco2_ind         !< index of MARBL forcing field array to copy CO2 flux into
+  integer :: xco2_alt_ind     !< index of MARBL forcing field array to copy CO2 flux (alternate CO2) into
+  integer :: ext_C_flux_ind   !< index of MARBL forcing field array to copy external C flux into
+                              !! Needed if running with ladjust_bury_coeff = .true.
+  integer :: ext_P_flux_ind   !< index of MARBL forcing field array to copy external P flux into
+                              !! Needed if running with ladjust_bury_coeff = .true.
+  integer :: ext_Si_flux_ind  !< index of MARBL forcing field array to copy external Si flux into
+                              !! Needed if running with ladjust_bury_coeff = .true.
+  integer :: d14c_ind         !< index of MARBL forcing field array to copy d14C into
 
   !> external_field types for river fluxes (added to surface fluxes)
   type(external_field) :: id_din_riv     !< id for time_interp_external.
@@ -388,7 +394,7 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   call MARBL_instances%init(gcm_num_levels = nz, gcm_num_PAR_subcols = CS%ice_ncat + 1, &
       gcm_num_elements_surface_flux = 1, & ! FIXME: change to number of grid cells on MPI task
       gcm_delta_z = GV%sInterface(2:nz+1) - GV%sInterface(1:nz), gcm_zw = GV%sInterface(2:nz+1), &
-      gcm_zt = GV%sLayer, unit_system_opt = "mks", lgcm_has_global_ops = .false.) ! FIXME: add global ops
+      gcm_zt = GV%sLayer, unit_system_opt = "mks", lgcm_has_global_ops = .true.)
   ! Regardless of vertical grid, MOM6 will always use GV%ke levels in all columns
   MARBL_instances%domain%kmt = GV%ke
   if (MARBL_instances%StatusLog%labort_marbl) &
@@ -447,6 +453,9 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   CS%atmpress_ind = -1
   CS%xco2_ind = -1
   CS%xco2_alt_ind = -1
+  CS%ext_C_flux_ind = -1
+  CS%ext_P_flux_ind = -1
+  CS%ext_Si_flux_ind = -1
   do m=1,size(MARBL_instances%surface_flux_forcings)
     select case (trim(MARBL_instances%surface_flux_forcings(m)%metadata%varname))
       case('u10_sqr')
@@ -471,6 +480,12 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
         CS%xco2_ind = m
       case('xco2_alt_co2')
         CS%xco2_alt_ind = m
+      case('external C Flux')
+        CS%ext_C_flux_ind = m
+      case('external P Flux')
+        CS%ext_P_flux_ind = m
+      case('external Si Flux')
+        CS%ext_Si_flux_ind = m
       case('d14c')
         CS%d14c_ind = m
       case DEFAULT
@@ -1316,6 +1331,36 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
           !   hardcode value of 1 atm (can't figure out how to get this from solo_driver)
           MARBL_instances%surface_flux_forcings(CS%atmpress_ind)%field_0d(1) = 1.
         endif
+      endif
+
+      ! If running with ladjust_bury_coeff = .true., need to fill external flux forcing
+      if (CS%ext_C_flux_ind > 0) then
+        MARBL_instances%surface_flux_forcings(CS%ext_C_flux_ind)%field_0d(1) = 0.
+        if (CS%tracer_inds%dic_ind > 0) &
+          MARBL_instances%surface_flux_forcings(CS%ext_C_flux_ind)%field_0d(1) =     &
+              MARBL_instances%surface_flux_forcings(CS%ext_C_flux_ind)%field_0d(1) + &
+              CS%RIV_FLUXES(i,j,CS%tracer_inds%dic_ind)
+        if (CS%tracer_inds%doc_ind > 0) &
+          MARBL_instances%surface_flux_forcings(CS%ext_C_flux_ind)%field_0d(1) =     &
+              MARBL_instances%surface_flux_forcings(CS%ext_C_flux_ind)%field_0d(1) + &
+              CS%RIV_FLUXES(i,j,CS%tracer_inds%doc_ind)
+      endif
+      if (CS%ext_P_flux_ind > 0) then
+        MARBL_instances%surface_flux_forcings(CS%ext_P_flux_ind)%field_0d(1) = 0.
+        if (CS%tracer_inds%po4_ind > 0) &
+          MARBL_instances%surface_flux_forcings(CS%ext_P_flux_ind)%field_0d(1) =     &
+              MARBL_instances%surface_flux_forcings(CS%ext_P_flux_ind)%field_0d(1) + &
+              CS%RIV_FLUXES(i,j,CS%tracer_inds%po4_ind)
+        if (CS%tracer_inds%dop_ind > 0) &
+          MARBL_instances%surface_flux_forcings(CS%ext_P_flux_ind)%field_0d(1) =     &
+              MARBL_instances%surface_flux_forcings(CS%ext_P_flux_ind)%field_0d(1) + &
+              CS%RIV_FLUXES(i,j,CS%tracer_inds%dop_ind)
+      endif
+      if (CS%ext_Si_flux_ind > 0) then
+        MARBL_instances%surface_flux_forcings(CS%ext_Si_flux_ind)%field_0d(1) = 0.
+        if (CS%tracer_inds%sio3_ind > 0) &
+          MARBL_instances%surface_flux_forcings(CS%ext_Si_flux_ind)%field_0d(1) = &
+              CS%RIV_FLUXES(i,j,CS%tracer_inds%sio3_ind)
       endif
 
       !       These are okay, but need option to come in from coupler
