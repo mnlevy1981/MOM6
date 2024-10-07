@@ -286,6 +286,12 @@ type, public :: MARBL_tracers_CS ; private
   integer :: flux_co2_ind  !< index to co2 flux surface flux output
   integer :: total_Chl_ind !< index to total chlorophyll interior tendency output
 
+  !> Variables related to global averages
+  real, allocatable, dimension(:,:,:) :: glo_avg_fields_interior !< global copy of values returned
+                                                                 !! column-by-column from MARBL
+  real, allocatable, dimension(:,:,:) :: glo_avg_fields_surface  !< global copy of values returned
+                                                                 !! column-by-column from MARBL
+
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
   integer :: fesedflux_nz  !< number of levels in iron sediment flux file
@@ -591,6 +597,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS, 
   integer :: forcing_file_data_ref_year
   integer :: forcing_file_model_ref_year
   integer :: forcing_file_forcing_year
+  integer :: glo_avg_field_cnt
   logical :: register_MARBL_tracers
   logical :: restoring_has_edges, restoring_use_missing
   logical :: restoring_timescale_has_edges, restoring_timescale_use_missing
@@ -606,6 +613,12 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS, 
 
   call configure_MARBL_tracers(GV, US, param_file, CS)
   MARBL_computes_chl = CS%base_bio_on
+
+  ! Allocate memory for global means and sums
+  glo_avg_field_cnt = size(marbl_instances%glo_avg_fields_interior_tendency, dim=1)
+  allocate(CS%glo_avg_fields_interior(isd:ied, jsd:jed, glo_avg_field_cnt), source=0.)
+  glo_avg_field_cnt = size(marbl_instances%glo_avg_fields_surface_flux, dim=2)
+  allocate(CS%glo_avg_fields_surface(isd:ied, jsd:jed, glo_avg_field_cnt), source=0.)
 
   ! Read all relevant parameters and write them to the model log.
   call log_version(param_file, mdl, version, "")
@@ -1434,6 +1447,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         CS%SFO(i,j,m) = MARBL_instances%surface_flux_output%outputs_for_GCM(m)%forcing_field_0d(1)
       enddo
 
+      !     * Variables for global means
+      CS%glo_avg_fields_surface(i,j,:) = marbl_instances%glo_avg_fields_surface_flux(1,:)
+
     enddo
   enddo
 
@@ -1768,6 +1784,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         CS%ITO(i,j,:,m) = &
             MARBL_instances%interior_tendency_output%outputs_for_GCM(m)%forcing_field_1d(1,:)
       enddo
+
+      !     * Variables for global means
+      CS%glo_avg_fields_interior(i,j,:) = marbl_instances%glo_avg_fields_interior_tendency(:)
 
     enddo
   enddo
@@ -2167,6 +2186,8 @@ subroutine MARBL_tracers_end(CS)
     if (allocated(CS%fesedflux_in)) deallocate(CS%fesedflux_in)
     if (allocated(CS%feventflux_in)) deallocate(CS%feventflux_in)
     if (allocated(CS%I_tau)) deallocate(CS%I_tau)
+    if (allocated(CS%glo_avg_fields_interior)) deallocate(CS%glo_avg_fields_interior)
+    if (allocated(CS%glo_avg_fields_surface)) deallocate(CS%glo_avg_fields_surface)
     deallocate(CS)
   endif
 end subroutine MARBL_tracers_end
