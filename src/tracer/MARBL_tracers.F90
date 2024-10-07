@@ -25,7 +25,7 @@ use MOM_open_boundary,   only : ocean_OBC_type
 use MOM_remapping,       only : reintegrate_column
 use MOM_remapping,       only : remapping_CS, initialize_remapping, remapping_core_h
 use MOM_restart,         only : query_initialized, MOM_restart_CS, register_restart_field
-use MOM_spatial_means,   only : global_mass_int_EFP
+use MOM_spatial_means,   only : global_mass_int_EFP, global_area_mean
 use MOM_sponge,          only : set_up_sponge_field, sponge_CS
 use MOM_time_manager,    only : time_type
 use MOM_tracer_registry, only : register_tracer
@@ -1540,6 +1540,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
   ! Running mean variables
   do m=1,size(CS%glo_scalar_rmean_surface_id)
+    MARBL_instances%glo_avg_averages_surface_flux(m) = global_area_mean( &
+        CS%glo_avg_fields_surface(:,:,m), G)
+    ! TODO: this should actually be running mean
+    MARBL_instances%glo_avg_rmean_surface_flux(m)%rmean = MARBL_instances%glo_avg_averages_surface_flux(m)
     if (CS%glo_scalar_rmean_surface_id(m) > 0) &
       call post_data(CS%glo_scalar_rmean_surface_id(m), &
                      MARBL_instances%glo_scalar_rmean_surface_flux(m)%rmean, CS%diag)
@@ -1882,6 +1886,10 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
 
   ! Running mean variables
   do m=1,size(CS%glo_scalar_rmean_interior_id)
+    MARBL_instances%glo_avg_averages_interior_tendency(m) = global_area_mean( &
+        CS%glo_avg_fields_interior(:,:,m), G)
+    ! TODO: this should actually be running mean
+    MARBL_instances%glo_avg_rmean_interior_tendency(m)%rmean = MARBL_instances%glo_avg_averages_interior_tendency(m)
     if (CS%glo_scalar_rmean_interior_id(m) > 0) &
       call post_data(CS%glo_scalar_rmean_interior_id(m), &
                      MARBL_instances%glo_scalar_rmean_interior_tendency(m)%rmean, CS%diag)
