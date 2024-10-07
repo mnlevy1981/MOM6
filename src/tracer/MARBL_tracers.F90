@@ -36,7 +36,7 @@ use MOM_tracer_Z_init,   only : read_Z_edges
 use MOM_unit_scaling,    only : unit_scale_type
 use MOM_variables,       only : surface, thermo_var_ptrs
 use MOM_verticalGrid,    only : verticalGrid_type
-use MOM_diag_mediator,   only : register_diag_field, post_data!, safe_alloc_ptr
+use MOM_diag_mediator,   only : register_diag_field, register_scalar_field, post_data!, safe_alloc_ptr
 
 use MARBL_interface,              only : MARBL_interface_class
 use MARBL_interface_public_types, only : marbl_diagnostics_type, marbl_saved_state_type
@@ -291,6 +291,8 @@ type, public :: MARBL_tracers_CS ; private
                                                                  !! column-by-column from MARBL
   real, allocatable, dimension(:,:,:) :: glo_avg_fields_surface  !< global copy of values returned
                                                                  !! column-by-column from MARBL
+  integer, allocatable, dimension(:)  :: glo_scalar_rmean_interior_id !< diagnostic index
+  integer, allocatable, dimension(:)  :: glo_scalar_rmean_surface_id !< diagnostic index
 
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
@@ -856,7 +858,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   type(unit_scale_type),                 intent(in)    :: US           !< A dimensional unit scaling type
   real, dimension(NIMEM_,NJMEM_,NKMEM_), intent(in)    :: h            !< Layer thicknesses [H ~> m or kg m-2]
   type(param_file_type),                 intent(in)    :: param_file   !< A structure to parse for run-time parameters
-  type(diag_ctrl), target,               intent(in)    :: diag         !< Structure used to regulate diagnostic output.
+  type(diag_ctrl), target,               intent(inout) :: diag         !< Structure used to regulate diagnostic output.
   type(ocean_OBC_type),                  pointer       :: OBC          !< This open boundary condition type specifies
                                                                        !! whether, where, and what open boundary
                                                                        !! conditions are used.
@@ -952,6 +954,24 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   CS%bot_flux_to_tend_id = register_diag_field("ocean_model", "BOT_FLUX_TO_TEND", &
       diag%axesTL, & ! T=> tracer grid? L => layer center
       day, "Conversion Factor for Bottom Flux -> Tend", "1/m")
+
+  ! Register scalar fields from running means (if ladjust_bury_coeff = .true.)
+  diag_size = size(MARBL_instances%glo_scalar_rmean_interior_tendency)
+  allocate(CS%glo_scalar_rmean_interior_id(diag_size), source=-1)
+  do m=1,diag_size
+    CS%glo_scalar_rmean_interior_id(m) = register_scalar_field('ocean_model', &
+        trim(MARBL_instances%glo_scalar_rmean_interior_tendency(m)%sname), &
+        day, diag, trim(MARBL_instances%glo_scalar_rmean_interior_tendency(m)%sname), &
+        'unitless')
+  end do
+  diag_size = size(MARBL_instances%glo_scalar_rmean_surface_flux)
+  allocate(CS%glo_scalar_rmean_surface_id(diag_size))
+  do m=1,diag_size
+    CS%glo_scalar_rmean_surface_id(m) = register_scalar_field('ocean_model', &
+        trim(MARBL_instances%glo_scalar_rmean_surface_flux(m)%sname), &
+        day, diag, trim(MARBL_instances%glo_scalar_rmean_surface_flux(m)%sname), &
+        'unitless')
+  end do
 
   do m=1,CS%ntr
     call query_vardesc(CS%tr_desc(m), name=name, caller="initialize_MARBL_tracers")
@@ -1518,6 +1538,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     endif
   endif
 
+  ! Running mean variables
+  do m=1,size(CS%glo_scalar_rmean_surface_id)
+    if (CS%glo_scalar_rmean_surface_id(m) > 0) &
+      call post_data(CS%glo_scalar_rmean_surface_id(m), &
+                     MARBL_instances%glo_scalar_rmean_surface_flux(m)%rmean, CS%diag)
+  end do
+
   if (CS%debug) then
     do m=1,CS%ntr
       call hchksum(CS%STF(:,:,m), &
@@ -1802,6 +1829,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   !     i. Interior tendency diagnostics (mix of 2D and 3D)
   !     ii. Interior tendencies themselves
   !     iii. Forcing fields
+  !     iv. Running means
   if (CS%bot_flux_to_tend_id > 0) &
     call post_data(CS%bot_flux_to_tend_id, bot_flux_to_tend(:, :, :), CS%diag)
 
@@ -1851,6 +1879,13 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         call post_data(CS%qsw_cat_id(m), fluxes%qsw_cat(:,:,m), CS%diag)
     enddo
   endif
+
+  ! Running mean variables
+  do m=1,size(CS%glo_scalar_rmean_interior_id)
+    if (CS%glo_scalar_rmean_interior_id(m) > 0) &
+      call post_data(CS%glo_scalar_rmean_interior_id(m), &
+                     MARBL_instances%glo_scalar_rmean_interior_tendency(m)%rmean, CS%diag)
+  end do
 
 
 end subroutine MARBL_tracers_column_physics
