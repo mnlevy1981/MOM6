@@ -437,9 +437,6 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
       case default ; call MOM_error(FATAL,"KPP_init: "//&
                     "Unrecognized KPP_LT_K_SHAPE option: "//trim(string))
     end select
-    call get_param(paramFile, mdl, "KPP_CVt2", CS%KPP_CVt2, &
-                   'Parameter for Stokes MOST convection entrainment', &
-                   units="nondim", default=1.6)
     call get_param(paramFile, mdl, "KPP_LT_K_METHOD", string ,                   &
                    'Method to enhance mixing coefficient in KPP. '//             &
                    'Valid options are: \n'//                                     &
@@ -517,6 +514,10 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
                    "the Langmuir number for Langmuir turbulence enhancement with KPP.", &
                    units="m", default=1.0, scale=US%m_to_Z)
   endif
+
+  call get_param(paramFile, mdl, "KPP_CVt2", CS%KPP_CVt2, &
+                 'Parameter for Stokes MOST convection entrainment', &
+                 units="nondim", default=1.6)
 
   call get_param(paramFile, mdl, "ANSWER_DATE", CS%answer_date, &
                  "The vintage of the order of arithmetic in the CVMix KPP calculations.  Values "//&
