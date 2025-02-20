@@ -135,8 +135,9 @@ type, public :: MARBL_tracers_CS ; private
   type(vardesc), allocatable :: tr_desc(:) !< Descriptions and metadata for the tracers
   logical :: tracers_may_reinit            !< If true the tracers may be initialized if not found in a restart file
 
-  character(len=200) :: fesedflux_file   !< name of [netCDF] file containing iron sediment flux
-  character(len=200) :: feventflux_file  !< name of [netCDF] file containing iron vent flux
+  character(len=200) :: fesedflux_file      !< name of [netCDF] file containing iron sediment flux
+  character(len=200) :: fesedfluxred_file   !< name of [netCDF] file containing reduced iron sediment flux
+  character(len=200) :: feventflux_file     !< name of [netCDF] file containing iron vent flux
   type(forcing_timeseries_dataset) :: d14c_dataset(3) !< File and time axis information for d14c forcing
   real, dimension(3) :: d14c_bands       !< forcing is organized into bands: [30 N, 90 N]; [30 S, 30 N]; [90 S, 30 S]
   integer :: d14c_id                     !< id for diagnostic field with d14c forcing
@@ -256,7 +257,9 @@ type, public :: MARBL_tracers_CS ; private
   integer :: potemp_ind  !< index of MARBL forcing field array to copy potential temperature into
   integer :: salinity_ind  !< index of MARBL forcing field array to copy salinity into
   integer :: pressure_ind  !< index of MARBL forcing field array to copy pressure into
-  integer :: fesedflux_ind  !< index of MARBL forcing field array to copy iron sediment flux into
+  integer :: fesedflux_ind     !< index of MARBL forcing field array to copy iron sediment flux into
+  integer :: fesedfluxred_ind  !< index of MARBL forcing field array to copy reduced iron sediment flux into
+  integer :: feventflux_ind    !< index of MARBL forcing field array to copy iron vent flux into
   integer :: o2_scalef_ind  !< index of MARBL forcing field array to copy O2 scale length into
   integer :: remin_scalef_ind  !< index of MARBL forcing field array to copy remin scale length into
   type(external_field), allocatable :: id_tracer_restoring(:) !< id number for time_interp_external
@@ -284,8 +287,9 @@ type, public :: MARBL_tracers_CS ; private
   ! TODO: create generic 3D forcing input type to read z coordinate + values
   real    :: fesedflux_scale_factor !< scale factor for iron sediment flux
   integer :: fesedflux_nz  !< number of levels in iron sediment flux file
-  real, allocatable, dimension(:,:,:) :: fesedflux_in  !< Field to read iron sediment flux into [conc m s-1]
-  real, allocatable, dimension(:,:,:) :: feventflux_in  !< Field to read iron vent flux into [conc m s-1]
+  real, allocatable, dimension(:,:,:) :: fesedflux_in     !< Field to read iron sediment flux into [conc m s-1]
+  real, allocatable, dimension(:,:,:) :: fesedfluxred_in  !< Field to read reduced iron sediment flux into [conc m s-1]
+  real, allocatable, dimension(:,:,:) :: feventflux_in    !< Field to read iron vent flux into [conc m s-1]
   real, allocatable, dimension(:) :: &
     fesedflux_z_edges  !< The depths of the cell interfaces in the input data [Z ~> m]
   ! TODO: this thickness does not need to be 3D, but that's a problem for future Mike
@@ -492,6 +496,8 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
   CS%salinity_ind = -1
   CS%pressure_ind = -1
   CS%fesedflux_ind = -1
+  CS%fesedfluxred_ind = -1
+  CS%feventflux_ind = -1
   CS%o2_scalef_ind = -1
   CS%remin_scalef_ind = -1
   CS%d14c_ind = -1
@@ -518,6 +524,10 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
         CS%pressure_ind = m
       case('Iron Sediment Flux')
         CS%fesedflux_ind = m
+      case('Iron Red Sediment Flux')
+        CS%fesedfluxred_ind = m
+      case('Iron Vent Flux')
+        CS%feventflux_ind = m
       case('O2 Consumption Scale Factor')
         CS%o2_scalef_ind = m
       case('Particulate Remin Scale Factor')
@@ -620,16 +630,25 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS, 
     ! ** FESEDFLUX
     call get_param(param_file, mdl, "MARBL_FESEDFLUX_FILE", CS%fesedflux_file, &
         "The file in which the iron sediment flux forcing field can be found.", &
-        default="fesedflux_total_reduce_oxic_tx0.66v1.c230817.nc")
+        default="fesedflux.nc")
     if (scan(CS%fesedflux_file,'/') == 0) then
       ! Add the directory if CS%fesedflux_file is not already a complete path.
       CS%fesedflux_file = trim(slasher(inputdir))//trim(CS%fesedflux_file)
       call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FESEDFLUX_FILE", CS%fesedflux_file)
     endif
+    ! ** FESEDFLUXRED
+    call get_param(param_file, mdl, "MARBL_FESEDFLUXRED_FILE", CS%fesedfluxred_file, &
+        "The file in which the iron sediment flux forcing field can be found.", &
+        default="fesedfluxred.nc")
+    if (scan(CS%fesedfluxred_file,'/') == 0) then
+      ! Add the directory if CS%fesedflux_file is not already a complete path.
+      CS%fesedfluxred_file = trim(slasher(inputdir))//trim(CS%fesedfluxred_file)
+      call log_param(param_file, mdl, "INPUTDIR/MARBL_TRACERS_FESEDFLUXRED_FILE", CS%fesedfluxred_file)
+    endif
     ! ** FEVENTFLUX
     call get_param(param_file, mdl, "MARBL_FEVENTFLUX_FILE", CS%feventflux_file, &
         "The file in which the iron vent flux forcing field can be found.", &
-        default="feventflux_5gmol_tx0.66v1.c230817.nc")
+        default="feventflux.nc")
     if (scan(CS%feventflux_file,'/') == 0) then
       ! Add the directory if CS%feventflux_file is not already a complete path.
       CS%feventflux_file = trim(slasher(inputdir))//trim(CS%feventflux_file)
@@ -638,7 +657,7 @@ function register_MARBL_tracers(HI, GV, US, param_file, CS, tr_Reg, restart_CS, 
     ! ** Scale factor for FESEDFLUX
     call get_param(param_file, mdl, "MARBL_FESEDFLUX_SCALE_FACTOR", CS%fesedflux_scale_factor, &
         "Conversion factor between FESEDFLUX file units and MARBL units", &
-        units="umol m-1 d-1 -> mmol m-2 s-1", default=0.001/86400.)
+        units="umol m-2 d-1 -> mmol m-2 s-1", default=0.001/86400.)
 
     ! ** River fluxes
     call get_param(param_file, mdl, "READ_RIV_FLUXES", CS%read_riv_fluxes, &
@@ -1064,12 +1083,15 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
 
     ! (2) Allocate memory for fesedflux and feventflux
     allocate(CS%fesedflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
+    allocate(CS%fesedfluxred_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
     allocate(CS%feventflux_in(SZI_(G), SZJ_(G), CS%fesedflux_nz))
     allocate(CS%fesedflux_dz(SZI_(G), SZJ_(G), CS%fesedflux_nz))
 
     ! (3) Read data
     !     TODO: Add US term to scale
     call MOM_read_data(CS%fesedflux_file, "FESEDFLUXIN", CS%fesedflux_in(:,:,:), G%Domain, &
+        scale=CS%fesedflux_scale_factor)
+    call MOM_read_data(CS%fesedfluxred_file, "FESEDFLUXIN", CS%fesedfluxred_in(:,:,:), G%Domain, &
         scale=CS%fesedflux_scale_factor)
     call MOM_read_data(CS%feventflux_file, "FESEDFLUXIN", CS%feventflux_in(:,:,:), G%Domain, &
         scale=CS%fesedflux_scale_factor)
@@ -1094,6 +1116,8 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
           if (G%bathyT(i,j) + CS%fesedflux_z_edges(k) < 1e-8 * US%m_to_Z) then
             CS%fesedflux_in(i,j,k-1) = CS%fesedflux_in(i,j,k-1) + CS%fesedflux_in(i,j,k)
             CS%fesedflux_in(i,j,k) = 0.
+            CS%fesedfluxred_in(i,j,k-1) = CS%fesedfluxred_in(i,j,k-1) + CS%fesedfluxred_in(i,j,k)
+            CS%fesedfluxred_in(i,j,k) = 0.
             CS%feventflux_in(i,j,k-1) = CS%feventflux_in(i,j,k-1) + CS%feventflux_in(i,j,k)
             CS%feventflux_in(i,j,k) = 0.
             CS%fesedflux_dz(i,j,k) = 0.
@@ -1188,7 +1212,9 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
       !       (for now, FESEDFLUX is the only one that should be true)
       !       Also, known issue where passing v_extensive=.false. isn't
       !       treated the same as not passing v_extensive
-      if (trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX") then
+      if ((trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX") .or. &
+          (trim(MARBL_diags%diags(m)%short_name).eq."FEREDSEDFLUX") .or. &
+          (trim(MARBL_diags%diags(m)%short_name).eq."FEVENTFLUX")) then
         id_diags(m)%id = register_diag_field("ocean_model", &
           trim(MARBL_diags%diags(m)%short_name), &
           diag%axesTL, & ! T=> tracer grid? L => layer center
@@ -1664,8 +1690,22 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:) = 0.
         call reintegrate_column(CS%fesedflux_nz, &
             CS%fesedflux_dz(i,j,:) * (sum(dz(:) * GV%H_to_Z) / G%bathyT(i,j)), &
-            CS%fesedflux_in(i,j,:) + CS%feventflux_in(i,j,:), GV%ke, dz(:), &
+            CS%fesedflux_in(i,j,:), GV%ke, dz(:), &
             MARBL_instances%interior_tendency_forcings(CS%fesedflux_ind)%field_1d(1,:))
+      endif
+      if (CS%fesedfluxred_ind > 0) then
+        MARBL_instances%interior_tendency_forcings(CS%fesedfluxred_ind)%field_1d(1,:) = 0.
+        call reintegrate_column(CS%fesedflux_nz, &
+            CS%fesedflux_dz(i,j,:) * (sum(dz(:) * GV%H_to_Z) / G%bathyT(i,j)), &
+            CS%fesedfluxred_in(i,j,:), GV%ke, dz(:), &
+            MARBL_instances%interior_tendency_forcings(CS%fesedfluxred_ind)%field_1d(1,:))
+      endif
+      if (CS%feventflux_ind > 0) then
+        MARBL_instances%interior_tendency_forcings(CS%feventflux_ind)%field_1d(1,:) = 0.
+        call reintegrate_column(CS%fesedflux_nz, &
+            CS%fesedflux_dz(i,j,:) * (sum(dz(:) * GV%H_to_Z) / G%bathyT(i,j)), &
+            CS%feventflux_in(i,j,:), GV%ke, dz(:), &
+            MARBL_instances%interior_tendency_forcings(CS%feventflux_ind)%field_1d(1,:))
       endif
 
       !        TODO: add ability to read these fields from file
@@ -2049,6 +2089,7 @@ function MARBL_tracers_stock(h, stocks, G, GV, CS, names, units, stock_index)
                                                                                 !! calculated here.
 
   ! Local variables
+  character(len=200) :: log_message
   integer :: i, j, k, is, ie, js, je, nz, m
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -2066,6 +2107,8 @@ function MARBL_tracers_stock(h, stocks, G, GV, CS, names, units, stock_index)
   do m=1,CS%ntr
     call query_vardesc(CS%tr_desc(m), name=names(m), units=units(m), caller="MARBL_tracers_stock")
     units(m) = trim(units(m))//" kg"
+    write(log_message, "(I0, 2A)") m, ': ', trim(names(m))
+    call MOM_error(WARNING, log_message, all_print=.true.)
     stocks(m) = global_mass_int_EFP(h, G, GV, CS%tracer_data(m)%tr(:,:,:), on_PE_only=.true.)
   enddo
   MARBL_tracers_stock = CS%ntr
@@ -2163,6 +2206,7 @@ subroutine MARBL_tracers_end(CS)
     if (allocated(CS%tracer_restoring_ind)) deallocate(CS%tracer_restoring_ind)
     if (allocated(CS%tracer_I_tau_ind)) deallocate(CS%tracer_I_tau_ind)
     if (allocated(CS%fesedflux_in)) deallocate(CS%fesedflux_in)
+    if (allocated(CS%fesedfluxred_in)) deallocate(CS%fesedfluxred_in)
     if (allocated(CS%feventflux_in)) deallocate(CS%feventflux_in)
     if (allocated(CS%I_tau)) deallocate(CS%I_tau)
     deallocate(CS)
