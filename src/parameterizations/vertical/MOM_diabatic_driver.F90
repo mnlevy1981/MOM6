@@ -1337,7 +1337,7 @@ subroutine diabatic_ALE(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Time_end, 
     ! If visc%MLD or visc%h_ML exist, copy KPP's BLD into them with appropriate conversions.
     if (associated(visc%h_ML)) call convert_MLD_to_ML_thickness(BLD, h, visc%h_ML, tv, G, GV)
     if (associated(visc%MLD)) visc%MLD(:,:) = BLD(:,:)
-    if (associated(visc%sfc_buoy_flx)) visc%sfc_buoy_flx(:,:) = KPP_buoy_flux(:,:,1)
+    if (associated(visc%sfc_buoy_flx)) visc%sfc_buoy_flx(:,:) = KPP_buoy_flux(:,:,1) * US%L_to_Z**2
 
     if (showCallTree) call callTree_waypoint("done with KPP_calculate (diabatic)")
     if (CS%debug) then

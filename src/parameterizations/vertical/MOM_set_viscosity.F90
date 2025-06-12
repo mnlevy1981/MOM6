@@ -2799,12 +2799,12 @@ subroutine set_visc_register_restarts(HI, G, GV, US, param_file, visc, restart_C
     call safe_alloc_ptr(visc%h_ML, isd, ied, jsd, jed)
   endif
 
-  if (MLE_use_PBL_MLD) then
+  if (MLE_use_PBL_MLD .or. MLE_use_Bodner) then
     call register_restart_field(visc%MLD, "MLD", .false., restart_CS, &
                   "Instantaneous active mixing layer depth", units="m", conversion=US%Z_to_m)
   endif
   if (MLE_use_PBL_MLD .or. do_brine_plume .or. use_fpmix .or. &
-      use_neutral_diffusion .or. use_hor_bnd_diff) then
+      use_neutral_diffusion .or. use_hor_bnd_diff .or. MLE_use_Bodner) then
     call register_restart_field(visc%h_ML, "h_ML", .false., restart_CS, &
                   "Instantaneous active mixing layer thickness", &
                   units=get_thickness_units(GV), conversion=GV%H_to_mks)

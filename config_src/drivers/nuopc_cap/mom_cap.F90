@@ -91,6 +91,10 @@ use NUOPC_Model, only: model_label_SetRunClock    => label_SetRunClock
 use NUOPC_Model, only: model_label_Finalize       => label_Finalize
 use NUOPC_Model, only: SetVM
 
+#ifndef CESMCOUPLED
+  use shr_is_restart_fh_mod, only : init_is_restart_fh, is_restart_fh, is_restart_fh_type
+#endif
+
 implicit none; private
 
 public SetServices
@@ -150,12 +154,12 @@ type(ESMF_GeomType_Flag) :: geomtype = ESMF_GEOMTYPE_MESH
 #else
 logical :: cesm_coupled = .false.
 type(ESMF_GeomType_Flag) :: geomtype
+type(is_restart_fh_type) :: restartfh_info     ! For flexible restarts in UFS
 #endif
 character(len=8)  :: restart_mode = 'alarms'
 character(len=16) :: inst_suffix = ''
+logical           :: pointer_date = .true. ! append date to rpointer
 real(8) :: timere
-
-type(ESMF_Time), allocatable :: restartFhTimes(:)
 
 contains
 
@@ -439,6 +443,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   logical                                :: existflag
   logical                                :: use_waves  ! If true, the wave modules are active.
   character(len=40)                      :: wave_method ! Wave coupling method.
+  logical                                :: use_MARBL  ! If true, MARBL tracers are being used.
   integer                                :: userRc
   integer                                :: localPet
   integer                                :: localPeCount
@@ -490,12 +495,20 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
   call ensemble_manager_init(inst_suffix)
 
-  write(timestamp,'(".",i4.4,"-",i2.2,"-",i2.2,"-",i5.5)'),year,month,day,hour*3600+minute*60+second
-  rpointer_filename = 'rpointer.ocn'//trim(inst_suffix)//timestamp
-  inquire(file=trim(rpointer_filename), exist=found)
-  ! for backward compatibility
-  if (.not. found) then
-     rpointer_filename = 'rpointer.ocn'//trim(inst_suffix)
+  ! Default to appending dates to the restart pointer unless otherwise specified in NUOPC settings
+  call NUOPC_CompAttributeGet(gcomp, name="restart_pointer_append_date", value=cvalue, &
+       isPresent=isPresent, isSet=isSet, rc=rc)
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
+  if (isPresent .and. isSet) pointer_date = (trim(cvalue) .eq. ".true.")
+
+  rpointer_filename = 'rpointer.ocn'//trim(inst_suffix)
+  if (pointer_date) then
+    write(timestamp,'(".",i4.4,"-",i2.2,"-",i2.2,"-",i5.5)'),year,month,day,hour*3600+minute*60+second
+    inquire(file=trim(rpointer_filename//timestamp), exist=found)
+    ! for backward compatibility
+    if (found) then
+      rpointer_filename = trim(rpointer_filename//timestamp)
+    endif
   endif
 #endif
 
@@ -585,8 +598,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   Ice_ocean_boundary%ice_ncat = 0
   if (cesm_coupled) then
     ! Note that flds_i2o_per_cat is set by the env_run.xml variable CPL_I2O_PER_CAT
-    ! This xml variable is set by MOM_interface's buildnml script; it has the same
-    ! value as USE_MARBL in the case
+    ! In CESM, this xml variable is set by MOM_interface's buildnml script and by
+    ! default it is false unless ICE_NCAT>0 and USE_MARBL_TRACERS=True
     call NUOPC_CompAttributeGet(gcomp, name='flds_i2o_per_cat', value=cvalue, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
     read(cvalue,*) i2o_per_cat
@@ -652,18 +665,17 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   else if (runtype == "continue") then ! hybrid or branch or continuos runs
 
     if (cesm_coupled) then
-      call ESMF_LogWrite('MOM_cap: restart requested, using rpointer.ocn', ESMF_LOGMSG_WARNING)
+      call ESMF_LogWrite('MOM_cap: restart requested, using '//trim(rpointer_filename), ESMF_LOGMSG_WARNING)
       call ESMF_GridCompGet(gcomp, vm=vm, rc=rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
       call ESMF_VMGet(vm, localPet=localPet, rc=rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
       if (localPet == 0) then
-        ! this hard coded for rpointer.ocn right now
         open(newunit=readunit, file=rpointer_filename, form='formatted', status='old', iostat=iostat)
         if (iostat /= 0) then
           call ESMF_LogSetError(ESMF_RC_FILE_OPEN, msg=subname//' ERROR opening '//rpointer_filename, &
-               line=__LINE__, file=u_FILE_u, rcToReturn=rc)
+                 line=__LINE__, file=u_FILE_u, rcToReturn=rc)
           return
         endif
         do
@@ -709,6 +721,8 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
 
   call get_domain_extent(ocean_public%domain, isc, iec, jsc, jec)
 
+  call query_ocean_state(ocean_state, use_waves=use_waves, wave_method=wave_method, use_MARBL=use_MARBL)
+
   allocate(Ice_ocean_boundary% u_flux (isc:iec,jsc:jec),          &
            Ice_ocean_boundary% v_flux (isc:iec,jsc:jec),          &
            Ice_ocean_boundary% t_flux (isc:iec,jsc:jec),          &
@@ -752,22 +766,20 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
              Ice_ocean_boundary% hrofi_glc (isc:iec,jsc:jec),       &
              source=0.0)
 
-    ! Needed for MARBL
-    ! These are allocated separately to make it easier to pull out
-    ! of the cesm_coupled block if other models want to add BGC
-    allocate(Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
-             Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
-             Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
-             Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
-             Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
-             Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
-             Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec),    &
-             source=0.0)
+    if (use_MARBL) then
+      allocate(Ice_ocean_boundary% nhx_dep (isc:iec,jsc:jec),         &
+              Ice_ocean_boundary% noy_dep (isc:iec,jsc:jec),         &
+              Ice_ocean_boundary% atm_fine_dust_flux (isc:iec,jsc:jec),  &
+              Ice_ocean_boundary% atm_coarse_dust_flux (isc:iec,jsc:jec),&
+              Ice_ocean_boundary% seaice_dust_flux (isc:iec,jsc:jec),    &
+              Ice_ocean_boundary% atm_bc_flux (isc:iec,jsc:jec),         &
+              Ice_ocean_boundary% seaice_bc_flux (isc:iec,jsc:jec),      &
+              Ice_ocean_boundary% atm_co2_prog (isc:iec,jsc:jec),    &
+              Ice_ocean_boundary% atm_co2_diag (isc:iec,jsc:jec),    &
+              source=0.0)
+    endif
   endif
 
-  call query_ocean_state(ocean_state, use_waves=use_waves, wave_method=wave_method)
   if (use_waves) then
     if (wave_method == "EFACTOR") then
       allocate( Ice_ocean_boundary%lamult(isc:iec,jsc:jec), source=0.0)
@@ -839,7 +851,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
                       ungridded_lbound=1, ungridded_ubound=Ice_ocean_boundary%ice_ncat)
   endif
 
-  if (cesm_coupled) then
+  if (cesm_coupled .and. use_MARBL) then
     ! Fields needed for MARBL
     call fld_list_add(fldsToOcn_num, fldsToOcn, "Faxa_ndep"                  , "will provide", & !-> nitrogen deposition
                       ungridded_lbound=1, ungridded_ubound=2)
@@ -879,7 +891,7 @@ subroutine InitializeAdvertise(gcomp, importState, exportState, clock, rc)
   call fld_list_add(fldsFrOcn_num, fldsFrOcn, "So_dhdy"    , "will provide")
   call fld_list_add(fldsFrOcn_num, fldsFrOcn, "Fioo_q"     , "will provide")
   call fld_list_add(fldsFrOcn_num, fldsFrOcn, "So_bldepth" , "will provide")
-  if (cesm_coupled) then
+  if (cesm_coupled .and. use_MARBL) then
     call fld_list_add(fldsFrOcn_num, fldsFrOcn, "Faoo_fco2_ocn", "will provide")
   endif
 
@@ -1719,10 +1731,8 @@ subroutine ModelAdvance(gcomp, rc)
   character(len=17)                      :: timestamp
   integer                                :: num_rest_files
   real(8)                                :: MPI_Wtime, timers
-  logical                                :: write_restart
-  logical                                :: write_restartfh
+  logical                                :: write_restart, write_restartfh
   logical                                :: write_restart_eor
-
 
   rc = ESMF_SUCCESS
   if(profile_memory) call ESMF_VMLogMemInfo("Entering MOM Model_ADVANCE: ")
@@ -1873,16 +1883,6 @@ subroutine ModelAdvance(gcomp, rc)
     call ESMF_ClockGetAlarm(clock, alarmname='restart_alarm', alarm=restart_alarm, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
-    write_restartfh = .false.
-    ! check if next time is == to any restartfhtime
-    if (allocated(RestartFhTimes)) then
-      do n = 1,size(RestartFhTimes)
-        call ESMF_ClockGetNextTime(clock, MyTime, rc=rc)
-        if (ChkErr(rc,__LINE__,u_FILE_u)) return
-        if (MyTime == RestartFhTimes(n)) write_restartfh = .true.
-      end do
-    end if
-
     write_restart = .false.
     if (ESMF_AlarmIsRinging(restart_alarm, rc=rc)) then
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -1903,7 +1903,12 @@ subroutine ModelAdvance(gcomp, rc)
        end if
     end if
 
-    if (write_restart .or. write_restartfh .or. write_restart_eor) then
+#ifndef CESMCOUPLED
+    call is_restart_fh(clock, restartfh_info, write_restartfh)
+    if (write_restartfh) write_restart = .true.
+#endif
+
+    if (write_restart .or. write_restart_eor) then
       ! determine restart filename
       call ESMF_ClockGetNextTime(clock, MyTime, rc=rc)
       if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -1920,7 +1925,10 @@ subroutine ModelAdvance(gcomp, rc)
 
         write(timestamp,'(".",i4.4,"-",i2.2,"-",i2.2,"-",i5.5)'),year,month,day,hour*3600+minute*60+seconds
 
-        rpointer_filename = 'rpointer.ocn'//trim(inst_suffix)//timestamp
+        rpointer_filename = 'rpointer.ocn'//trim(inst_suffix)
+        if (pointer_date) then
+          rpointer_filename = trim(rpointer_filename//timestamp)
+        endif
 
         write(restartname,'(A,".mom6.r",A)') &
              trim(casename), timestamp
@@ -1928,7 +1936,7 @@ subroutine ModelAdvance(gcomp, rc)
         ! write restart file(s)
         call ocean_model_restart(ocean_state, restartname=restartname, num_rest_files=num_rest_files)
         if (localPet == 0) then
-          ! Write name of restart file in the rpointer file - this is currently hard-coded for the ocean
+           ! Write name of restart file in the rpointer file - this is currently hard-coded for the ocean
           open(newunit=writeunit, file=rpointer_filename, form='formatted', status='unknown', iostat=iostat)
           if (iostat /= 0) then
             call ESMF_LogSetError(ESMF_RC_FILE_OPEN, &
@@ -2005,34 +2013,26 @@ end subroutine ModelAdvance
 
 
 subroutine ModelSetRunClock(gcomp, rc)
-
-  use ESMF, only : ESMF_TimeIntervalSet
-
   type(ESMF_GridComp)  :: gcomp
   integer, intent(out) :: rc
 
   ! local variables
-  type(ESMF_VM)            :: vm
   type(ESMF_Clock)         :: mclock, dclock
   type(ESMF_Time)          :: mcurrtime, dcurrtime
   type(ESMF_Time)          :: mstoptime, dstoptime
   type(ESMF_TimeInterval)  :: mtimestep, dtimestep
-  type(ESMF_TimeInterval)  :: fhInterval
   character(len=128)       :: mtimestring, dtimestring
-  character(len=256)       :: timestr
   character(len=256)       :: cvalue
   character(len=256)       :: restart_option ! Restart option units
   integer                  :: restart_n      ! Number until restart interval
   integer                  :: restart_ymd    ! Restart date (YYYYMMDD)
-  integer                  :: dt_cpl         ! coupling timestep
+  integer                  :: dt_cpl
   type(ESMF_Alarm)         :: restart_alarm
   type(ESMF_Alarm)         :: stop_alarm
   logical                  :: isPresent, isSet
   logical                  :: first_time = .true.
-  integer                  :: localPet
-  integer                  :: n, nfh
-  integer, allocatable     :: restart_fh(:)
-  character(len=*),parameter :: subname='(MOM_cap:ModelSetRunClock) '
+  character(len=*),parameter :: subname='MOM_cap:(ModelSetRunClock) '
+  character(len=256)       :: timestr
   !--------------------------------
 
   rc = ESMF_SUCCESS
@@ -2046,11 +2046,6 @@ subroutine ModelSetRunClock(gcomp, rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   call ESMF_ClockGet(mclock, currTime=mcurrtime, timeStep=mtimestep, rc=rc)
-  if (ChkErr(rc,__LINE__,u_FILE_u)) return
-
-  call ESMF_GridCompGet(gcomp, vm=vm, rc=rc)
-  if (ChkErr(rc,__LINE__,u_FILE_u)) return
-  call ESMF_VMGet(vm, localPet=localPet, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
   !--------------------------------
@@ -2151,6 +2146,11 @@ subroutine ModelSetRunClock(gcomp, rc)
           call ESMF_LogWrite(subname//" Restarts will be written at finalize only", ESMF_LOGMSG_INFO)
         endif
       endif
+#ifndef CESMCOUPLED
+      call ESMF_TimeIntervalGet(dtimestep, s=dt_cpl, rc=rc)
+      if (ChkErr(rc,__LINE__,u_FILE_u)) return
+      call init_is_restart_fh(mcurrTime, dt_cpl, is_root_pe(), restartfh_info)
+#endif
     endif
 
     if (restart_mode == 'alarms') then
@@ -2176,41 +2176,8 @@ subroutine ModelSetRunClock(gcomp, rc)
     call ESMF_TimeGet(dstoptime, timestring=timestr, rc=rc)
     call ESMF_LogWrite("Stop Alarm will ring at : "//trim(timestr), ESMF_LOGMSG_INFO)
 
-    ! set up Times to write non-interval restarts
-    call NUOPC_CompAttributeGet(gcomp, name='restart_fh', isPresent=isPresent, isSet=isSet, rc=rc)
-    if (ChkErr(rc,__LINE__,u_FILE_u)) return
-    if (isPresent .and. isSet) then
-
-      call ESMF_TimeIntervalGet(dtimestep, s=dt_cpl, rc=rc)
-      if (ChkErr(rc,__LINE__,u_FILE_u)) return
-      call NUOPC_CompAttributeGet(gcomp, name='restart_fh', value=cvalue, rc=rc)
-      if (ChkErr(rc,__LINE__,u_FILE_u)) return
-
-      ! convert string to a list of integer restart_fh values
-      nfh = 1 + count(transfer(trim(cvalue), 'a', len(cvalue)) == ",")
-      allocate(restart_fh(1:nfh))
-      allocate(restartFhTimes(1:nfh))
-      read(cvalue,*)restart_fh(1:nfh)
-
-      ! create a list of times at each restart_fh
-      do n = 1,nfh
-        call ESMF_TimeIntervalSet(fhInterval, h=restart_fh(n), rc=rc)
-        if (ChkErr(rc,__LINE__,u_FILE_u)) return
-        restartFhTimes(n) = mcurrtime + fhInterval
-        call ESMF_TimePrint(restartFhTimes(n), options="string", preString="Restart_Fh at ", unit=timestr, rc=rc)
-        if (ChkErr(rc,__LINE__,u_FILE_u)) return
-        if (localPet == 0) then
-          if (mod(3600*restart_fh(n),dt_cpl) /= 0) then
-            write(stdout,'(A)')trim(subname)//trim(timestr)//' will not be written'
-          else
-            write(stdout,'(A)')trim(subname)//trim(timestr)//' will be written'
-          end if
-        end if
-      end do
-      deallocate(restart_fh)
-    end if
-
     first_time = .false.
+
   endif
 
   !--------------------------------
