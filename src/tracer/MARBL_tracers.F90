@@ -893,7 +893,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
   character(len=48) :: flux_units ! The units for age tracer fluxes, either
                                   ! years m3 s-1 or years kg s-1.
   character(len=48) :: tracer_name
-  logical :: fesedflux_has_edges, fesedflux_use_missing
+  logical :: fesedflux_has_edges, fesedflux_use_missing, tracer_init_from_Z
   real    :: fesedflux_missing  ! required argument for read_Z_edges() [CU ~> conc]
   integer :: i, j, k, kbot, m, diag_size
 
@@ -972,6 +972,7 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
       day, "Conversion Factor for Bottom Flux -> Tend", "1/m")
 
   ! Initialize tracers (if they weren't initialized from restart file)
+  tracer_init_from_Z = .false.
   do m=1,CS%ntr
     call query_vardesc(CS%tr_desc(m), name=name, caller="initialize_MARBL_tracers")
     if ((.not. restart) .or. &
@@ -980,12 +981,30 @@ subroutine initialize_MARBL_tracers(restart, day, G, GV, US, h, param_file, diag
       ! TODO: added the ongrid optional argument, but is there a good way to detect if the file is on grid?
       call MOM_initialize_tracer_from_Z(h, CS%tracer_data(m)%tr, G, GV, US, param_file, &
           CS%IC_file, name, ongrid=CS%ongrid)
+      tracer_init_from_Z = .true.
       do k=1,GV%ke ; do j=G%jsc, G%jec ; do i=G%isc, G%iec
         ! Ensure tracer concentrations are at / above minimum value
         if (CS%tracer_data(m)%tr(i,j,k) < CS%IC_min) CS%tracer_data(m)%tr(i,j,k) = CS%IC_min
       enddo ; enddo ; enddo
     endif
   enddo
+  if (tracer_init_from_Z) then
+    ! For each column, enforce consistency in MARBL tracers
+    ! (no negative concentrations; for a given autotroph, if one tracer is 0 they all are)
+    call MOM_error(NOTE, 'Enforcing consistency across autotroph tracer initial conditions')
+    do j=G%jsc, G%jec ; do i=G%isc, G%iec
+      ! Copy tracer data into flat array
+      do k=1,GV%ke; do m=1, CS%ntr
+        MARBL_instances%tracers(m,k) = CS%tracer_data(m)%tr(i,j,k)
+      end do ; end do
+      ! call consistency enforcement
+      call MARBL_instances%autotroph_tracer_consistency_enforce()
+      ! Copy tracer data out of flat array
+      do k=1,GV%ke; do m=1, CS%ntr
+        CS%tracer_data(m)%tr(i,j,k) = MARBL_instances%tracers(m,k)
+      end do ; end do
+    end do ; end do
+  end if
 
   ! Initialize total chlorophyll to get SW Pen correct (if it wasn't initialized from restart file)
   if ((CS%total_Chl_ind > 0) .and. &
