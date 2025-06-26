@@ -275,7 +275,8 @@ end subroutine fill_miss_2d
 !> Extrapolate and interpolate from a file record
 subroutine horiz_interp_and_extrap_tracer_record(filename, varnam, recnum, G, tr_z, mask_z, &
                                                  z_in, z_edges_in, missing_value, scale, &
-                                                 homogenize, m_to_Z, answers_2018, ongrid, tr_iter_tol, answer_date)
+                                                 homogenize, m_to_Z, answers_2018, ongrid, tr_iter_tol, &
+                                                 num_pass, answer_date)
 
   character(len=*),      intent(in)    :: filename   !< Path to file containing tracer to be
                                                      !! interpolated.
@@ -311,6 +312,7 @@ subroutine horiz_interp_and_extrap_tracer_record(filename, varnam, recnum, G, tr
   real,        optional, intent(in)    :: tr_iter_tol !< The tolerance for changes in tracer concentrations
                                                      !! between smoothing iterations that determines when to
                                                      !! stop iterating in the same units as tr_z [A ~> a]
+  integer,     optional, intent(in)    :: num_pass   !< The maximum number of iterations
   integer,     optional, intent(in)    :: answer_date !< The vintage of the expressions in the code.
                                                      !! Dates before 20190101 give the same  answers
                                                      !! as the code did in late 2018, while later versions
@@ -601,7 +603,7 @@ subroutine horiz_interp_and_extrap_tracer_record(filename, varnam, recnum, G, tr
     good2(:,:) = good(:,:)
     fill2(:,:) = fill(:,:)
 
-    call fill_miss_2d(tr_outf, good2, fill2, tr_prev, G, dtr_iter_stop, answer_date=ans_date)
+    call fill_miss_2d(tr_outf, good2, fill2, tr_prev, G, dtr_iter_stop, num_pass=num_pass, answer_date=ans_date)
     if (debug) then
       call myStats(tr_outf, missing_value, G, k, 'field from fill_miss_2d()', unscale=I_scale)
     endif
@@ -628,7 +630,7 @@ end subroutine horiz_interp_and_extrap_tracer_record
 subroutine horiz_interp_and_extrap_tracer_fms_id(field, Time, G, tr_z, mask_z, &
                                                  z_in, z_edges_in, missing_value, scale, &
                                                  homogenize, spongeOngrid, m_to_Z, &
-                                                 answers_2018, tr_iter_tol, answer_date, &
+                                                 answers_2018, tr_iter_tol, num_pass, answer_date, &
                                                  axes)
 
   type(external_field), intent(in)     :: field      !< Handle for the time interpolated field
@@ -661,6 +663,7 @@ subroutine horiz_interp_and_extrap_tracer_fms_id(field, Time, G, tr_z, mask_z, &
   real,        optional, intent(in)    :: tr_iter_tol !< The tolerance for changes in tracer concentrations
                                                      !! between smoothing iterations that determines when to
                                                      !! stop iterating, in the same arbitrary units as tr_z [A ~> a]
+  integer,     optional, intent(in)    :: num_pass   !< The maximum number of iterations
   integer,     optional, intent(in)    :: answer_date !< The vintage of the expressions in the code.
                                                      !! Dates before 20190101 give the same  answers
                                                      !! as the code did in late 2018, while later versions
@@ -918,7 +921,7 @@ subroutine horiz_interp_and_extrap_tracer_fms_id(field, Time, G, tr_z, mask_z, &
       good2(:,:) = good(:,:)
       fill2(:,:) = fill(:,:)
 
-      call fill_miss_2d(tr_outf, good2, fill2, tr_prev, G, dtr_iter_stop, answer_date=ans_date)
+      call fill_miss_2d(tr_outf, good2, fill2, tr_prev, G, dtr_iter_stop, num_pass=num_pass, answer_date=ans_date)
 
 !     if (debug) then
 !       call hchksum(tr_outf, 'field from fill_miss_2d ', G%HI, unscale=I_scale)
