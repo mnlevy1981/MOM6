@@ -641,6 +641,22 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Tim
   showCallTree = callTree_showQuery()
   if (showCallTree) call callTree_enter("diabatic_ALE_legacy(), MOM_diabatic_driver.F90")
 
+  ! Some tracer packages require T & S from the beginning of the diabatic step to
+  ! provide forcing consistent with the passive tracer values. The initialization
+  ! routine will allocate prediabatic_T and prediabatic_S if the tracer flow control
+  ! structure indicates it is necessary. If these arrays are allocated, they will store
+  ! a copy of tv%T & tv%S before this subroutine modifies the tv structure.
+  if (allocated(CS%prediabatic_T)) then
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      CS%prediabatic_T(i,j,k) = tv%T(i,j,k)
+    enddo ; enddo ; enddo
+  endif
+  if (allocated(CS%prediabatic_S)) then
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      CS%prediabatic_S(i,j,k) = tv%S(i,j,k)
+    enddo ; enddo ; enddo
+  endif
+
   ! For all other diabatic subroutines, the averaging window should be the entire diabatic timestep
   call enable_averages(dt, Time_end, CS%diag)
 
@@ -1196,7 +1212,8 @@ subroutine diabatic_ALE_legacy(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Tim
                               KPP_CSp=CS%KPP_CSp, &
                               nonLocalTrans=KPP_NLTscalar, &
                               evap_CFL_limit=CS%evap_CFL_limit, &
-                              minimum_forcing_depth=CS%minimum_forcing_depth, h_BL=visc%h_ML)
+                              minimum_forcing_depth=CS%minimum_forcing_depth, h_BL=visc%h_ML, &
+                              prediabatic_T=CS%prediabatic_T, prediabatic_S=CS%prediabatic_S)
 
   call cpu_clock_end(id_clock_tracers)
 
@@ -1350,21 +1367,27 @@ subroutine diabatic_ALE(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Time_end, 
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
   ent_s(:,:,:) = 0.0 ; ent_t(:,:,:) = 0.0
 
-  ! Some tracer packages require T & S from the beginning of the diabatic step to
-  ! provide forcing consistent with the passive tracer values. The initialization
-  ! routine will allocate prediabatic_T and prediabatic_S if the tracer flow control
-  ! structure indicates it is necessary. If these arrays are allocated, they will store
-  ! a copy of tv%T & tv%S before this subroutine modifies the tv structure.
-  if (allocated(CS%prediabatic_T)) &
-    CS%prediabatic_T(:,:,:) = tv%T(:,:,:)
-  if (allocated(CS%prediabatic_S)) &
-    CS%prediabatic_S(:,:,:) = tv%S(:,:,:)
-
   showCallTree = callTree_showQuery()
   if (showCallTree) call callTree_enter("diabatic_ALE(), MOM_diabatic_driver.F90")
 
   if (.not. (CS%useALEalgorithm)) call MOM_error(FATAL, "MOM_diabatic_driver: "// &
          "The ALE algorithm must be enabled when using MOM_diabatic_driver.")
+
+  ! Some tracer packages require T & S from the beginning of the diabatic step to
+  ! provide forcing consistent with the passive tracer values. The initialization
+  ! routine will allocate prediabatic_T and prediabatic_S if the tracer flow control
+  ! structure indicates it is necessary. If these arrays are allocated, they will store
+  ! a copy of tv%T & tv%S before this subroutine modifies the tv structure.
+  if (allocated(CS%prediabatic_T)) then
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      CS%prediabatic_T(i,j,k) = tv%T(i,j,k)
+    enddo ; enddo ; enddo
+  endif
+  if (allocated(CS%prediabatic_S)) then
+    do k=1,nz ; do j=js,je ; do i=is,ie
+      CS%prediabatic_S(i,j,k) = tv%S(i,j,k)
+    enddo ; enddo ; enddo
+  endif
 
   ! For all other diabatic subroutines, the averaging window should be the entire diabatic timestep
   call enable_averages(dt, Time_end, CS%diag)

@@ -546,8 +546,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
     if (CS%use_MARBL_tracers) then
       if ((.not. present(prediabatic_T)) .or. (.not. present(prediabatic_S))) &
         call MOM_error(FATAL, 'Must pass prediabatic_T and prediabatic_S when using MARBL')
-      call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                        G, GV, US, CS%MARBL_tracers_CSp, tv, &
+      call MARBL_tracers_column_physics(h_old, ea, eb, fluxes, dt, &
+                                        G, GV, US, CS%MARBL_tracers_CSp, &
                                         prediabatic_T, prediabatic_S, &
                                         KPP_CSp=KPP_CSp, &
                                         nonLocalTrans=nonLocalTrans, &
@@ -640,8 +640,8 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
     if (CS%use_MARBL_tracers) then
       if ((.not. present(prediabatic_T)) .or. (.not. present(prediabatic_S))) &
         call MOM_error(FATAL, 'Must pass prediabatic_T and prediabatic_S when using MARBL')
-      call MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
-                                        G, GV, US, CS%MARBL_tracers_CSp, tv, &
+      call MARBL_tracers_column_physics(h_old, ea, eb, fluxes, dt, &
+                                        G, GV, US, CS%MARBL_tracers_CSp, &
                                         prediabatic_T, prediabatic_S, &
                                         KPP_CSp=KPP_CSp, &
                                         nonLocalTrans=nonLocalTrans)
