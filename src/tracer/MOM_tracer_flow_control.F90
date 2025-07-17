@@ -498,8 +498,10 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
   real,                        optional, intent(in) :: minimum_forcing_depth !< The smallest depth over
                                                               !! which fluxes can be applied [H ~> m or kg m-2]
   real, dimension(:,:),        optional, pointer    :: h_BL   !< Thickness of active mixing layer [H ~> m or kg m-2]
-  real, dimension(:,:,:),      optional, intent(in) :: prediabatic_T   !< Temperature prior to calling diabatic driver [C ~> degC]
-  real, dimension(:,:,:),      optional, intent(in) :: prediabatic_S   !< Salinity prior to calling diabatic driver [S ~> ppt]
+  real, dimension(:,:,:),      optional, intent(in) :: prediabatic_T   !< Temperature prior to calling
+                                                                       !! diabatic driver [C ~> degC]
+  real, dimension(:,:,:),      optional, intent(in) :: prediabatic_S   !< Salinity prior to calling
+                                                                       !! diabatic driver [S ~> ppt]
 
   ! Local variables
   real :: Hbl(SZI_(G),SZJ_(G))    !< Boundary layer thickness [H ~> m or kg m-2]

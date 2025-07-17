@@ -1350,6 +1350,11 @@ subroutine diabatic_ALE(u, v, h, tv, BLD, fluxes, visc, ADp, CDp, dt, Time_end, 
   Kd_heat(:,:,:) = 0.0 ; Kd_salt(:,:,:) = 0.0
   ent_s(:,:,:) = 0.0 ; ent_t(:,:,:) = 0.0
 
+  ! Some tracer packages require T & S from the beginning of the diabatic step to
+  ! provide forcing consistent with the passive tracer values. The initialization
+  ! routine will allocate prediabatic_T and prediabatic_S if the tracer flow control
+  ! structure indicates it is necessary. If these arrays are allocated, they will store
+  ! a copy of tv%T & tv%S before this subroutine modifies the tv structure.
   if (allocated(CS%prediabatic_T)) &
     CS%prediabatic_T(:,:,:) = tv%T(:,:,:)
   if (allocated(CS%prediabatic_S)) &
