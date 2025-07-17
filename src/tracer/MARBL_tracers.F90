@@ -1271,7 +1271,7 @@ end subroutine setup_saved_state
 !> This subroutine applies diapycnal diffusion and any other column
 !! tracer physics or chemistry to the tracers from this file.
 subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV, US, CS, tv, &
-    KPP_CSp, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
+    prediabatic_T, prediabatic_S, KPP_CSp, nonLocalTrans, evap_CFL_limit, minimum_forcing_depth)
 
   type(ocean_grid_type),   intent(in) :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in) :: GV   !< The ocean's vertical grid structure
@@ -1294,6 +1294,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   type(MARBL_tracers_CS),     pointer :: CS   !< The control structure returned by a previous
                                               !! call to register_MARBL_tracers.
   type(thermo_var_ptrs),   intent(in) :: tv   !< A structure pointing to various thermodynamic variables
+  real, dimension(:,:,:),  intent(in) :: prediabatic_T   !< Temperature prior to calling diabatic driver [C ~> degC]
+  real, dimension(:,:,:),  intent(in) :: prediabatic_S   !< Salinity prior to calling diabatic driver [S ~> ppt]
+
   type(KPP_CS),  optional, pointer    :: KPP_CSp  !< KPP control structure
   real,          optional, intent(in) :: nonLocalTrans(:,:,:) !< Non-local transport [1]
   real,          optional, intent(in) :: evap_CFL_limit !< Limit on the fraction of the water that can
@@ -1336,9 +1339,9 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       !       TODO: if top layer is vanishly thin, do we actually want (e.g.) top 5m average temp / salinity?
       !             How does MOM pass SST and SSS to GFDL coupler? (look in core.F90?)
       if (CS%sss_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = tv%S(i,j,1) * US%S_to_ppt
+        MARBL_instances%surface_flux_forcings(CS%sss_ind)%field_0d(1) = prediabatic_S(i,j,1) * US%S_to_ppt
       if (CS%sst_ind > 0) &
-        MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = tv%T(i,j,1) * US%C_to_degC
+        MARBL_instances%surface_flux_forcings(CS%sst_ind)%field_0d(1) = prediabatic_T(i,j,1) * US%C_to_degC
       if (CS%ifrac_ind > 0) &
         MARBL_instances%surface_flux_forcings(CS%ifrac_ind)%field_0d(1) = fluxes%ice_fraction(i,j)
 
@@ -1404,7 +1407,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
         call MARBL_instances%StatusLog%log_error_trace("MARBL_instances%surface_flux_compute()", &
             "MARBL_tracers_column_physics")
       endif
-      call print_marbl_log(MARBL_instances%StatusLog)
+      call print_marbl_log(MARBL_instances%StatusLog, G, i, j)
       call MARBL_instances%StatusLog%erase()
 
       ! iv. Copy output that MOM6 needs to hold on to
