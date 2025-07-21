@@ -1943,11 +1943,13 @@ subroutine ModelAdvance(gcomp, rc)
                  msg=subname//' ERROR opening '//rpointer_filename, line=__LINE__, file=u_FILE_u, rcToReturn=rc)
             return
           endif
-          if (len_trim(inst_suffix) == 0) then
-            write(writeunit,'(a)') trim(restartname)//'.nc'
-          else
-            write(writeunit,'(a)') trim(restartname)//'.'//trim(inst_suffix)//'.nc'
+
+          ! update restart file name to include the instance suffix
+          if (len_trim(inst_suffix) > 0) then
+            write(restartname, '(A,".mom6",A,".r",A)') trim(casename), trim(inst_suffix), timestamp
           endif
+
+          write(writeunit,'(a)') trim(restartname)//'.nc'
 
           if (num_rest_files > 1) then
             ! append i.th restart file name to rpointer
