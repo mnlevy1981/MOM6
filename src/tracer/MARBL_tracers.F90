@@ -2113,7 +2113,6 @@ function MARBL_tracers_stock(h, stocks, G, GV, CS, names, units, stock_index)
                                                                                 !! calculated here.
 
   ! Local variables
-  character(len=200) :: log_message
   integer :: i, j, k, is, ie, js, je, nz, m
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
 
@@ -2131,8 +2130,6 @@ function MARBL_tracers_stock(h, stocks, G, GV, CS, names, units, stock_index)
   do m=1,CS%ntr
     call query_vardesc(CS%tr_desc(m), name=names(m), units=units(m), caller="MARBL_tracers_stock")
     units(m) = trim(units(m))//" kg"
-    write(log_message, "(I0, 2A)") m, ': ', trim(names(m))
-    call MOM_error(WARNING, log_message, all_print=.true.)
     stocks(m) = global_mass_int_EFP(h, G, GV, CS%tracer_data(m)%tr(:,:,:), on_PE_only=.true.)
   enddo
   MARBL_tracers_stock = CS%ntr
