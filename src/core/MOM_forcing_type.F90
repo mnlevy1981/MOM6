@@ -3524,7 +3524,7 @@ subroutine allocate_forcing_by_group(G, fluxes, water, heat, ustar, press, &
 
   if (present(fix_accum_bug)) fluxes%gustless_accum_bug = .not.fix_accum_bug
 
-  !These fields should only be allocated when USE_MARBL is activated.
+  !These fields should only be allocated when USE_MARBL_TRACERS is activated.
   call myAlloc(fluxes%ice_fraction,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%u10_sqr,isd,ied,jsd,jed, marbl)
   call myAlloc(fluxes%noy_dep,isd,ied,jsd,jed, marbl)

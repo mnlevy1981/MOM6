@@ -422,7 +422,7 @@ subroutine extract_tracer_flow_member(CS, use_MARBL_tracers)
   ! All output arguments are optional
   logical,                    optional, intent(out) :: use_MARBL_tracers  !< If true, MARBL tracers are active
 
-  ! Constants within diabatic_CS
+  ! Constants within tracer_flow_control_CS
   if (present(use_MARBL_tracers)) use_MARBL_tracers = CS%use_MARBL_tracers
 end subroutine extract_tracer_flow_member
 
@@ -553,7 +553,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
                                         nonLocalTrans=nonLocalTrans, &
                                         evap_CFL_limit=evap_CFL_limit, &
                                         minimum_forcing_depth=minimum_forcing_depth)
-    end if
+    endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                      G, GV, US, tv, CS%dye_tracer_CSp, &
@@ -645,7 +645,7 @@ subroutine call_tracer_column_fns(h_old, h_new, ea, eb, fluxes, mld, dt, G, GV, 
                                         prediabatic_T, prediabatic_S, &
                                         KPP_CSp=KPP_CSp, &
                                         nonLocalTrans=nonLocalTrans)
-    end if
+    endif
     if (CS%use_regional_dyes) &
       call dye_tracer_column_physics(h_old, h_new, ea, eb, fluxes, dt, &
                                            G, GV, US, tv, CS%dye_tracer_CSp)
