@@ -125,6 +125,9 @@ type, public :: KPP_CS ; private
   real    :: MLD_guess_min             !< The minimum estimate of the mixed layer depth used to
                                        !! calculate the Langmuir number for Langmuir turbulence
                                        !! enhancement with KPP [Z ~> m]
+  real    :: KPP_ER_Cb                 ! Entrainment Rule TKE buoyancy production weight [nondim]
+  real    :: KPP_ER_Cs                 ! Entrainment Rule TKE Stokes production weight [nondim]
+  real    :: KPP_ER_Cu                 ! Entrainment Rule TKE shear production weight [nondim]
   logical :: STOKES_MIXING             !< Flag if model is mixing down Stokes gradient
                                        !! This is relevant for which current to use in RiB
   integer :: answer_date               !< The vintage of the order of arithmetic in the CVMix KPP
@@ -532,6 +535,16 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
                  'Parameter for Stokes MOST convection entrainment (unresolved shear)', &
                  units="nondim", default=1.6)
 
+  call get_param(paramFile, mdl, "KPP_ER_Cb", CS%KPP_ER_Cb, &
+                 'Entrainment Rule TKE buoyancy production weight', &
+                 units="nondim", default=0.96)
+  call get_param(paramFile, mdl, "KPP_ER_Cs", CS%KPP_ER_Cs, &
+                 'Entrainment Rule TKE Stokes production weight', &
+                 units="nondim", default=0.038)
+  call get_param(paramFile, mdl, "KPP_ER_Cu", CS%KPP_ER_Cu, &
+                 'Entrainment Rule TKE shear production weight', &
+                 units="nondim", default=0.023)
+
   call get_param(paramFile, mdl, "ANSWER_DATE", CS%answer_date, &
                  "The vintage of the order of arithmetic in the CVMix KPP calculations.  Values "//&
                  "below 20240501 recover the answers from early in 2024, while higher values "//&
@@ -548,6 +561,9 @@ logical function KPP_init(paramFile, G, GV, US, diag, Time, CS, passive)
                        vonKarman=CS%vonKarman,             &
                        surf_layer_ext=CS%surf_layer_ext,   &
                        CVt2=CS%KPP_CVt2,                   &
+                       ER_Cb=CS%KPP_ER_Cb,                 &
+                       ER_Cs=CS%KPP_ER_Cs,                 &
+                       ER_Cu=CS%KPP_ER_Cu,                 &
                        interp_type=CS%interpType,          &
                        interp_type2=CS%interpType2,        &
                        lEkman=CS%computeEkman,             &
