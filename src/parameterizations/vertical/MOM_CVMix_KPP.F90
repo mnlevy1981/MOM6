@@ -125,9 +125,9 @@ type, public :: KPP_CS ; private
   real    :: MLD_guess_min             !< The minimum estimate of the mixed layer depth used to
                                        !! calculate the Langmuir number for Langmuir turbulence
                                        !! enhancement with KPP [Z ~> m]
-  real    :: KPP_ER_Cb                 ! Entrainment Rule TKE buoyancy production weight [nondim]
-  real    :: KPP_ER_Cs                 ! Entrainment Rule TKE Stokes production weight [nondim]
-  real    :: KPP_ER_Cu                 ! Entrainment Rule TKE shear production weight [nondim]
+  real    :: KPP_ER_Cb                 !< Entrainment Rule TKE buoyancy production weight [nondim]
+  real    :: KPP_ER_Cs                 !< Entrainment Rule TKE Stokes production weight [nondim]
+  real    :: KPP_ER_Cu                 !< Entrainment Rule TKE shear production weight [nondim]
   logical :: STOKES_MIXING             !< Flag if model is mixing down Stokes gradient
                                        !! This is relevant for which current to use in RiB
   integer :: answer_date               !< The vintage of the order of arithmetic in the CVMix KPP
