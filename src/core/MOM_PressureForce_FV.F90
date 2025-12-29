@@ -2030,8 +2030,6 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
   type(tidal_forcing_CS), intent(in), target, optional :: tides_CSp !< Tides control structure
 
   ! Local variables
-  real :: Stanley_coeff    ! Coefficient relating the temperature gradient and sub-gridscale
-                           ! temperature variance [nondim]
   integer :: default_answer_date ! Global answer date
   logical :: use_temperature   ! If true, temperature and salinity are used as state variables.
   logical :: use_EOS           ! If true, density calculated from T & S using an equation of state.
@@ -2039,10 +2037,13 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
   logical :: MassWghtInterpTop ! If true, use near-surface mass weighting for T and S under ice shelves
   logical :: MassWghtInterp_NonBous_bug ! If true, use a buggy mass weighting when non-Boussinesq
   logical :: MassWghtInterpVanOnly ! If true, turn of mass weighting unless one side is vanished
+  logical :: enable_bugs  ! If true, the defaults for recently added bug-fix flags are set to
+                          ! recreate the bugs, or if false bugs are only used if actively selected.
   ! This include declares and sets the variable "version".
 # include "version_variable.h"
   character(len=40)  :: mdl  ! This module's name.
   logical :: use_ALE       ! If true, use the Vertical Lagrangian Remap algorithm
+  logical :: stoch_eos     ! Can't use Stanley param here unless stoch_eos is true
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, nz
 
   isd  = G%isd  ; ied  = G%ied  ; jsd  = G%jsd  ; jed  = G%jed ; nz = GV%ke
@@ -2065,15 +2066,19 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
                  "gradient forces.  Its inverse is subtracted off of specific volumes when "//&
                  "in non-Boussinesq mode.  The default is RHO_0.", &
                  units="kg m-3", default=GV%Rho0*US%R_to_kg_m3, scale=US%kg_m3_to_R)
+  call get_param(param_file, mdl, "ENABLE_BUGS_BY_DEFAULT", enable_bugs, &
+                 default=.true., do_not_log=.true.)  ! This is logged from MOM.F90.
   call get_param(param_file, mdl, "RHO_PGF_REF_BUG", CS%rho_ref_bug, &
                  "If true, recover a bug that RHO_0 (the mean seawater density in Boussinesq mode) "//&
                  "and RHO_PGF_REF (the subtracted reference density in finite volume pressure "//&
                  "gradient forces) are incorrectly interchanged in several instances in Boussinesq mode.", &
-                 default=.true.)
+                 default=enable_bugs)
   call get_param(param_file, mdl, "TIDES", CS%tides, &
                  "If true, apply tidal momentum forcing.", default=.false.)
-  call get_param(param_file, '', "DEFAULT_ANSWER_DATE", default_answer_date, default=99991231)
-  if (CS%tides) &
+  if (CS%tides) then
+    call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
+                 "This sets the default value for the various _ANSWER_DATE parameters.", &
+                 default=99991231)
     call get_param(param_file, mdl, "TIDES_ANSWER_DATE", CS%tides_answer_date, "The vintage of "//&
                   "self-attraction and loading (SAL) and tidal forcing calculations.  Setting "//&
                   "dates before 20230701 recovers old answers (Boussinesq and non-Boussinesq "//&
@@ -2081,7 +2086,8 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
                   "difference is only at bit level and due to a reordered summation.  Setting "//&
                   "dates before 20250201 recovers answers (Boussinesq mode) that interface "//&
                   "heights are modified before pressure force integrals are calculated.", &
-                  default=20230630, do_not_log=(.not.CS%tides))
+                  default=default_answer_date, do_not_log=(.not.CS%tides))
+  endif
   call get_param(param_file, mdl, "CALCULATE_SAL", CS%calculate_SAL, &
                  "If true, calculate self-attraction and loading.", default=CS%tides)
   if (CS%calculate_SAL) &
@@ -2124,7 +2130,7 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
                  "If true and MASS_WEIGHT_IN_PRESSURE_GRADIENT is true, use mass weighting when "//&
                  "interpolating T/S for integrals near the top of the water column in FV "//&
                  "pressure gradient calculations. ", &
-                 default=.false.) !### Change Default to MASS_WEIGHT_IN_PRESSURE_GRADIENT?
+                 default=useMassWghtInterp)
   call get_param(param_file, mdl, "MASS_WEIGHT_IN_PGF_NONBOUS_BUG", MassWghtInterp_NonBous_bug, &
                  "If true, use a masking bug in non-Boussinesq calculations with mass weighting "//&
                  "when interpolating T/S for integrals near the bathymetry in FV pressure "//&
@@ -2182,16 +2188,15 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
                  "boundary cells is extrapolated, rather than using PCM "//&
                  "in these cells. If true, the same order polynomial is "//&
                  "used as is used for the interior cells.", default=.true.)
+  call get_param(param_file, mdl, "STOCH_EOS", stoch_eos, &
+                 default=.false., do_not_log=.true.)
   call get_param(param_file, mdl, "USE_STANLEY_PGF", CS%use_stanley_pgf, &
                  "If true, turn on Stanley SGS T variance parameterization "// &
                  "in PGF code.", default=.false.)
   if (CS%use_stanley_pgf) then
-    call get_param(param_file, mdl, "STANLEY_COEFF", Stanley_coeff, &
-                 "Coefficient correlating the temperature gradient and SGS T variance.", &
-                 units="nondim", default=-1.0, do_not_log=.true.)
-    if (Stanley_coeff < 0.0) call MOM_error(FATAL, &
-                 "STANLEY_COEFF must be set >= 0 if USE_STANLEY_PGF is true.")
-
+    if (.not.stoch_eos) then
+      call MOM_error(FATAL, "PressureForce_FV_init: USE_STANLEY_PGF requires STOCH_EOS")
+    endif
     CS%id_rho_pgf = register_diag_field('ocean_model', 'rho_pgf', diag%axesTL, &
         Time, 'rho in PGF', 'kg m-3', conversion=US%R_to_kg_m3)
     CS%id_rho_stanley_pgf = register_diag_field('ocean_model', 'rho_stanley_pgf', diag%axesTL, &

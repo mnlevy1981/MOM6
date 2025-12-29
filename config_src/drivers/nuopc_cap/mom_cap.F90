@@ -140,6 +140,7 @@ logical              :: profile_memory = .true.
 logical              :: grid_attach_area = .false.
 logical              :: use_coldstart = .true.
 logical              :: use_mommesh = .true.
+logical              :: set_missing_stks_to_zero = .false.
 logical              :: restart_eor = .false.
 character(len=128)   :: scalar_field_name = ''
 integer              :: scalar_field_count = 0
@@ -366,6 +367,14 @@ subroutine InitializeP0(gcomp, importState, exportState, clock, rc)
   if (isPresent .and. isSet) use_coldstart=(trim(value)=="true")
   write(logmsg,*) use_coldstart
   call ESMF_LogWrite('MOM_cap:use_coldstart = '//trim(logmsg), ESMF_LOGMSG_INFO)
+
+  set_missing_stks_to_zero = .false.
+  call NUOPC_CompAttributeGet(gcomp, name="set_missing_stks_to_zero", value=value, &
+       isPresent=isPresent, isSet=isSet, rc=rc)
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
+  if (isPresent .and. isSet) set_missing_stks_to_zero=(trim(value)=="true")
+  write(logmsg,*) set_missing_stks_to_zero
+  call ESMF_LogWrite('MOM_cap:set_missing_stks_to_zero = '//trim(logmsg), ESMF_LOGMSG_INFO)
 
   use_mommesh = .true.
   call NUOPC_CompAttributeGet(gcomp, name="use_mommesh", value=value, &
@@ -1844,7 +1853,8 @@ subroutine ModelAdvance(gcomp, rc)
     ! Import data
     !---------------
 
-    call mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary, rc=rc)
+    call mom_import(ocean_public, ocean_grid, importState, ice_ocean_boundary,  &
+                    set_missing_stks_to_zero, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
     !---------------
@@ -1932,9 +1942,12 @@ subroutine ModelAdvance(gcomp, rc)
 
         write(restartname,'(A,".mom6.r",A)') &
              trim(casename), timestamp
+        write(stoch_restartname,'(A,".mom6.r_stoch",A,".nc")') &
+             trim(casename), timestamp
         call ESMF_LogWrite("MOM_cap: Writing restart :  "//trim(restartname), ESMF_LOGMSG_INFO)
         ! write restart file(s)
-        call ocean_model_restart(ocean_state, restartname=restartname, num_rest_files=num_rest_files)
+        call ocean_model_restart(ocean_state, restartname=restartname, &
+                stoch_restartname=stoch_restartname, num_rest_files=num_rest_files)
         if (localPet == 0) then
            ! Write name of restart file in the rpointer file - this is currently hard-coded for the ocean
           open(newunit=writeunit, file=rpointer_filename, form='formatted', status='unknown', iostat=iostat)
@@ -1973,7 +1986,7 @@ subroutine ModelAdvance(gcomp, rc)
 
         ! write restart file(s)
         call ocean_model_restart(ocean_state, restartname=restartname, &
-                                stoch_restartname=stoch_restartname)
+                                stoch_restartname='RESTART/'//stoch_restartname)
 
       endif
 

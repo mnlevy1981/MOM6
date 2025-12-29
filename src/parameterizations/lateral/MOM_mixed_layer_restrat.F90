@@ -102,8 +102,9 @@ type, public :: mixedlayer_restrat_CS ; private
                                    !! front-length scales read from a file.
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   logical :: use_Stanley_ML        !< If true, use the Stanley parameterization of SGS T variance
-  logical :: wave_enhanced_ustar   !< If true, enhance ustar for equilibrium surface waves (La-2=11),
-                                   !! following Eq. 28 in Bodner23.
+  logical :: wave_enhanced_ustar   !< If true, enhance ustar using surface waves, following Eq. 28 in Bodner23.
+                                   !! Use a Langmuir number if provided. Otherwise, assumes equilibrium
+                                   !! surface waves (La-2=11.).
   real    :: ustar_min             !< A minimum value of ustar in thickness units to avoid numerical
                                    !! problems [H T-1 ~> m s-1 or kg m-2 s-1]
 
@@ -149,7 +150,7 @@ contains
 !> Driver for the mixed-layer restratification parameterization.
 !! The code branches between two different implementations depending
 !! on whether the bulk-mixed layer or a general coordinate are in use.
-subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS)
+subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS, Lam2)
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),                      intent(in)    :: US     !< A dimensional unit scaling type
@@ -170,17 +171,29 @@ subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, 
                                                                       !! PBL scheme [Z2 T-3 ~> m2 s-3]
   type(VarMix_CS),                            intent(in)    :: VarMix !< Variable mixing control structure
   type(mixedlayer_restrat_CS),                intent(inout) :: CS     !< Module control structure
+  real, dimension(:,:),             optional, pointer       :: Lam2   !< (Langmuir Number)^-2  [nondim]
 
+
+  ! local variables
+  logical :: haveLam2 !< True if optional Lam2 argument is both present and associated
 
   if (.not. CS%initialized) call MOM_error(FATAL, "mixedlayer_restrat: "// &
          "Module must be initialized before it is used.")
+
+  ! Determine if Lam2 should be used
+  haveLam2 = .false.
+  if (present(Lam2)) haveLam2 = associated(Lam2)
 
   if (GV%nkml>0) then
     ! Original form, written for the isopycnal model with a bulk mixed layer
     call mixedlayer_restrat_BML(h, uhtr, vhtr, tv, forces, dt, G, GV, US, CS)
   elseif (CS%use_Bodner) then
     ! Implementation of Bodner et al., 2023
-    call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
+    if (haveLam2) then
+      call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, Lam2)
+    else
+      call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
+    endif
   else
     ! Implementation of Fox-Kemper et al., 2008, to work in general coordinates
     call mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
@@ -755,7 +768,7 @@ end function mu
 
 !> Calculates a restratifying flow in the mixed layer, following the formulation
 !! used in Bodner et al., 2023 (B22)
-subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, BLD, h_MLD, bflux)
+subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, BLD, h_MLD, bflux, Lam2)
   ! Arguments
   type(mixedlayer_restrat_CS),                intent(inout) :: CS     !< Module control structure
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
@@ -776,6 +789,9 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
                                                                       !! the PBL scheme [H ~> m or kg m-2]
   real, dimension(:,:),                       pointer       :: bflux  !< Surface buoyancy flux provided by the
                                                                       !! PBL scheme [Z2 T-3 ~> m2 s-3]
+  real, dimension(:,:),             optional, pointer       :: Lam2   !< (Langmuir Number)^-2, which is defined as
+                                                                      !! Surface Stokes/ustar [nondim]
+
   ! Local variables
   real :: uhml(SZIB_(G),SZJ_(G),SZK_(GV)) ! zonal mixed layer transport [H L2 T-1 ~> m3 s-1 or kg s-1]
   real :: vhml(SZI_(G),SZJB_(G),SZK_(GV)) ! merid mixed layer transport [H L2 T-1 ~> m3 s-1 or kg s-1]
@@ -809,7 +825,6 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   real :: w_star3         ! Cube of turbulent convective velocity [Z3 T-3 ~> m3 s-3]
   real :: u_star3         ! Cube of surface friction velocity [Z3 T-3 ~> m3 s-3]
   real :: E_ustar         ! Surface wave ustar enhancement factor   [nondim]
-  real :: Lam2            ! Reciprocal of the squrared turbulent Langmuir number [nondim]
   real :: r_wpup          ! reciprocal of vertical momentum flux [T2 L-1 H-1 ~> s2 m-2 or m s2 kg-1]
   real :: absf            ! absolute value of f, interpolated to velocity points [T-1 ~> s-1]
   real :: f_h             ! Coriolis parameter at h-points [T-1 ~> s-1]
@@ -833,10 +848,12 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
                           ! fractional power [T3 m3 Z-3 s-3 ~> 1]
   real :: m2_s2_to_Z2_T2  ! Conversion factors to restore scaling after a term is raised to a
                           ! fractional power [Z2 s2 T-2 m-2 ~> 1]
+  real, parameter :: Lam2_eq = 11.       ! (Langmuir Number)^-2 assuming wind wave equilibrium [nondim]
   real, parameter :: two_thirds = 2./3.  ! [nondim]
   logical :: line_is_empty, keep_going
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  logical :: Lam2_available
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -863,6 +880,9 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
            "To use the Bodner et al., 2023, MLE parameterization, either MLE_USE_PBL_MLD or "// &
            "Bodner_detect_MLD must be True.")
   endif
+  if (CS%use_Stanley_ML .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
+       "MOM_mixedlayer_restrat: The Stanley parameterization is not"//&
+       "available without the Boussinesq approximation.")
 
   if (associated(bflux)) &
     call pass_var(bflux, G%domain, halo=1)
@@ -870,15 +890,23 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
   ! Extract the friction velocity from the forcing type.
   call find_ustar(forces, tv, U_star_2d, G, GV, US, halo=1)
 
-  ! wave enhancement of ustar following Eq. 28 in Bodner23
+  Lam2_available = present(Lam2)
+  if (Lam2_available) Lam2_available = associated(Lam2)
+
+  ! Wave Enhanced of ustar following Eq. 28 in Bodner23
   if (CS%wave_enhanced_ustar) then
-    ! Assuming wind wave equilibrium (Lam2=11) until Lam2 becomes available
-    Lam2 = 11.
-    E_ustar   =  sqrt( 1.0 + (Lam2 * 0.104) + (Lam2 * Lam2 * 0.00118))
-    ! Wave Enhanced
-    do j=js-1,je+1 ; do i=is-1,ie+1
-      U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
-    enddo ; enddo
+    if (Lam2_available) then
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        E_ustar   =  sqrt( 1.0 + (Lam2(i,j) * 0.104) + (Lam2(i,j) * Lam2(i,j) * 0.00118))
+        U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
+      enddo ; enddo
+    else
+      ! Assuming wind wave equilibrium (Lam2=11)
+      E_ustar   =  sqrt( 1.0 + (Lam2_eq * 0.104) + (Lam2_eq * Lam2_eq * 0.00118))
+      do j=js-1,je+1 ; do i=is-1,ie+1
+        U_star_2d(i,j) = E_ustar * U_star_2d(i,j)
+      enddo ; enddo
+    endif
   endif
 
   if (CS%debug) then
@@ -1644,8 +1672,6 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
   real :: flux_to_kg_per_s ! A unit conversion factor for fluxes. [kg T s-1 H-1 L-2 ~> kg m-3 or 1]
   real :: omega            ! The Earth's rotation rate [T-1 ~> s-1].
   real :: ustar_min_dflt   ! The default value for RESTRAT_USTAR_MIN [Z T-1 ~> m s-1]
-  real :: Stanley_coeff    ! Coefficient relating the temperature gradient and sub-gridscale
-                           ! temperature variance [nondim]
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags
   ! This include declares and sets the variable "version".
   character(len=200) :: inputdir   ! The directory where NetCDF input files
@@ -1653,6 +1679,7 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
   character(len=128) :: mle_fl_file ! Data containing MLE front-length scale. Used
                                     ! when reading from file.
   character(len=32)  :: fl_varname ! Name of front-length scale variable in mle_fl_file.
+  logical :: stoch_eos     ! Can't use Stanley param here unless stoch_eos is true
 
 # include "version_variable.h"
   integer :: i, j
@@ -1689,6 +1716,14 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
       "This sets the default value for the various _ANSWER_DATE parameters.", &
       default=99991231, do_not_log=.true.)
   call get_param(param_file, mdl, "INPUTDIR", inputdir, default=".")
+  call get_param(param_file, mdl, "STOCH_EOS", stoch_eos, &
+                 default=.false., do_not_log=.true.)
+  call get_param(param_file, mdl, "USE_STANLEY_ML", CS%use_Stanley_ML, &
+                 "If true, turn on Stanley SGS T variance parameterization "// &
+                 "in ML restrat code.", default=.false.)
+  if (CS%use_Stanley_ML .and. .not.stoch_eos) then
+    call MOM_error(FATAL, "mixedlayer_restrat_init: USE_STANLEY_ML requires STOCH_EOS")
+  endif
   call openParameterBlock(param_file,'MLE') ! Prepend MLE% to all parameters
   if (GV%nkml==0) then
     call get_param(param_file, mdl, "USE_BODNER23", CS%use_Bodner, &
@@ -1745,17 +1780,17 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "parameter a micron away from the equator.", &
              units="m2 s-2", default=1.0e-24, scale=US%m_to_Z**2*US%T_to_s**2)
     call get_param(param_file, mdl, "WAVE_ENHANCED_USTAR", CS%wave_enhanced_ustar, &
-             "If true, enhance ustar for equilibrium surface waves (La-2=11.), "// &
-             "following Eq. 28 in Bodner23.", default=.false.)
+             "If true, enhance ustar using surface waves, following Eq. 28 in Bodner23. " //&
+             "Use a Langmuir number if provided. Otherwise, assumes equilibrium "// &
+             "surface waves (La-2=11.).", default=.false.)
     call get_param(param_file, mdl, "TAIL_DH", CS%MLE_tail_dh, &
              "Fraction by which to extend the mixed-layer restratification "//&
              "depth used for a smoother stream function at the base of "//&
              "the mixed-layer.", units="nondim", default=0.0)
-    call get_param(param_file, mdl, "USE_STANLEY_TVAR", CS%use_Stanley_ML, &
-             "If true, turn on Stanley SGS T variance parameterization "// &
-             "in ML restrat code.", default=.false.)
     call get_param(param_file, mdl, "USE_CR_GRID", CS%Cr_grid, &
-             "If true, read in a spatially varying Cr field.", default=.false.)
+             "If true, read in a spatially varying Cr field." //&
+             "If CR = 0 (default), this field is scaled by 1.0." //&
+             "If CR>0., this field works as a mask and is scaled by CR.", default=.false.)
     call get_param(param_file, mdl, "USE_MLD_GRID", CS%MLD_grid, &
              "If true, read in a spatially varying MLD_decaying_Tfilt field.", default=.false.)
     if (CS%MLD_grid) then
@@ -1779,7 +1814,13 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
               "The variable name for Cr field.", &
               default="Cr")
       filename = trim(inputdir) // "/" // trim(filename)
-      call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=1.0)
+      if (CS%Cr > 0.0) then
+        ! here, the file is working as a mask
+        call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=CS%Cr)
+      else
+        ! read actual Cr
+        call MOM_read_data(filename, varname, CS%Cr_space, G%domain, scale=1.0)
+      endif
       call pass_var(CS%Cr_space, G%domain)
     endif
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
@@ -1811,17 +1852,6 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
              "geostrophic kinetic energy or 1 plus the square of the "//&
              "grid spacing over the deformation radius, as detailed "//&
              "by Fox-Kemper et al. (2011)", units="nondim", default=0.0)
-    ! These parameters are only used in the OM4-era version of Fox-Kemper
-    call get_param(param_file, mdl, "USE_STANLEY_ML", CS%use_Stanley_ML, &
-                   "If true, turn on Stanley SGS T variance parameterization "// &
-                   "in ML restrat code.", default=.false.)
-    if (CS%use_Stanley_ML) then
-      call get_param(param_file, mdl, "STANLEY_COEFF", Stanley_coeff, &
-                   "Coefficient correlating the temperature gradient and SGS T variance.", &
-                   units="nondim", default=-1.0, do_not_log=.true.)
-      if (Stanley_coeff < 0.0) call MOM_error(FATAL, &
-               "STANLEY_COEFF must be set >= 0 if USE_STANLEY_ML is true.")
-    endif
     call get_param(param_file, mdl, 'VON_KARMAN_CONST', CS%vonKar, &
                    'The value the von Karman constant as used for mixed layer viscosity.', &
                    units='nondim', default=0.41)
