@@ -285,10 +285,16 @@ subroutine ocean_model_init(Ocean_sfc, OS, Time_init, Time_in, gas_fields_ocn, i
 
   OS%Time = Time_in
   if(present(input_restart_file)) then
-      k = len_trim(input_restart_file)
+      k = index(input_restart_file, ' ')
+      if (k==0) k = len_trim(input_restart_file)
       i = index(input_restart_file, '.r.')
       if (i>0) then
          stoch_restfile = input_restart_file(1:i)//'r_stoch'//input_restart_file(i+2:k)
+
+         if (is_root_pe()) then
+           write(stdout,*) 'input_restart_file =', input_restart_file
+           write(stdout,*) 'stoch_restfile =', stoch_restfile
+         endif
       endif
   endif
   call initialize_MOM(OS%Time, Time_init, param_file, OS%dirs, OS%MOM_CSp, &
