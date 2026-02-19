@@ -1226,7 +1226,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
   allocate(id_diags(diag_size))
   do m = 1, diag_size
     id_diags(m)%id = -1
-    if (trim(MARBL_diags%diags(m)%vertical_grid) .eq. "none") then ! 2D field
+    if (trim(MARBL_diags%diags(m)%vertical_grid) == "none") then ! 2D field
       id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
         diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
@@ -1239,9 +1239,9 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
       !       (for now, FESEDFLUX is the only one that should be true)
       !       Also, known issue where passing v_extensive=.false. isn't
       !       treated the same as not passing v_extensive
-      if ((trim(MARBL_diags%diags(m)%short_name).eq."FESEDFLUX") .or. &
-          (trim(MARBL_diags%diags(m)%short_name).eq."FEREDSEDFLUX") .or. &
-          (trim(MARBL_diags%diags(m)%short_name).eq."FEVENTFLUX")) then
+      if ((trim(MARBL_diags%diags(m)%short_name) == "FESEDFLUX") .or. &
+          (trim(MARBL_diags%diags(m)%short_name) == "FEREDSEDFLUX") .or. &
+          (trim(MARBL_diags%diags(m)%short_name) == "FEVENTFLUX")) then
         id_diags(m)%id = register_diag_field("ocean_model", &
           trim(MARBL_diags%diags(m)%short_name), &
           diag%axesTL, & ! T=> tracer grid? L => layer center
