@@ -322,7 +322,7 @@ contains
         endif
         dust_ratio = dust_ratio - 5.5
         if (dust_ratio < CS%dust_ratio_thres) &
-          atm_fe_bioavail_frac = (dust_ratio**-0.9) - 0.0134
+          atm_fe_bioavail_frac = dust_ratio**(-0.9) - 0.0134
 
         ! Contribution of atmospheric dust to iron flux
         fluxes%iron_flux(i,j) = (atm_fe_bioavail_frac * &
