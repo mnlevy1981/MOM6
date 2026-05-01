@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Implements sponge regions in isopycnal mode
 module MOM_sponge
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms,          only : sum_across_PEs
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, register_diag_field
@@ -222,7 +224,7 @@ subroutine set_up_sponge_field(sp_val, f_ptr, G, GV, nlay, CS, sp_val_i_mean)
   CS%fldno = CS%fldno + 1
 
   if (CS%fldno > MAX_FIELDS_) then
-    write(mesg,'("Increase MAX_FIELDS_ to at least ",I3," in MOM_memory.h or decrease &
+    write(mesg,'("Increase MAX_FIELDS_ to at least ",I0," in MOM_memory.h or decrease &
            &the number of fields to be damped in the call to &
            &initialize_sponge." )') CS%fldno
     call MOM_error(FATAL,"set_up_sponge_field: "//mesg)
@@ -241,8 +243,8 @@ subroutine set_up_sponge_field(sp_val, f_ptr, G, GV, nlay, CS, sp_val_i_mean)
   CS%var(CS%fldno)%p => f_ptr
 
   if (nlay/=CS%nz) then
-    write(mesg,'("Danger: Sponge reference fields require nz (",I3,") layers.&
-        & A field with ",I3," layers was passed to set_up_sponge_field.")') &
+    write(mesg,'("Danger: Sponge reference fields require nz (",I0,") layers.&
+        & A field with ",I0," layers was passed to set_up_sponge_field.")') &
           CS%nz, nlay
     if (is_root_pe()) call MOM_error(WARNING, "set_up_sponge_field: "//mesg)
   endif
@@ -518,7 +520,7 @@ subroutine apply_sponge(h, tv, dt, G, GV, US, ea, eb, CS, Rcv_ml)
         enddo
       enddo
 
-      wpb = 0.0; wb = 0.0
+      wpb = 0.0 ; wb = 0.0
       do k=nz,nkmb+1,-1
         if (GV%Rlay(k) > Rcv_ml(i,j)) then
           w = MIN((((e(K)-e0) - e_str*CS%Ref_eta(K,c)) * damp)*dz_to_h(K), &

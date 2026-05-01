@@ -1,11 +1,13 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A tracer package for tracers computed in the MARBL library
 !!
 !! Currently configured for use with marbl0.36.0
 !! https://github.com/marbl-ecosys/MARBL/releases/tag/marbl0.36.0
 !! (clone entire repo into pkg/MARBL)
 module MARBL_tracers
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms,            only : EFP_type, root_PE, broadcast
 use MOM_debugging,       only : hchksum
@@ -431,7 +433,7 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
       CS%sfo_cnt = CS%sfo_cnt + 1
     else if (trim(field_source) == "interior_tendency") then
       CS%ito_cnt = CS%ito_cnt + 1
-    end if
+    endif
 
     ! Total 3D Chlorophyll
     call MARBL_instances%add_output_for_GCM(num_elements=1, num_levels=nz, field_name="total_Chl", &
@@ -440,8 +442,8 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
       CS%sfo_cnt = CS%sfo_cnt + 1
     else if (trim(field_source) == "interior_tendency") then
       CS%ito_cnt = CS%ito_cnt + 1
-    end if
-  end if
+    endif
+  endif
 
   ! (5) Initialize forcing fields
   !     i. store all surface forcing indices
@@ -1308,7 +1310,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
   real, dimension(SZI_(G),SZJ_(G)) :: flux_from_salt_flux ! Surface tracer flux from salt flux
                                                           ! [conc Z T-1 ~> conc m s-1].
   real, dimension(SZI_(G),SZJ_(G)) :: ref_mask ! Mask for 2D MARBL diags using ref_depth [1]
-  real, dimension(SZI_(G),SZJ_(G)) :: riv_flux_loc ! Local copy of CS%RIV_FLUXES*dt [mmol m-2 ~> conc H]
+  real, dimension(SZI_(G),SZJ_(G)) :: riv_flux_loc ! Local copy of CS%RIV_FLUXES*dt [conc H ~> mmol m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: h_work ! Used so that h can be modified [H ~> m or kg m-2]
   real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: bot_flux_to_tend  ! Conversion factor for bottom tlux -> tend
                                                                 ! [Z-1 ~> m-1]
@@ -1502,7 +1504,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
     do m=1,CS%ntr
       call hchksum(CS%STF(:,:,m), &
           trim(MARBL_instances%tracer_metadata(m)%short_name)//" sfc_flux", G%HI, &
-          scale=US%Z_to_m*US%s_to_T)
+          unscale=US%Z_to_m*US%s_to_T)
     enddo
   endif
 
@@ -1545,7 +1547,7 @@ subroutine MARBL_tracers_column_physics(h_old, h_new, ea, eb, fluxes, dt, G, GV,
       enddo ; enddo
       if (CS%debug) &
         call hchksum(riv_flux_loc(:,:), &
-            trim(MARBL_instances%tracer_metadata(m)%short_name)//' riv flux', G%HI, scale=GV%H_to_m)
+            trim(MARBL_instances%tracer_metadata(m)%short_name)//' riv flux', G%HI, unscale=GV%H_to_m)
       call applyTracerBoundaryFluxesInOut(G, GV, CS%tracer_data(m)%tr(:,:,:) , dt, fluxes, h_work, &
           evap_CFL_limit, minimum_forcing_depth, in_flux_optional=riv_flux_loc)
       call tracer_vertdiff(h_work, ea, eb, dt, CS%tracer_data(m)%tr(:,:,:), G, GV, &

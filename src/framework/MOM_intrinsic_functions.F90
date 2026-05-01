@@ -1,8 +1,10 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A module with intrinsic functions that are used by MOM but are not supported
 !!  by some compilers.
 module MOM_intrinsic_functions
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use iso_fortran_env, only : stdout => output_unit, stderr => error_unit
 use iso_fortran_env, only : int64, real64
@@ -117,7 +119,7 @@ end function cuberoot
 !> Rescale `a` to the range [0.125, 1) and compute its cube-root exponent.
 pure subroutine rescale_cbrt(a, x, e_r, s_a)
   real, intent(in) :: a
-    !< The real parameter to be rescaled for cube root in abitrary units cubed [A3]
+    !< The real parameter to be rescaled for cube root in arbitrary units cubed [A3]
   real, intent(out) :: x
     !< The rescaled value of a in the range from 0.125 < asx <= 1.0, in ambiguous units cubed [B3]
   integer(kind=int64), intent(out) :: e_r
@@ -168,7 +170,7 @@ pure function descale(x, e_a, s_a) result(a)
   integer(kind=int64), intent(in) :: s_a
     !< Sign bit of the unscaled value
   real :: a
-    !< Restored value with the corrected exponent and sign in abitrary units [A]
+    !< Restored value with the corrected exponent and sign in arbitrary units [A]
 
   integer(kind=int64) :: xb
     ! Bit-packed real number into integer form

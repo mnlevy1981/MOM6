@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A thin wrapper for Boussinesq/non-Boussinesq forms of the pressure force calculation.
 module MOM_PressureForce
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
@@ -106,12 +108,14 @@ subroutine PressureForce_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL_CS
                  "described in Adcroft et al., O. Mod. (2008).", default=.true.)
 
   if (CS%Analytic_FV_PGF) then
+    !$omp target enter data map(alloc: CS%PressureForce_FV)
     call PressureForce_FV_init(Time, G, GV, US, param_file, diag, &
              CS%PressureForce_FV, ADp, SAL_CSp, tides_CSp)
   else
     call PressureForce_Mont_init(Time, G, GV, US, param_file, diag, &
              CS%PressureForce_Mont, SAL_CSp, tides_CSp)
   endif
+  !$omp target update to(CS)
 end subroutine PressureForce_init
 
 !> \namespace mom_pressureforce

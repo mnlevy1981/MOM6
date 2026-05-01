@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Describes the decomposed MOM domain and has routines for communications across PEs
 module MOM_domain_infra
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms_infra,  only : PE_here, root_PE, num_PEs
 use MOM_cpu_clock_infra, only : cpu_clock_begin, cpu_clock_end
@@ -1138,7 +1140,7 @@ subroutine create_vector_group_pass_3d(group, u_cmpt, v_cmpt, MOM_dom, direction
 end subroutine create_vector_group_pass_3d
 
 !> do_group_pass carries out a group halo update.
-subroutine do_group_pass(group, MOM_dom, clock)
+subroutine do_group_pass(group, MOM_dom, clock, omp_offload)
   type(group_pass_type), intent(inout) :: group     !< The data type that store information for
                                                     !! group update. This data will be used in
                                                     !! do_group_pass.
@@ -1147,11 +1149,13 @@ subroutine do_group_pass(group, MOM_dom, clock)
                                                     !! sent.
   integer,     optional, intent(in)    :: clock     !< The handle for a cpu time clock that should be
                                                     !! started then stopped to time this routine.
+  logical,     optional, intent(in)    :: omp_offload !< Whether the data to be transferred is
+                                                    !! offloaded to the GPU with OpenMP.
   real :: d_type
 
   if (present(clock)) then ; if (clock>0) call cpu_clock_begin(clock) ; endif
 
-  call mpp_do_group_update(group, MOM_dom%mpp_domain, d_type)
+  call mpp_do_group_update(group, MOM_dom%mpp_domain, d_type, omp_offload)
 
   if (present(clock)) then ; if (clock>0) call cpu_clock_end(clock) ; endif
 
@@ -1212,7 +1216,7 @@ subroutine redistribute_array_2d(Domain1, array1, Domain2, array2, complete)
   ! Local variables
   logical :: do_complete
 
-  do_complete=.true.;if (PRESENT(complete)) do_complete = complete
+  do_complete=.true. ; if (PRESENT(complete)) do_complete = complete
 
   call mpp_redistribute(Domain1, array1, Domain2, array2, do_complete)
 
@@ -1231,7 +1235,7 @@ subroutine redistribute_array_3d(Domain1, array1, Domain2, array2, complete)
   ! Local variables
   logical :: do_complete
 
-  do_complete=.true.;if (PRESENT(complete)) do_complete = complete
+  do_complete=.true. ; if (PRESENT(complete)) do_complete = complete
 
   call mpp_redistribute(Domain1, array1, Domain2, array2, do_complete)
 
@@ -1250,7 +1254,7 @@ subroutine redistribute_array_4d(Domain1, array1, Domain2, array2, complete)
   ! Local variables
   logical :: do_complete
 
-  do_complete=.true.;if (PRESENT(complete)) do_complete = complete
+  do_complete=.true. ; if (PRESENT(complete)) do_complete = complete
 
   call mpp_redistribute(Domain1, array1, Domain2, array2, do_complete)
 
@@ -1390,8 +1394,10 @@ subroutine create_MOM_domain(MOM_dom, n_global, n_halo, reentrant, tripolar_N, l
       "TRIPOLAR_N and REENTRANT_Y may not be used together.")
   endif
 
-  MOM_dom%nonblocking_updates = nonblocking
-  MOM_dom%thin_halo_updates = thin_halos
+  MOM_dom%nonblocking_updates = .false.
+  if (present(nonblocking)) MOM_dom%nonblocking_updates = nonblocking
+  MOM_dom%thin_halo_updates = .false.
+  if (present(thin_halos)) MOM_dom%thin_halo_updates = thin_halos
   MOM_dom%symmetric = .true. ; if (present(symmetric)) MOM_dom%symmetric = symmetric
   MOM_dom%niglobal = n_global(1) ; MOM_dom%njglobal = n_global(2)
   MOM_dom%nihalo = n_halo(1) ; MOM_dom%njhalo = n_halo(2)

@@ -1,9 +1,11 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> The equation of state using the TEOS10 expressions
 module MOM_EOS_TEOS10
 
-! This file is part of MOM6. See LICENSE.md for the license.
-
-use gsw_mod_toolbox, only : gsw_sp_from_sr, gsw_pt_from_ct, gsw_sr_from_sp
+use gsw_mod_toolbox, only : gsw_sp_from_sr, gsw_pt_from_ct, gsw_sr_from_sp, gsw_ct_from_pt
 use gsw_mod_toolbox, only : gsw_rho, gsw_specvol
 use gsw_mod_toolbox, only : gsw_rho_first_derivatives, gsw_specvol_first_derivatives
 use gsw_mod_toolbox, only : gsw_rho_second_derivatives
@@ -11,7 +13,7 @@ use MOM_EOS_base_type, only : EOS_base
 
 implicit none ; private
 
-public gsw_sp_from_sr, gsw_pt_from_ct, gsw_sr_from_sp
+public gsw_sp_from_sr, gsw_pt_from_ct, gsw_sr_from_sp, gsw_ct_from_pt
 public TEOS10_EOS
 
 real, parameter :: Pa2db  = 1.e-4  !< The conversion factor from Pa to dbar [dbar Pa-1]

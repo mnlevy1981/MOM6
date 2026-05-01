@@ -1,8 +1,10 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> The equation of state using a poor implementation (missing parenthesis and bugs) of the
 !! reduced range Wright 1997 expressions
 module MOM_EOS_Wright
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_EOS_base_type, only : EOS_base
 use MOM_hor_index, only : hor_index_type
@@ -67,8 +69,12 @@ contains
 
   !> Local implementation of generic calculate_density_array for efficiency
   procedure :: calculate_density_array => calculate_density_array_buggy_Wright
+  !> Local implementation of generic calculate_density_array_2d for efficiency
+  procedure :: calculate_density_array_2d => calculate_density_array_2d_buggy_Wright
   !> Local implementation of generic calculate_spec_vol_array for efficiency
   procedure :: calculate_spec_vol_array => calculate_spec_vol_array_buggy_Wright
+  !> Local implementation of generic calculate_density_derivs_2d for efficiency
+  procedure :: calculate_density_derivs_2d => calculate_density_derivs_2d_buggy_Wright
 
 end type buggy_Wright_EOS
 
@@ -77,8 +83,7 @@ contains
 !> In situ density of sea water using a buggy implementation of Wright, 1997 [kg m-3]
 !!
 !! This is an elemental function that can be applied to any combination of scalar and array inputs.
-real elemental function density_elem_buggy_Wright(this, T, S, pressure)
-  class(buggy_Wright_EOS), intent(in) :: this !< This EOS
+real elemental function density_elem_buggy_Wright_loc(T, S, pressure)
   real, intent(in) :: T        !< potential temperature relative to the surface [degC].
   real, intent(in) :: S        !< salinity [PSU].
   real, intent(in) :: pressure !< pressure [Pa].
@@ -91,8 +96,20 @@ real elemental function density_elem_buggy_Wright(this, T, S, pressure)
   al0 = (a0 + a1*T) +a2*S
   p0 = (b0 + b4*S) + T * (b1 + T*(b2 + b3*T) + b5*S)
   lambda = (c0 +c4*S) + T * (c1 + T*(c2 + c3*T) + c5*S)
-  density_elem_buggy_Wright = (pressure + p0) / (lambda + al0*(pressure + p0))
+  density_elem_buggy_Wright_loc = (pressure + p0) / (lambda + al0*(pressure + p0))
 
+end function density_elem_buggy_Wright_loc
+
+!> Wrapper for density_elem_buggy_Wright_loc created to preserve API while calling
+!! density_elem_buggy_Wright without "this" variable that causes runtime errors on
+!! gpu runs with nvfortran.
+real elemental function density_elem_buggy_Wright(this, T, S, pressure)
+  class(buggy_Wright_EOS), intent(in) :: this !< This EOS
+  real, intent(in) :: T        !< potential temperature relative to the surface [degC].
+  real, intent(in) :: S        !< salinity [PSU].
+  real, intent(in) :: pressure !< pressure [Pa].
+
+  density_elem_buggy_Wright = density_elem_buggy_Wright_loc(T, S, pressure)
 end function density_elem_buggy_Wright
 
 !> In situ density anomaly of sea water using a buggy implementation of Wright, 1997 [kg m-3]
@@ -175,8 +192,7 @@ end function spec_vol_anomaly_elem_buggy_Wright
 
 !> Calculate the partial derivatives of density with potential temperature and salinity
 !! using the buggy implementation of the equation of state, as fit by Wright, 1997
-elemental subroutine calculate_density_derivs_elem_buggy_Wright(this, T, S, pressure, drho_dT, drho_dS)
-  class(buggy_Wright_EOS), intent(in) :: this !< This EOS
+elemental subroutine calculate_density_derivs_elem_buggy_Wright_loc( T, S, pressure, drho_dT, drho_dS)
   real,               intent(in)  :: T        !< Potential temperature relative to the surface [degC]
   real,               intent(in)  :: S        !< Salinity [PSU]
   real,               intent(in)  :: pressure !< Pressure [Pa]
@@ -202,6 +218,23 @@ elemental subroutine calculate_density_derivs_elem_buggy_Wright(this, T, S, pres
       (c1 + T*(c2*2.0 + c3*3.0*T) + c5*S) ))
   drho_dS = I_denom2 * (lambda* (b4 + b5*T) - &
     (pressure+p0) * ( (pressure+p0)*a2 + (c4 + c5*T) ))
+
+end subroutine calculate_density_derivs_elem_buggy_Wright_loc
+
+!> Wrapper for density_elem_buggy_Wright_loc created to preserve API while calling
+!! density_elem_buggy_Wright without "this" variable that causes runtime errors on
+!! gpu runs with nvfortran.
+elemental subroutine calculate_density_derivs_elem_buggy_Wright(this, T, S, pressure, drho_dT, drho_dS)
+  class(buggy_Wright_EOS), intent(in) :: this !< This EOS
+  real,               intent(in)  :: T        !< Potential temperature relative to the surface [degC]
+  real,               intent(in)  :: S        !< Salinity [PSU]
+  real,               intent(in)  :: pressure !< Pressure [Pa]
+  real,               intent(out) :: drho_dT  !< The partial derivative of density with potential
+                                              !! temperature [kg m-3 degC-1]
+  real,               intent(out) :: drho_dS  !< The partial derivative of density with salinity,
+                                              !! in [kg m-3 PSU-1]
+
+  call calculate_density_derivs_elem_buggy_Wright_loc(T, S, pressure, drho_dT, drho_dS)
 
 end subroutine calculate_density_derivs_elem_buggy_Wright
 
@@ -508,12 +541,15 @@ subroutine int_density_dz_wright(T, S, z_t, z_b, rho_ref, rho_0, G_e, HI, &
   else
     rho_ref_mks = rho_ref ; I_Rho = 1.0 / rho_0
   endif
+  !$omp target enter data map(alloc: z0pres, al0_2d, p0_2d, lambda_2d, intz)
   if (present(Z_0p)) then
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       z0pres(i,j) = Z_0p(i,j)
-    enddo ; enddo
+    enddo
   else
-    z0pres(:,:) = 0.0
+    do concurrent (j=HI%jsd:HI%jed, i=HI%isd:HI%ied)
+      z0pres(i,j) = 0.0
+    enddo
   endif
 
   a1s = a1 ; a2s = a2
@@ -540,7 +576,7 @@ subroutine int_density_dz_wright(T, S, z_t, z_b, rho_ref, rho_0, G_e, HI, &
     top_massWeight = BTEST(MassWghtInterp, 1) ! True if the 2 bit is set
   endif
 
-  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
     al0_2d(i,j) = (a0 + a1s*T(i,j)) + a2s*S(i,j)
     p0_2d(i,j) = (b0 + b4s*S(i,j)) + T(i,j) * (b1s + T(i,j)*((b2s + b3s*T(i,j))) + b5s*S(i,j))
     lambda_2d(i,j) = (c0 +c4s*S(i,j)) + T(i,j) * (c1s + T(i,j)*((c2s + c3s*T(i,j))) + c5s*S(i,j))
@@ -562,95 +598,106 @@ subroutine int_density_dz_wright(T, S, z_t, z_b, rho_ref, rho_0, G_e, HI, &
     dpa(i,j) = Pa_to_RL2_T2 * (g_Earth*rho_anom*dz - 2.0*eps*rem)
     if (present(intz_dpa)) &
       intz_dpa(i,j) = Pa_to_RL2_T2 * (0.5*g_Earth*rho_anom*dz**2 - dz*(1.0+eps)*rem)
-  enddo ; enddo
+  enddo
 
-  if (present(intx_dpa)) then ; do j=js,je ; do I=Isq,Ieq
-    ! hWght is the distance measure by which the cell is violation of
-    ! hydrostatic consistency. For large hWght we bias the interpolation of
-    ! T & S along the top and bottom integrals, akin to thickness weighting.
-    hWght = 0.0
-    if (do_massWeight) &
-      hWght = max(0., -bathyT(i,j)-z_t(i+1,j), -bathyT(i+1,j)-z_t(i,j))
-    if (top_massWeight) &
-      hWght = max(hWght, z_b(i+1,j)-SSH(i,j), z_b(i,j)-SSH(i+1,j))
-    if (hWght > 0.) then
-      hL = (z_t(i,j) - z_b(i,j)) + dz_neglect
-      hR = (z_t(i+1,j) - z_b(i+1,j)) + dz_neglect
-      hWght = hWght * ( (hL-hR)/(hL+hR) )**2
-      iDenom = 1.0 / ( hWght*(hR + hL) + hL*hR )
-      hWt_LL = (hWght*hL + hR*hL) * iDenom ; hWt_LR = (hWght*hR) * iDenom
-      hWt_RR = (hWght*hR + hR*hL) * iDenom ; hWt_RL = (hWght*hL) * iDenom
-    else
-      hWt_LL = 1.0 ; hWt_LR = 0.0 ; hWt_RR = 1.0 ; hWt_RL = 0.0
-    endif
+  if (present(intx_dpa)) then
+    !$omp target teams loop collapse(2) &
+    !$omp   private(hWght, hL, hR, iDenom, hWt_LL, hWt_LR, hWt_RR, hWt_RL, m, wt_L, wt_R, wtT_L, &
+    !$omp           wtT_R, al0, p0, lambda, dz, p_ave, I_al0, I_Lzz, eps, eps2, intz)
+    do j=js,je ; do I=Isq,Ieq
+      ! hWght is the distance measure by which the cell is violation of
+      ! hydrostatic consistency. For large hWght we bias the interpolation of
+      ! T & S along the top and bottom integrals, akin to thickness weighting.
+      hWght = 0.0
+      if (do_massWeight) &
+        hWght = max(0., -bathyT(i,j)-z_t(i+1,j), -bathyT(i+1,j)-z_t(i,j))
+      if (top_massWeight) &
+        hWght = max(hWght, z_b(i+1,j)-SSH(i,j), z_b(i,j)-SSH(i+1,j))
+      if (hWght > 0.) then
+        hL = (z_t(i,j) - z_b(i,j)) + dz_neglect
+        hR = (z_t(i+1,j) - z_b(i+1,j)) + dz_neglect
+        hWght = hWght * ( (hL-hR)/(hL+hR) )**2
+        iDenom = 1.0 / ( hWght*(hR + hL) + hL*hR )
+        hWt_LL = (hWght*hL + hR*hL) * iDenom ; hWt_LR = (hWght*hR) * iDenom
+        hWt_RR = (hWght*hR + hR*hL) * iDenom ; hWt_RL = (hWght*hL) * iDenom
+      else
+        hWt_LL = 1.0 ; hWt_LR = 0.0 ; hWt_RR = 1.0 ; hWt_RL = 0.0
+      endif
 
-    intz(1) = dpa(i,j) ; intz(5) = dpa(i+1,j)
-    do m=2,4
-      wt_L = 0.25*real(5-m) ; wt_R = 1.0-wt_L
-      wtT_L = (wt_L*hWt_LL) + (wt_R*hWt_RL) ; wtT_R = (wt_L*hWt_LR) + (wt_R*hWt_RR)
+      intz(1) = dpa(i,j) ; intz(5) = dpa(i+1,j)
+      do m=2,4
+        wt_L = 0.25*real(5-m) ; wt_R = 1.0-wt_L
+        wtT_L = (wt_L*hWt_LL) + (wt_R*hWt_RL) ; wtT_R = (wt_L*hWt_LR) + (wt_R*hWt_RR)
 
-      al0 = (wtT_L*al0_2d(i,j)) + (wtT_R*al0_2d(i+1,j))
-      p0 = (wtT_L*p0_2d(i,j)) + (wtT_R*p0_2d(i+1,j))
-      lambda = (wtT_L*lambda_2d(i,j)) + (wtT_R*lambda_2d(i+1,j))
+        al0 = (wtT_L*al0_2d(i,j)) + (wtT_R*al0_2d(i+1,j))
+        p0 = (wtT_L*p0_2d(i,j)) + (wtT_R*p0_2d(i+1,j))
+        lambda = (wtT_L*lambda_2d(i,j)) + (wtT_R*lambda_2d(i+1,j))
 
-      dz = (wt_L*(z_t(i,j) - z_b(i,j))) + (wt_R*(z_t(i+1,j) - z_b(i+1,j)))
-      p_ave = -GxRho*((wt_L * (0.5*(z_t(i,j)+z_b(i,j)) - z0pres(i,j))) + &
-                      (wt_R * (0.5*(z_t(i+1,j)+z_b(i+1,j)) - z0pres(i+1,j))))
+        dz = (wt_L*(z_t(i,j) - z_b(i,j))) + (wt_R*(z_t(i+1,j) - z_b(i+1,j)))
+        p_ave = -GxRho*((wt_L * (0.5*(z_t(i,j)+z_b(i,j)) - z0pres(i,j))) + &
+                        (wt_R * (0.5*(z_t(i+1,j)+z_b(i+1,j)) - z0pres(i+1,j))))
 
-      I_al0 = 1.0 / al0
-      I_Lzz = 1.0 / (p0 + (lambda * I_al0) + p_ave)
-      eps = 0.5*GxRho*dz*I_Lzz ; eps2 = eps*eps
+        I_al0 = 1.0 / al0
+        I_Lzz = 1.0 / (p0 + (lambda * I_al0) + p_ave)
+        eps = 0.5*GxRho*dz*I_Lzz ; eps2 = eps*eps
 
-      intz(m) = Pa_to_RL2_T2 * ( g_Earth*dz*((p0 + p_ave)*(I_Lzz*I_al0) - rho_ref_mks) - 2.0*eps * &
-                I_Rho * (lambda * I_al0**2) * eps2 * (C1_3 + eps2*(0.2 + eps2*(C1_7 + C1_9*eps2))) )
-    enddo
-    ! Use Boole's rule to integrate the values.
-    intx_dpa(i,j) = C1_90*(7.0*(intz(1)+intz(5)) + 32.0*(intz(2)+intz(4)) + 12.0*intz(3))
-  enddo ; enddo ; endif
+        intz(m) = Pa_to_RL2_T2 * ( g_Earth*dz*((p0 + p_ave)*(I_Lzz*I_al0) - rho_ref_mks) - 2.0*eps * &
+                  I_Rho * (lambda * I_al0**2) * eps2 * (C1_3 + eps2*(0.2 + eps2*(C1_7 + C1_9*eps2))) )
+      enddo
+      ! Use Boole's rule to integrate the values.
+      intx_dpa(i,j) = C1_90*(7.0*(intz(1)+intz(5)) + 32.0*(intz(2)+intz(4)) + 12.0*intz(3))
+    enddo ; enddo
+  endif
 
-  if (present(inty_dpa)) then ; do J=Jsq,Jeq ; do i=is,ie
-    ! hWght is the distance measure by which the cell is violation of
-    ! hydrostatic consistency. For large hWght we bias the interpolation of
-    ! T & S along the top and bottom integrals, akin to thickness weighting.
-    hWght = 0.0
-    if (do_massWeight) &
-      hWght = max(0., -bathyT(i,j)-z_t(i,j+1), -bathyT(i,j+1)-z_t(i,j))
-    if (top_massWeight) &
-      hWght = max(hWght, z_b(i,j+1)-SSH(i,j), z_b(i,j)-SSH(i,j+1))
-    if (hWght > 0.) then
-      hL = (z_t(i,j) - z_b(i,j)) + dz_neglect
-      hR = (z_t(i,j+1) - z_b(i,j+1)) + dz_neglect
-      hWght = hWght * ( (hL-hR)/(hL+hR) )**2
-      iDenom = 1.0 / ( hWght*(hR + hL) + hL*hR )
-      hWt_LL = (hWght*hL + hR*hL) * iDenom ; hWt_LR = (hWght*hR) * iDenom
-      hWt_RR = (hWght*hR + hR*hL) * iDenom ; hWt_RL = (hWght*hL) * iDenom
-    else
-      hWt_LL = 1.0 ; hWt_LR = 0.0 ; hWt_RR = 1.0 ; hWt_RL = 0.0
-    endif
+  if (present(inty_dpa)) then
+    !$omp target teams loop collapse(2) &
+    !$omp   private(hWght, hL, hR, iDenom, hWt_LL, hWt_LR, hWt_RR, hWt_RL, m, wt_L, wt_R, wtT_L, &
+    !$omp           wtT_R, al0, p0, lambda, dz, p_ave, I_al0, I_Lzz, eps, eps2, intz)
+    do J=Jsq,Jeq ; do i=is,ie
+      ! hWght is the distance measure by which the cell is violation of
+      ! hydrostatic consistency. For large hWght we bias the interpolation of
+      ! T & S along the top and bottom integrals, akin to thickness weighting.
+      hWght = 0.0
+      if (do_massWeight) &
+        hWght = max(0., -bathyT(i,j)-z_t(i,j+1), -bathyT(i,j+1)-z_t(i,j))
+      if (top_massWeight) &
+        hWght = max(hWght, z_b(i,j+1)-SSH(i,j), z_b(i,j)-SSH(i,j+1))
+      if (hWght > 0.) then
+        hL = (z_t(i,j) - z_b(i,j)) + dz_neglect
+        hR = (z_t(i,j+1) - z_b(i,j+1)) + dz_neglect
+        hWght = hWght * ( (hL-hR)/(hL+hR) )**2
+        iDenom = 1.0 / ( hWght*(hR + hL) + hL*hR )
+        hWt_LL = (hWght*hL + hR*hL) * iDenom ; hWt_LR = (hWght*hR) * iDenom
+        hWt_RR = (hWght*hR + hR*hL) * iDenom ; hWt_RL = (hWght*hL) * iDenom
+      else
+        hWt_LL = 1.0 ; hWt_LR = 0.0 ; hWt_RR = 1.0 ; hWt_RL = 0.0
+      endif
 
-    intz(1) = dpa(i,j) ; intz(5) = dpa(i,j+1)
-    do m=2,4
-      wt_L = 0.25*real(5-m) ; wt_R = 1.0-wt_L
-      wtT_L = (wt_L*hWt_LL) + (wt_R*hWt_RL) ; wtT_R = (wt_L*hWt_LR) + (wt_R*hWt_RR)
+      intz(1) = dpa(i,j) ; intz(5) = dpa(i,j+1)
+      do m=2,4
+        wt_L = 0.25*real(5-m) ; wt_R = 1.0-wt_L
+        wtT_L = (wt_L*hWt_LL) + (wt_R*hWt_RL) ; wtT_R = (wt_L*hWt_LR) + (wt_R*hWt_RR)
 
-      al0 = (wtT_L*al0_2d(i,j)) + (wtT_R*al0_2d(i,j+1))
-      p0 = (wtT_L*p0_2d(i,j)) + (wtT_R*p0_2d(i,j+1))
-      lambda = (wtT_L*lambda_2d(i,j)) + (wtT_R*lambda_2d(i,j+1))
+        al0 = (wtT_L*al0_2d(i,j)) + (wtT_R*al0_2d(i,j+1))
+        p0 = (wtT_L*p0_2d(i,j)) + (wtT_R*p0_2d(i,j+1))
+        lambda = (wtT_L*lambda_2d(i,j)) + (wtT_R*lambda_2d(i,j+1))
 
-      dz = (wt_L*(z_t(i,j) - z_b(i,j))) + (wt_R*(z_t(i,j+1) - z_b(i,j+1)))
-      p_ave = -GxRho*((wt_L*(0.5*(z_t(i,j)+z_b(i,j))-z0pres(i,j))) + &
-                      (wt_R*(0.5*(z_t(i,j+1)+z_b(i,j+1))-z0pres(i,j+1))))
+        dz = (wt_L*(z_t(i,j) - z_b(i,j))) + (wt_R*(z_t(i,j+1) - z_b(i,j+1)))
+        p_ave = -GxRho*((wt_L*(0.5*(z_t(i,j)+z_b(i,j))-z0pres(i,j))) + &
+                        (wt_R*(0.5*(z_t(i,j+1)+z_b(i,j+1))-z0pres(i,j+1))))
 
-      I_al0 = 1.0 / al0
-      I_Lzz = 1.0 / (p0 + (lambda * I_al0) + p_ave)
-      eps = 0.5*GxRho*dz*I_Lzz ; eps2 = eps*eps
+        I_al0 = 1.0 / al0
+        I_Lzz = 1.0 / (p0 + (lambda * I_al0) + p_ave)
+        eps = 0.5*GxRho*dz*I_Lzz ; eps2 = eps*eps
 
-      intz(m) = Pa_to_RL2_T2 * ( g_Earth*dz*((p0 + p_ave)*(I_Lzz*I_al0) - rho_ref_mks) - 2.0*eps * &
-                I_Rho * (lambda * I_al0**2) * eps2 * (C1_3 + eps2*(0.2 + eps2*(C1_7 + C1_9*eps2))) )
-    enddo
-    ! Use Boole's rule to integrate the values.
-    inty_dpa(i,j) = C1_90*(7.0*(intz(1)+intz(5)) + 32.0*(intz(2)+intz(4)) + 12.0*intz(3))
-  enddo ; enddo ; endif
+        intz(m) = Pa_to_RL2_T2 * ( g_Earth*dz*((p0 + p_ave)*(I_Lzz*I_al0) - rho_ref_mks) - 2.0*eps * &
+                  I_Rho * (lambda * I_al0**2) * eps2 * (C1_3 + eps2*(0.2 + eps2*(C1_7 + C1_9*eps2))) )
+      enddo
+      ! Use Boole's rule to integrate the values.
+      inty_dpa(i,j) = C1_90*(7.0*(intz(1)+intz(5)) + 32.0*(intz(2)+intz(4)) + 12.0*intz(3))
+    enddo ; enddo
+  endif
+  !$omp target exit data map(release: z0pres, al0_2d, p0_2d, lambda_2d, intz)
 
 end subroutine int_density_dz_wright
 
@@ -719,7 +766,7 @@ subroutine int_spec_vol_dp_wright(T, S, p_t, p_b, spv_ref, HI, dza, &
   real :: al0        ! A term in the Wright EOS [R-1 ~> m3 kg-1]
   real :: p0         ! A term in the Wright EOS [R L2 T-2 ~> Pa]
   real :: lambda     ! A term in the Wright EOS [L2 T-2 ~> m2 s-2]
-  real :: al0_scale  ! Scaling factor to convert al0 from MKS units [R-1 kg m-3 ~> 1]
+  real :: al0_scale  ! Scaling factor to convert al0 from MKS units [kg m-3 R-1 ~> 1]
   real :: p0_scale   ! Scaling factor to convert p0 from MKS units [R L2 T-2 Pa-1 ~> 1]
   real :: lam_scale  ! Scaling factor to convert lambda from MKS units [L2 s2 T-2 m-2 ~> 1]
   real :: p_ave      ! The layer average pressure [R L2 T-2 ~> Pa]
@@ -925,11 +972,49 @@ subroutine calculate_density_array_buggy_Wright(this, T, S, pressure, rho, start
     enddo
   else
     do j = start, start+npts-1
-      rho(j) = density_elem_buggy_Wright(this, T(j), S(j), pressure(j))
+      rho(j) = density_elem_buggy_Wright_loc(T(j), S(j), pressure(j))
     enddo
   endif
-
 end subroutine calculate_density_array_buggy_Wright
+
+!> Calculate the in-situ density for 2D arraya inputs and outputs.
+subroutine calculate_density_array_2d_buggy_Wright(this, T, S, pressure, rho, &
+    dom, rho_ref)
+  class(buggy_Wright_EOS), intent(in) :: this
+    !< This EOS
+  real, intent(in) :: T(:,:)
+    !< Potential temperature relative to the surface [degC]
+  real, intent(in) :: S(:,:)
+    !< Salinity [PSU]
+  real, intent(in) :: pressure(:,:)
+    !< Pressure [Pa]
+  real, intent(out) :: rho(:,:)
+    !< In situ density [kg m-3]
+  integer, intent(in) :: dom(2,2)
+    !< Index bounds of domain.  First index is rank, second is bounds
+  real, optional, intent(in) :: rho_ref
+    !< A reference density [kg m-3]
+
+  integer :: is, ie, js, je
+  integer :: i, j
+
+  is = dom(1,1) ; ie = dom(1,2)
+  js = dom(2,1) ; je = dom(2,2)
+
+  ! NOTE: There is an implicit copy of `this` which cannot yet be prevented.
+  !   Possibly because Nvidia cannot associate `this` with `EOS%type`.
+
+  if (present(rho_ref)) then
+    do concurrent (j=js:je, i=is:ie)
+      rho(i,j) = density_anomaly_elem_buggy_Wright(this, T(i,j), S(i,j), &
+          pressure(i,j), rho_ref)
+    enddo
+  else
+    do concurrent (j=js:je, i=is:ie)
+      rho(i,j) = density_elem_buggy_Wright_loc( T(i,j), S(i,j), pressure(i,j))
+    enddo
+  endif
+end subroutine calculate_density_array_2d_buggy_Wright
 
 !> Calculate the in-situ specific volume for 1D array inputs and outputs.
 subroutine calculate_spec_vol_array_buggy_Wright(this, T, S, pressure, specvol, start, npts, spv_ref)
@@ -957,6 +1042,38 @@ subroutine calculate_spec_vol_array_buggy_Wright(this, T, S, pressure, specvol, 
 
 end subroutine calculate_spec_vol_array_buggy_Wright
 
+
+!> Calculate the in-situ density derivatives for 2D array inputs and outputs.
+subroutine calculate_density_derivs_2d_buggy_Wright(this, T, S, pressure, &
+    drho_dT, drho_dS, dom)
+  class(buggy_Wright_EOS), intent(in) :: this
+    !< This EOS
+  real, intent(in) :: T(:,:)
+    !< Potential temperature relative to the surface [degC]
+  real, intent(in) :: S(:,:)
+    !< Salinity [PSU]
+  real, intent(in) :: pressure(:,:)
+    !< Pressure [Pa]
+  real, intent(out) :: drho_dT(:,:)
+    !< Partial derivative of density with potential temperature [kg m-3 degC-1]
+  real, intent(out) :: drho_dS(:,:)
+    !< Partial derivative of density with salinity [kg m-3 PSU-1]
+  integer, intent(in) :: dom(2,2)
+    !< Index bounds of domain.  First index is rank, second is bounds
+
+  integer :: is, ie, js, je
+  integer :: i, j
+
+  is = dom(1,1) ; ie = dom(1,2)
+  js = dom(2,1) ; je = dom(2,2)
+
+  ! NOTE: There is an implicit copy of `this` which cannot yet be prevented.
+
+  do concurrent (j=js:je, i=is:ie)
+    call calculate_density_derivs_elem_buggy_Wright_loc( T(i,j), S(i,j), &
+        pressure(i,j), drho_dT(i,j), drho_dS(i,j))
+  enddo
+end subroutine calculate_density_derivs_2d_buggy_Wright
 
 !> Set coefficients that can correct bugs un the buggy Wright equation of state.
 subroutine set_params_buggy_Wright(this, use_Wright_2nd_deriv_bug)

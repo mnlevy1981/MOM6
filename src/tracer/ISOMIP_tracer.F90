@@ -1,11 +1,13 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Routines used to set up and use a set of (one for now)
 !! dynamically passive tracers in the ISOMIP configuration.
 !!
 !! For now, just one passive tracer is injected in
 !! the sponge layer.
 module ISOMIP_tracer
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 ! Original sample tracer package by Robert Hallberg, 2002
 ! Adapted to the ISOMIP test case by Gustavo Marques, May 2016
@@ -112,8 +114,7 @@ function register_ISOMIP_tracer(HI, GV, param_file, CS, tr_Reg, restart_CS)
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
 
   do m=1,NTR
-    if (m < 10) then ; write(name,'("tr_D",I1.1)') m
-    else ; write(name,'("tr_D",I2.2)') m ; endif
+    write(name,'("tr_D",I0)') m
     write(longname,'("Concentration of ISOMIP Tracer ",I2.2)') m
     CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
     if (GV%Boussinesq) then ; flux_units = "kg kg-1 m3 s-1"

@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Horizontal interpolation
 module MOM_horizontal_regridding
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging,     only : hchksum
 use MOM_coms,          only : max_across_PEs, min_across_PEs, sum_across_PEs, broadcast
@@ -87,7 +89,7 @@ subroutine myStats(array, missing, G, k, mesg, unscale, full_halo)
   call min_across_PEs(minA)
   call max_across_PEs(maxA)
   if (is_root_pe()) then
-    write(lMesg(1:120),'(2(a,es12.4),a,i3,1x,a)') &
+    write(lMesg(1:120),'(2(a,es12.4),a,I0,1x,a)') &
          'init_from_Z: min=',minA*scl,' max=',maxA*scl,' Level=',k,trim(mesg)
     call MOM_mesg(lMesg,2)
   endif
@@ -212,8 +214,8 @@ subroutine fill_miss_2d(aout, good, fill, prev, G, acrit, num_pass, relc, debug,
       endif ; enddo ; enddo
     elseif (nfill == nfill_prev) then
       call MOM_error(WARNING, &
-           'Unable to fill missing points using either data at the same vertical level from a connected basin'//&
-           'or using a point from a previous vertical level.  Make sure that the original data has some valid'//&
+           'Unable to fill missing points using either data at the same vertical level from a connected basin '//&
+           'or using a point from a previous vertical level.  Make sure that the original data has some valid '//&
            'data in all basins.', .true.)
       write(mesg,*) 'nfill=',nfill
       call MOM_error(WARNING, mesg, .true.)

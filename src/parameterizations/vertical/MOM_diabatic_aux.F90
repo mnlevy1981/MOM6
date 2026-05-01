@@ -1,8 +1,10 @@
-!> Provides functions for some diabatic processes such as fraxil, brine rejection,
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
+!> Provides functions for some diabatic processes such as frazil, brine rejection,
 !! tendency due to surface flux divergence.
 module MOM_diabatic_aux
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_cpu_clock,     only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,     only : CLOCK_MODULE_DRIVER, CLOCK_MODULE, CLOCK_ROUTINE
@@ -120,7 +122,6 @@ subroutine make_frazil(h, tv, G, GV, US, CS, p_surf, halo)
   real, dimension(SZI_(G),SZJ_(G)), &
                  optional, intent(in)    :: p_surf !< The pressure at the ocean surface [R L2 T-2 ~> Pa].
   integer,       optional, intent(in)    :: halo !< Halo width over which to calculate frazil
-
   ! Local variables
   real, dimension(SZI_(G)) :: &
     fraz_col, & ! The accumulated heat requirement due to frazil [Q R Z ~> J m-2].
@@ -223,6 +224,9 @@ subroutine make_frazil(h, tv, G, GV, US, CS, p_surf, halo)
       tv%frazil(i,j) = tv%frazil(i,j) + fraz_col(i)
     enddo
   enddo
+
+  tv%frazil_was_reset = .false.
+
   call cpu_clock_end(id_clock_frazil)
 
 end subroutine make_frazil
@@ -538,11 +542,11 @@ subroutine find_uv_at_h(u, v, h, u_h, v_h, G, GV, US, ea, eb, zero_mix)
       "in call to find_uv_at_h.")
   zero_mixing = .false. ; if (present(zero_mix)) zero_mixing = zero_mix
   if (zero_mixing) mix_vertically = .false.
-  !$OMP parallel do default(none) shared(is,ie,js,je,G,GV,mix_vertically,zero_mixing,h, &
-  !$OMP                                  h_neglect,ea,eb,u_h,u,v_h,v,nz)                &
-  !$OMP                          private(sum_area,Idenom,a_w,a_e,a_s,a_n,b_denom_1,b1,d1,c1)
+  !$omp target enter data map(alloc: a_w,a_e,a_s,a_n,b1,d1,c1)
+  !$omp target teams loop private(sum_area,Idenom,a_w,a_e,a_s,a_n,b_denom_1,b1,d1,c1) &
+  !$omp   map(to: ea, eb, h) map(from: u_h, v_h)
   do j=js,je
-    do i=is,ie
+    do concurrent (i=is:ie)
       sum_area = G%areaCu(I-1,j) + G%areaCu(I,j)
       if (sum_area > 0.0) then
         ! If this were a simple area weighted average, this would just be I_denom = 1.0 / sum_area.
@@ -569,14 +573,14 @@ subroutine find_uv_at_h(u, v, h, u_h, v_h, G, GV, US, ea, eb, zero_mix)
     enddo
 
     if (mix_vertically) then
-      do i=is,ie
+      do concurrent (i=is:ie)
         b_denom_1 = h(i,j,1) + h_neglect
         b1(i) = 1.0 / (b_denom_1 + eb(i,j,1))
         d1(i) = b_denom_1 * b1(i)
         u_h(i,j,1) = (h(i,j,1)*b1(i)) * ((a_e(i)*u(I,j,1)) + (a_w(i)*u(I-1,j,1)))
         v_h(i,j,1) = (h(i,j,1)*b1(i)) * ((a_n(i)*v(i,J,1)) + (a_s(i)*v(i,J-1,1)))
       enddo
-      do k=2,nz ; do i=is,ie
+      do k=2,nz ; do concurrent (i=is:ie)
         c1(i,k) = eb(i,j,k-1) * b1(i)
         b_denom_1 = h(i,j,k) + d1(i)*ea(i,j,k) + h_neglect
         b1(i) = 1.0 / (b_denom_1 + eb(i,j,k))
@@ -586,28 +590,29 @@ subroutine find_uv_at_h(u, v, h, u_h, v_h, G, GV, US, ea, eb, zero_mix)
         v_h(i,j,k) = (h(i,j,k) * ((a_n(i)*v(i,J,k)) + (a_s(i)*v(i,J-1,k))) + &
                       ea(i,j,k)*v_h(i,j,k-1))*b1(i)
       enddo ; enddo
-      do k=nz-1,1,-1 ; do i=is,ie
+      do k=nz-1,1,-1 ; do concurrent (i=is:ie)
         u_h(i,j,k) = u_h(i,j,k) + c1(i,k+1)*u_h(i,j,k+1)
         v_h(i,j,k) = v_h(i,j,k) + c1(i,k+1)*v_h(i,j,k+1)
       enddo ; enddo
     elseif (zero_mixing) then
-      do i=is,ie
+      do concurrent (i=is:ie)
         b1(i) = 1.0 / (h(i,j,1) + h_neglect)
         u_h(i,j,1) = (h(i,j,1)*b1(i)) * ((a_e(i)*u(I,j,1)) + (a_w(i)*u(I-1,j,1)))
         v_h(i,j,1) = (h(i,j,1)*b1(i)) * ((a_n(i)*v(i,J,1)) + (a_s(i)*v(i,J-1,1)))
       enddo
-      do k=2,nz ; do i=is,ie
+      do concurrent (k=2:nz, i=is:ie)
         b1(i) = 1.0 / (h(i,j,k) + h_neglect)
         u_h(i,j,k) = (h(i,j,k) * ((a_e(i)*u(I,j,k)) + (a_w(i)*u(I-1,j,k)))) * b1(i)
         v_h(i,j,k) = (h(i,j,k) * ((a_n(i)*v(i,J,k)) + (a_s(i)*v(i,J-1,k)))) * b1(i)
-      enddo ; enddo
+      enddo
     else
-      do k=1,nz ; do i=is,ie
+      do concurrent (k=1:nz, i=is:ie)
         u_h(i,j,k) = (a_e(i)*u(I,j,k)) + (a_w(i)*u(I-1,j,k))
         v_h(i,j,k) = (a_n(i)*v(i,J,k)) + (a_s(i)*v(i,J-1,k))
-      enddo ; enddo
+      enddo
     endif
   enddo
+  !$omp target exit data map(release: a_w,a_e,a_s,a_n,b1,d1,c1)
 
   call cpu_clock_end(id_clock_uv_at_h)
 end subroutine find_uv_at_h
@@ -646,7 +651,7 @@ subroutine set_pen_shortwave(optics, fluxes, G, GV, US, CS, opacity, tracer_flow
       do j=js,je ; do i=is,ie
         if ((G%mask2dT(i,j) > 0.0) .and. (chl_2d(i,j) < 0.0)) then
           write(mesg,'(" Time_interp negative chl of ",(1pe12.4)," at i,j = ",&
-                    & 2(i3), "lon/lat = ",(1pe12.4)," E ", (1pe12.4), " N.")') &
+                    & I0,", ",I0," lon/lat = ",(1pe12.4)," E ", (1pe12.4), " N.")') &
                      chl_2d(i,j), i, j, G%geoLonT(i,j), G%geoLatT(i,j)
           call MOM_error(FATAL, "MOM_diabatic_aux set_pen_shortwave: "//trim(mesg))
         endif
@@ -1335,7 +1340,7 @@ subroutine applyBoundaryFluxesInOut(CS, G, GV, US, dt, fluxes, optics, nsw, h, t
     enddo
 
     if (numberOfGroundings - maxGroundings > 0) then
-      write(mesg, '(i4)') numberOfGroundings - maxGroundings
+      write(mesg, '(I0)') numberOfGroundings - maxGroundings
       call MOM_error(WARNING, "MOM_diabatic_aux:F90, applyBoundaryFluxesInOut(): "//&
                               trim(mesg) // " groundings remaining")
     endif

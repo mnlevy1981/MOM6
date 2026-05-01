@@ -1,7 +1,10 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+#include "do_concurrent_compat.h"
+
 !> Main routine for lateral (along surface or neutral) diffusion of tracers
 module MOM_tracer_hor_diff
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_cpu_clock,                only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,                only : CLOCK_MODULE, CLOCK_ROUTINE
@@ -202,6 +205,12 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
 
   call cpu_clock_begin(id_clock_diffuse)
 
+  !$omp target enter data map(to: Reg, Reg%Tr, CS) map(alloc: khdt_x, khdt_y, kh_u, kh_v)
+  !$ do m = 1, Reg%ntr
+    !$omp target enter data map(to: Reg%Tr(m)%t, Reg%Tr(m)%df_x, Reg%Tr(m)%df_y, Reg%Tr(m)%df2d_x, &
+    !$omp   Reg%tr(m)%df2d_y)
+  !$ enddo
+
   ntr = Reg%ntr
   Idt = 1.0 / dt
   h_neglect = GV%H_subroundoff
@@ -236,8 +245,9 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
 
   if (do_online) then
     if (use_VarMix) then
-      !$OMP parallel do default(shared) private(Kh_loc,Rd_dx)
-      do j=js,je ; do I=is-1,ie
+      !$omp target enter data map(to: VarMix, VarMix%SN_u, VarMix%L2u, VarMix%Res_fn_h, &
+      !$omp   VarMix%Rd_dx_h, MEKE, MEKE%Kh)
+      do concurrent (j=js:je, I=is-1:ie)
         Kh_loc = CS%KhTr
         if (use_Eady) Kh_loc = Kh_loc + CS%KhTr_Slope_Cff*VarMix%L2u(I,j)*VarMix%SN_u(I,j)
         if (allocated(MEKE%Kh)) &
@@ -252,9 +262,8 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
           if (CS%KhTr_max > 0.) Kh_loc = min(Kh_loc, CS%KhTr_max) ! Re-apply max
           Kh_u(I,j,1) = max(Kh_loc, CS%KhTr_min) ! Re-apply min
         endif
-      enddo ; enddo
-      !$OMP parallel do default(shared) private(Kh_loc,Rd_dx)
-      do J=js-1,je ;  do i=is,ie
+      enddo
+      do concurrent (J=js-1:je, i=is:ie)
         Kh_loc = CS%KhTr
         if (use_Eady) Kh_loc = Kh_loc + CS%KhTr_Slope_Cff*VarMix%L2v(i,J)*VarMix%SN_v(i,J)
         if (allocated(MEKE%Kh)) &
@@ -269,16 +278,16 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
           if (CS%KhTr_max > 0.) Kh_loc = min(Kh_loc, CS%KhTr_max) ! Re-apply max
           Kh_v(i,J,1) = max(Kh_loc, CS%KhTr_min) ! Re-apply min
         endif
-      enddo ; enddo
+      enddo
+      !$omp target exit data map(release: VarMix, VarMix%SN_u, VarMix%L2u, VarMix%SN_v, &
+      !$omp   VarMix%L2v, VarMix%Res_fn_h, VarMix%Rd_dx_h, MEKE, MEKE%Kh)
 
-      !$OMP parallel do default(shared)
-      do j=js,je ; do I=is-1,ie
+      do concurrent (j=js:je, I=is-1:ie)
         khdt_x(I,j) = dt*(Kh_u(I,j,1)*(G%dy_Cu(I,j)*G%IdxCu(I,j)))
-      enddo ; enddo
-      !$OMP parallel do default(shared)
-      do J=js-1,je ; do i=is,ie
+      enddo
+      do concurrent (J=js-1:je, i=is:ie)
         khdt_y(i,J) = dt*(Kh_v(i,J,1)*(G%dx_Cv(i,J)*G%IdyCv(i,J)))
-      enddo ; enddo
+      enddo
     elseif (Resoln_scaled) then
       !$OMP parallel do default(shared) private(Res_fn)
       do j=js,je ; do I=is-1,ie
@@ -292,6 +301,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
         Kh_v(i,J,1) = max(CS%KhTr * Res_fn, CS%KhTr_min)
         khdt_y(i,J) = dt*(CS%KhTr*(G%dx_Cv(i,J)*G%IdyCv(i,J))) * Res_fn
       enddo ; enddo
+      !$omp target update to(khdt_x, khdt_y, Kh_u, Kh_v)
     else  ! Use a simple constant diffusivity.
       if (CS%id_KhTr_u > 0) then
         !$OMP parallel do default(shared)
@@ -317,9 +327,11 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
           khdt_y(i,J) = dt*(CS%KhTr*(G%dx_Cv(i,J)*G%IdyCv(i,J)))
         enddo ; enddo
       endif
+      !$omp target update to(khdt_x, khdt_y, Kh_u, Kh_v)
     endif ! VarMix
 
     if (CS%max_diff_CFL > 0.0) then
+      !$omp target update from(khdt_x, khdt_y, Kh_u, Kh_v)
       if ((CS%id_KhTr_u > 0) .or. (CS%id_KhTr_h > 0)) then
         !$OMP parallel do default(shared) private(khdt_max)
         do j=js,je ; do I=is-1,ie
@@ -354,6 +366,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
           khdt_y(i,J) = min(khdt_y(i,J), khdt_max)
         enddo ; enddo
       endif
+      !$omp target update to(khdt_x, khdt_y, Kh_u, Kh_v)
     endif
 
   else ! .not. do_online
@@ -366,6 +379,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
       khdt_y(i,J) = read_khdt_y(i,J)
     enddo ; enddo
     call pass_vector(khdt_x, khdt_y, G%Domain)
+    !$omp target update to(khdt_x, khdt_y, Kh_u, Kh_v)
   endif ! do_online
 
   if (CS%check_diffusive_CFL) then
@@ -381,7 +395,7 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
     call cpu_clock_end(id_clock_sync)
     num_itts = max(1, ceiling(max_CFL - 4.0*EPSILON(max_CFL)))
     I_numitts = 1.0 / (real(num_itts))
-    if (CS%id_CFL > 0) call post_data(CS%id_CFL, CFL, CS%diag, mask=G%mask2dT)
+    if (CS%id_CFL > 0) call post_data(CS%id_CFL, CFL, CS%diag)
   elseif (CS%max_diff_CFL > 0.0) then
     num_itts = max(1, ceiling(CS%max_diff_CFL - 4.0*EPSILON(CS%max_diff_CFL)))
     I_numitts = 1.0 / (real(num_itts))
@@ -394,24 +408,28 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
       do k=1,nz ; do j=js,je ; do I=is-1,ie
         Reg%Tr(m)%df_x(I,j,k) = 0.0
       enddo ; enddo ; enddo
+      !$omp target update to(Reg%Tr(m)%df_x)
     endif
     if (associated(Reg%Tr(m)%df_y)) then
       do k=1,nz ; do J=js-1,je ; do i=is,ie
         Reg%Tr(m)%df_y(i,J,k) = 0.0
       enddo ; enddo ; enddo
+      !$omp target update to(Reg%Tr(m)%df_y)
     endif
     if (associated(Reg%Tr(m)%df2d_x)) then
       do j=js,je ; do I=is-1,ie ; Reg%Tr(m)%df2d_x(I,j) = 0.0 ; enddo ; enddo
+      !$omp target update to(Reg%Tr(m)%df2d_x)
     endif
     if (associated(Reg%Tr(m)%df2d_y)) then
       do J=js-1,je ; do i=is,ie ; Reg%Tr(m)%df2d_y(i,J) = 0.0 ; enddo ; enddo
+      !$omp target update to(Reg%Tr(m)%df2d_y)
     endif
   enddo
 
   if (CS%use_hor_bnd_diffusion) then
 
     if (CS%show_call_tree) call callTree_waypoint("Calling horizontal boundary diffusion (tracer_hordiff)")
-
+    !$omp target update from(khdt_x, khdt_y)
     call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass)
 
     do k=1,nz+1
@@ -541,9 +559,12 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
   else    ! following if not using neutral diffusion, but instead along-surface diffusion
 
     if (CS%show_call_tree) call callTree_waypoint("Calculating horizontal diffusion (tracer_hordiff)")
+    !$omp target enter data map(alloc: dTr, Ihdxdy)
+    !$omp target enter data map(to: Coef_x, Coef_y) if(CS%use_hor_bnd_diffusion) ! copy from non-ported loops above
+    !$omp target enter data map(alloc: Coef_x, Coef_y) if(.not.CS%use_hor_bnd_diffusion)
     do itt=1,num_itts
-      call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass)
-      !$OMP parallel do default(shared) private(scale,Coef_y,Coef_x,Ihdxdy,dTr)
+      call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass, omp_offload=.true.)
+      ! loop should probably be reordered
       do k=1,nz
         scale = I_numitts
         if (CS%Diffuse_ML_interior) then
@@ -554,30 +575,30 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
           if ((k>GV%nkml) .and. (k<=GV%nk_rho_varies)) cycle
         endif
 
-        do J=js-1,je ; do i=is,ie
+        do concurrent (J=js-1:je, i=is:ie)
           Coef_y(i,J,1) = ((scale * khdt_y(i,J))*2.0*(h(i,j,k)*h(i,j+1,k))) / &
                                                    (h(i,j,k)+h(i,j+1,k)+h_neglect)
-        enddo ; enddo
+        enddo
 
-        do j=js,je
-          do I=is-1,ie
+        do concurrent (j=js:je)
+          do concurrent (I=is-1:ie)
             Coef_x(I,j,1) = ((scale * khdt_x(I,j))*2.0*(h(i,j,k)*h(i+1,j,k))) / &
                                                      (h(i,j,k)+h(i+1,j,k)+h_neglect)
           enddo
 
-          do i=is,ie
+          do concurrent (i=is:ie)
             Ihdxdy(i,j) = G%IareaT(i,j) / (h(i,j,k)+h_neglect)
           enddo
         enddo
 
         do m=1,ntr
-          do j=js,je ; do i=is,ie
+          do concurrent (j=js:je, i=is:ie)
             dTr(i,j) = Ihdxdy(i,j) * &
               ( ((Coef_x(I-1,j,1) * (Reg%Tr(m)%t(i-1,j,k) - Reg%Tr(m)%t(i,j,k))) - &
                  (Coef_x(I,j,1) * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i+1,j,k)))) + &
                 ((Coef_y(i,J-1,1) * (Reg%Tr(m)%t(i,j-1,k) - Reg%Tr(m)%t(i,j,k))) - &
                  (Coef_y(i,J,1) * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i,j+1,k)))) )
-          enddo ; enddo
+          enddo
           if (associated(Reg%Tr(m)%df_x)) then ; do j=js,je ; do I=G%IscB,G%IecB
             Reg%Tr(m)%df_x(I,j,k) = Reg%Tr(m)%df_x(I,j,k) + Coef_x(I,j,1) &
                 * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i+1,j,k)) * Idt
@@ -594,23 +615,22 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
             Reg%Tr(m)%df2d_y(i,J) = Reg%Tr(m)%df2d_y(i,J) + Coef_y(i,J,1) &
                 * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i,j+1,k)) * Idt
           enddo ; enddo ; endif
-          do j=js,je ; do i=is,ie
+          do concurrent (j=js:je, i=is:ie)
             Reg%Tr(m)%t(i,j,k) = Reg%Tr(m)%t(i,j,k) + dTr(i,j)
-          enddo ; enddo
+          enddo
         enddo
 
       enddo ! End of k loop.
 
       ! Do user controlled underflow of the tracer concentrations.
       do m=1,ntr ; if (Reg%Tr(m)%conc_underflow > 0.0) then
-        !$OMP parallel do default(shared)
-        do k=1,nz ; do j=js,je ; do i=is,ie
-          if (abs(Reg%Tr(m)%t(i,j,k)) < Reg%Tr(m)%conc_underflow) Reg%Tr(m)%t(i,j,k) = 0.0
-        enddo ; enddo ; enddo
+        do concurrent (k=1:nz, j=js:je, i=is:ie, abs(Reg%Tr(m)%t(i,j,k)) < Reg%Tr(m)%conc_underflow)
+          Reg%Tr(m)%t(i,j,k) = 0.0
+        enddo
       endif ; enddo
 
     enddo ! End of "while" loop.
-
+    !$omp target exit data map(release: dTr, Ihdxdy, Coef_x, Coef_y)
   endif   ! endif for CS%use_neutral_diffusion
   call cpu_clock_end(id_clock_diffuse)
 
@@ -624,11 +644,17 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
                                   CS, tv, num_itts)
     call cpu_clock_end(id_clock_epimix)
   endif
+  !$ do m = 1, Reg%ntr
+    !$omp target exit data map(from: Reg%Tr(m)%t, Reg%Tr(m)%df_x, Reg%Tr(m)%df_y, &
+    !$omp   Reg%Tr(m)%df2d_x, Reg%tr(m)%df2d_y)
+  !$ enddo
+  !$omp target exit data map(release: Reg%Tr, Reg)
 
   if (CS%debug) call MOM_tracer_chksum("After tracer diffusion ", Reg, G)
 
   ! post diagnostics for 2d tracer diffusivity
   if (CS%id_KhTr_u > 0) then
+    !$omp target exit data map(from: Kh_u)
     do j=js,je ; do I=is-1,ie
       Kh_u(I,j,:) = G%mask2dCu(I,j)*Kh_u(I,j,1)
     enddo ; enddo
@@ -641,10 +667,10 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
         enddo
       enddo
     endif
-    !call post_data(CS%id_KhTr_u, Kh_u, CS%diag, is_static=.false., mask=G%mask2dCu)
     call post_data(CS%id_KhTr_u, Kh_u, CS%diag)
   endif
   if (CS%id_KhTr_v > 0) then
+    !$omp target exit data map(from: Kh_v)
     do J=js-1,je ; do i=is,ie
       Kh_v(i,J,:) = G%mask2dCv(i,J)*Kh_v(i,J,1)
     enddo ; enddo
@@ -657,10 +683,10 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
         enddo
       enddo
     endif
-    !call post_data(CS%id_KhTr_v, Kh_v, CS%diag, is_static=.false., mask=G%mask2dCv)
     call post_data(CS%id_KhTr_v, Kh_v, CS%diag)
   endif
   if (CS%id_KhTr_h > 0) then
+    !$omp target exit data map(from: Kh_u, Kh_v)
     Kh_h(:,:,:) = 0.0
     do j=js,je ; do I=is-1,ie
       Kh_u(I,j,1) = G%mask2dCu(I,j)*Kh_u(I,j,1)
@@ -681,9 +707,11 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
         enddo
       endif
     enddo ; enddo
-    !call post_data(CS%id_KhTr_h, Kh_h, CS%diag, is_static=.false., mask=G%mask2dT)
     call post_data(CS%id_KhTr_h, Kh_h, CS%diag)
   endif
+
+  !$omp target exit data map(from: khdt_x, khdt_y) if(CS%debug .or. CS%id_khdt_x>0 .or. CS%id_khdt_y>0)
+  !$omp target exit data map(delete: khdt_x, khdt_y, Kh_u, Kh_v) map(release: CS)
 
   if (CS%debug) then
     call uvchksum("After tracer diffusion khdt_[xy]", khdt_x, khdt_y, &
@@ -729,18 +757,15 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 
   ! The naming mnemonic is a=above,b=below,L=Left,R=Right,u=u-point,v=v-point.
   ! These are 1-D arrays of pointers to 2-d arrays to minimize memory usage.
-  type(p2d), dimension(SZJ_(G)) :: &
+  real, dimension(:,:,:), allocatable :: &
     deep_wt_Lu, deep_wt_Ru, &  ! The relative weighting of the deeper of a pair [nondim].
-    hP_Lu, hP_Ru       ! The total thickness on each side for each pair [H ~> m or kg m-2].
-
-  type(p2d), dimension(SZJB_(G)) :: &
+    hP_Lu, hP_Ru, &    ! The total thickness on each side for each pair [H ~> m or kg m-2].
     deep_wt_Lv, deep_wt_Rv, & ! The relative weighting of the deeper of a pair [nondim].
     hP_Lv, hP_Rv       ! The total thickness on each side for each pair [H ~> m or kg m-2].
 
-  type(p2di), dimension(SZJ_(G)) :: &
+  integer, dimension(:,:,:), allocatable :: &
     k0b_Lu, k0a_Lu, &  ! The original k-indices of the layers that participate
-    k0b_Ru, k0a_Ru     ! in each pair of mixing at u-faces.
-  type(p2di), dimension(SZJB_(G)) :: &
+    k0b_Ru, k0a_Ru, &  ! in each pair of mixing at u-faces.
     k0b_Lv, k0a_Lv, &  ! The original k-indices of the layers that participate
     k0b_Rv, k0a_Rv     ! in each pair of mixing at v-faces.
 
@@ -817,18 +842,18 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
     right_set    ! of the trio.  If densities are exactly equal, both are true.
 
   real :: tmp    ! A temporary variable used in swaps [various]
-  real :: p_ref_cv(SZI_(G)) ! The reference pressure for the coordinate density [R L2 T-2 ~> Pa]
+  real :: p_ref_cv(SZI_(G),SZJ_(G)) ! The reference pressure for the coordinate density [R L2 T-2 ~> Pa]
 
-  integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
+  integer, dimension(2,2) :: EOSdom ! The i-computational domain for the equation of state
   integer :: k_max, k_min, k_test, itmp
   integer :: i, j, k, k2, m, is, ie, js, je, nz, nkmb
-  integer :: isd, ied, jsd, jed, IsdB, IedB, k_size
+  integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, k_size
   integer :: kL, kR, kLa, kLb, kRa, kRb, nP, itt, ns, max_itt
   integer :: PEmax_kRho
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
-  IsdB = G%IsdB ; IedB = G%IedB
+  IsdB = G%IsdB ; IedB = G%IedB ; JsdB = G%JsdB ; JedB = G%JedB
   Idt = 1.0 / dt
   nkmb = GV%nk_rho_varies
 
@@ -838,30 +863,34 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
     max_itt = num_itts ; I_maxitt = 1.0 / (real(max_itt))
   endif
 
-  do i=is-2,ie+2 ; p_ref_cv(i) = tv%P_Ref ; enddo
-  EOSdom(:) = EOS_domain(G%HI,halo=2)
+  !$omp target enter data map(alloc: rho_coord, Rml_max, max_kRho, rho_srt, k0_srt, num_srt, &
+  !$omp   h_srt, p_ref_cv, k_end_srt, max_srt)
 
-  call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass)
+  do concurrent (j=jsd:jed, i=isd:ied)
+    p_ref_cv(i,j) = tv%P_Ref
+  enddo
+
+  call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass, omp_offload=.true.)
   ! Determine which layers the mixed- and buffer-layers map into...
   !$OMP parallel do default(shared)
-  do k=1,nkmb ; do j=js-2,je+2
-    call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p_ref_cv, rho_coord(:,j,k), &
-                           tv%eqn_of_state, EOSdom)
-  enddo ; enddo
+  do k=1,nkmb
+    call calculate_density(tv%T(:,:,k), tv%S(:,:,k), p_ref_cv, rho_coord(:,:,k), &
+                           tv%eqn_of_state)
+  enddo
+  !$omp target exit data map(release: p_ref_cv)
 
-  do j=js-2,je+2 ; do i=is-2,ie+2
+  do concurrent (j=js-2:je+2, i=is-2:ie+2)
     Rml_max(i,j) = rho_coord(i,j,1)
     num_srt(i,j) = 0 ; max_kRho(i,j) = 0
+  enddo
+  do k=2,nkmb ; do concurrent (j=js-2:je+2, i=is-2:ie+2, Rml_max(i,j) < rho_coord(i,j,k))
+    Rml_max(i,j) = rho_coord(i,j,k)
   enddo ; enddo
-  do k=2,nkmb ; do j=js-2,je+2 ; do i=is-2,ie+2
-    if (Rml_max(i,j) < rho_coord(i,j,k)) Rml_max(i,j) = rho_coord(i,j,k)
-  enddo ; enddo ; enddo
 
   !   Use bracketing and bisection to find the k-level that the densest of the
   ! mixed and buffer layer corresponds to, such that:
   !     GV%Rlay(max_kRho-1) < Rml_max <= GV%Rlay(max_kRho)
-  !$OMP parallel do default(shared) private(k_min,k_max,k_test)
-  do j=js-2,je+2 ; do i=is-2,ie+2 ; if (G%mask2dT(i,j) > 0.0) then
+  do concurrent (j=js-2:je+2, i=is-2:ie+2, G%mask2dT(i,j) > 0.0)
     if ((Rml_max(i,j) > GV%Rlay(nz)) .or. (nkmb+1 > nz)) then ; max_kRho(i,j) = nz+1
     elseif ((Rml_max(i,j) <= GV%Rlay(nkmb+1)) .or. (nkmb+2 > nz)) then ; max_kRho(i,j) = nkmb+1
     else
@@ -875,76 +904,78 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
         if (k_min == k_max) then ; max_kRho(i,j) = k_max ; exit ; endif
       enddo
     endif
-  endif ; enddo ; enddo
+  enddo
 
   PEmax_kRho = 0
-  do j=js-1,je+1 ; do i=is-1,ie+1
+  do concurrent (j=js-1:je+1, i=is-1:ie+1) DO_LOCALITY(reduce(max:PEmax_kRho))
     k_end_srt(i,j) = max(max_kRho(i,j), max_kRho(i-1,j), max_kRho(i+1,j), &
                          max_kRho(i,j-1), max_kRho(i,j+1))
     if (PEmax_kRho < k_end_srt(i,j)) PEmax_kRho = k_end_srt(i,j)
-  enddo ; enddo
+  enddo
   if (PEmax_kRho > nz) PEmax_kRho = nz ! PEmax_kRho could have been nz+1.
 
   h_exclude = 10.0*(GV%Angstrom_H + GV%H_subroundoff)
-  !$OMP parallel default(shared) private(ns,tmp,itmp)
-  !$OMP do
-  do j=js-1,je+1
-    do k=1,nkmb ; do i=is-1,ie+1 ; if (G%mask2dT(i,j) > 0.0) then
+  !$omp target update to(h)
+  do concurrent (j=js-1:je+1) DO_LOCALITY(local(k, ns))
+    do k=1,nkmb ; do concurrent (i=is-1:ie+1, G%mask2dT(i,j) > 0.0) DO_LOCALITY(local(ns))
       if (h(i,j,k) > h_exclude) then
         num_srt(i,j) = num_srt(i,j) + 1 ; ns = num_srt(i,j)
         k0_srt(i,ns,j) = k
         rho_srt(i,ns,j) = rho_coord(i,j,k)
         h_srt(i,ns,j) = h(i,j,k)
       endif
-    endif ; enddo ; enddo
-    do k=nkmb+1,PEmax_kRho ; do i=is-1,ie+1 ; if (G%mask2dT(i,j) > 0.0) then
+    enddo ; enddo
+    do k=nkmb+1,PEmax_kRho ; do concurrent (i=is-1:ie+1, G%mask2dT(i,j) > 0.0) DO_LOCALITY(local(ns))
       if ((k<=k_end_srt(i,j)) .and. (h(i,j,k) > h_exclude)) then
         num_srt(i,j) = num_srt(i,j) + 1 ; ns = num_srt(i,j)
         k0_srt(i,ns,j) = k
         rho_srt(i,ns,j) = GV%Rlay(k)
         h_srt(i,ns,j) = h(i,j,k)
       endif
-    endif ; enddo ; enddo
+    enddo ; enddo
   enddo
+  !$omp target exit data map(release: rho_coord, Rml_max, k_end_srt)
   ! Sort each column by increasing density.  This should already be close,
   ! and the size of the arrays are small, so straight insertion is used.
-  !$OMP do
-  do j=js-1,je+1 ; do i=is-1,ie+1
+  do concurrent (j=js-1:je+1, i=is-1:ie+1)
     do k=2,num_srt(i,j) ; if (rho_srt(i,k,j) < rho_srt(i,k-1,j)) then
       ! The last segment needs to be shuffled earlier in the list.
-      do k2 = k,2,-1 ; if (rho_srt(i,k2,j) >= rho_srt(i,k2-1,j)) exit
+      do k2 = k,2,-1 ; if (rho_srt(i,k2,j) < rho_srt(i,k2-1,j)) then
         itmp = k0_srt(i,k2-1,j) ; k0_srt(i,k2-1,j) = k0_srt(i,k2,j) ; k0_srt(i,k2,j) = itmp
         tmp = rho_srt(i,k2-1,j) ; rho_srt(i,k2-1,j) = rho_srt(i,k2,j) ; rho_srt(i,k2,j) = tmp
         tmp = h_srt(i,k2-1,j) ; h_srt(i,k2-1,j) = h_srt(i,k2,j) ; h_srt(i,k2,j) = tmp
-      enddo
+      endif ; enddo
     endif ; enddo
-  enddo ; enddo
-  !$OMP do
-  do j=js-1,je+1
-    max_srt(j) = 0
-    do i=is-1,ie+1 ; max_srt(j) = max(max_srt(j), num_srt(i,j)) ; enddo
   enddo
-  !$OMP end parallel
-
-  do j=js,je
-    k_size = max(2*max_srt(j),1)
-    allocate(deep_wt_Lu(j)%p(IsdB:IedB,k_size))
-    allocate(deep_wt_Ru(j)%p(IsdB:IedB,k_size))
-    allocate(hP_Lu(j)%p(IsdB:IedB,k_size))
-    allocate(hP_Ru(j)%p(IsdB:IedB,k_size))
-    allocate(k0a_Lu(j)%p(IsdB:IedB,k_size))
-    allocate(k0a_Ru(j)%p(IsdB:IedB,k_size))
-    allocate(k0b_Lu(j)%p(IsdB:IedB,k_size))
-    allocate(k0b_Ru(j)%p(IsdB:IedB,k_size))
+  do concurrent (j=js-1:je+1) DO_LOCALITY(local(itmp))
+    ! max_srt(j) = 0
+    itmp = 0
+    ! nvfortran do concurrent cannot reduce array elements
+    do concurrent (i=is-1:ie+1) DO_LOCALITY(reduce(max:itmp))
+      itmp = max(itmp, num_srt(i,j))
+    enddo
+    max_srt(j) = itmp
   enddo
-
-!$OMP parallel do default(none) shared(is,ie,js,je,G,num_srt,rho_srt,k0b_Lu,k0_srt, &
-!$OMP                                  k0b_Ru,k0a_Lu,k0a_Ru,deep_wt_Lu,deep_wt_Ru,  &
-!$OMP                                  h_srt,nkmb,nPu,hP_Lu,hP_Ru)                  &
+  k_size = 1
+  do concurrent (j=js-1:je+1) DO_LOCALITY(reduce(max:k_size))
+    k_size = max(k_size, 2*max_srt(j))
+  enddo
+  allocate(k0a_Lu(IsdB:iedB,k_size,jsd:jed))
+  allocate(k0a_Ru(IsdB:iedB,k_size,jsd:jed))
+  allocate(k0b_Lu(IsdB:iedB,k_size,jsd:jed))
+  allocate(k0b_Ru(IsdB:iedB,k_size,jsd:jed))
+  allocate(deep_wt_Lu(IsdB:iedB,k_size,jsd:jed))
+  allocate(deep_wt_Ru(IsdB:iedB,k_size,jsd:jed))
+  allocate(hP_Lu(IsdB:iedB,k_size,jsd:jed))
+  allocate(hP_Ru(IsdB:iedB,k_size,jsd:jed))
+  !$omp target enter data map(alloc: deep_wt_Lu, deep_wt_Ru, hP_Lu, hP_Ru, k0a_Lu, k0a_Ru, k0b_Lu, &
+  !$omp   k0b_Ru)
+  !$omp target enter data map(alloc: nPu)
+!$OMP target teams loop collapse(2) &
 !$OMP                          private(h_demand_L,h_used_L,h_demand_R,h_used_R,     &
 !$OMP                                  kR,kL,nP,rho_pair,kbs_Lp,kbs_Rp,rho_a,rho_b, &
 !$OMP                                  wt_b,left_set,right_set,h_supply_frac_R,     &
-!$OMP                                  h_supply_frac_L)
+!$OMP                                  h_supply_frac_L, k)
   do j=js,je ; do I=is-1,ie ; if (G%mask2dCu(I,j) > 0.0) then
     ! Set up the pairings for fluxes through the zonal faces.
 
@@ -974,14 +1005,14 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
         nP = nP+1 ; k = nP
         rho_pair = rho_srt(i+1,kR,j)
 
-        k0b_Lu(j)%p(I,k) = k0_srt(i,kL,j) ; k0b_Ru(j)%p(I,k) = k0_srt(i+1,kR,j)
-        k0a_Lu(j)%p(I,k) = k0_srt(i,kL-1,j) ; k0a_Ru(j)%p(I,k) = k0b_Ru(j)%p(I,k)
+        k0b_Lu(I,k,j) = k0_srt(i,kL,j) ; k0b_Ru(I,k,j) = k0_srt(i+1,kR,j)
+        k0a_Lu(I,k,j) = k0_srt(i,kL-1,j) ; k0a_Ru(I,k,j) = k0b_Ru(I,k,j)
         kbs_Lp(k) = kL ; kbs_Rp(k) = kR
 
         rho_a = rho_srt(i,kL-1,j) ; rho_b = rho_srt(i,kL,j)
         wt_b = 1.0 ; if (abs(rho_a - rho_b) > abs(rho_pair - rho_a)) &
           wt_b = (rho_pair - rho_a) / (rho_b - rho_a)
-        deep_wt_Lu(j)%p(I,k) = wt_b ; deep_wt_Ru(j)%p(I,k) = 1.0
+        deep_wt_Lu(I,k,j) = wt_b ; deep_wt_Ru(I,k,j) = 1.0
 
         h_demand_L(kL) = h_demand_L(kL) + 0.5*h_srt(i+1,kR,j) * wt_b
         h_demand_L(kL-1) = h_demand_L(kL-1) + 0.5*h_srt(i+1,kR,j) * (1.0-wt_b)
@@ -991,15 +1022,15 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
       ! The left point is lighter and defines the density for this trio.
         nP = nP+1 ; k = nP
         rho_pair = rho_srt(i,kL,j)
-        k0b_Lu(j)%p(I,k) = k0_srt(i,kL,j) ; k0b_Ru(j)%p(I,k) = k0_srt(i+1,kR,j)
-        k0a_Lu(j)%p(I,k) = k0b_Lu(j)%p(I,k) ; k0a_Ru(j)%p(I,k) = k0_srt(i+1,kR-1,j)
+        k0b_Lu(I,k,j) = k0_srt(i,kL,j) ; k0b_Ru(I,k,j) = k0_srt(i+1,kR,j)
+        k0a_Lu(I,k,j) = k0b_Lu(I,k,j) ; k0a_Ru(I,k,j) = k0_srt(i+1,kR-1,j)
 
         kbs_Lp(k) = kL ; kbs_Rp(k) = kR
 
         rho_a = rho_srt(i+1,kR-1,j) ; rho_b = rho_srt(i+1,kR,j)
         wt_b = 1.0 ; if (abs(rho_a - rho_b) > abs(rho_pair - rho_a)) &
           wt_b = (rho_pair - rho_a) / (rho_b - rho_a)
-        deep_wt_Lu(j)%p(I,k) = 1.0 ; deep_wt_Ru(j)%p(I,k) = wt_b
+        deep_wt_Lu(I,k,j) = 1.0 ; deep_wt_Ru(I,k,j) = wt_b
 
         h_demand_R(kR) = h_demand_R(kR) + 0.5*h_srt(i,kL,j) * wt_b
         h_demand_R(kR-1) = h_demand_R(kR-1) + 0.5*h_srt(i,kL,j) * (1.0-wt_b)
@@ -1008,10 +1039,10 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
       elseif ((k0_srt(i,kL,j) <= nkmb) .or. (k0_srt(i+1,kR,j) <= nkmb)) then
         ! The densities are exactly equal and one layer is above the interior.
         nP = nP+1 ; k = nP
-        k0b_Lu(j)%p(I,k) = k0_srt(i,kL,j) ; k0b_Ru(j)%p(I,k) = k0_srt(i+1,kR,j)
-        k0a_Lu(j)%p(I,k) = k0b_Lu(j)%p(I,k) ; k0a_Ru(j)%p(I,k) = k0b_Ru(j)%p(I,k)
+        k0b_Lu(I,k,j) = k0_srt(i,kL,j) ; k0b_Ru(I,k,j) = k0_srt(i+1,kR,j)
+        k0a_Lu(I,k,j) = k0b_Lu(I,k,j) ; k0a_Ru(I,k,j) = k0b_Ru(I,k,j)
         kbs_Lp(k) = kL ; kbs_Rp(k) = kR
-        deep_wt_Lu(j)%p(I,k) = 1.0 ; deep_wt_Ru(j)%p(I,k) = 1.0
+        deep_wt_Lu(I,k,j) = 1.0 ; deep_wt_Ru(I,k,j) = 1.0
 
         h_demand_L(kL) = h_demand_L(kL) + 0.5*h_srt(i+1,kR,j)
         h_demand_R(kR) = h_demand_R(kR) + 0.5*h_srt(i,kL,j)
@@ -1043,27 +1074,27 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
     !  Distribute the "exported" thicknesses proportionately.
     do k=1,nPu(I,j)
       kL = kbs_Lp(k) ; kR = kbs_Rp(k)
-      hP_Lu(j)%p(I,k) = 0.0 ; hP_Ru(j)%p(I,k) = 0.0
+      hP_Lu(I,k,j) = 0.0 ; hP_Ru(I,k,j) = 0.0
       if (left_set(k)) then ! Add the contributing thicknesses on the right.
-        if (deep_wt_Ru(j)%p(I,k) < 1.0) then
-          hP_Ru(j)%p(I,k) = 0.5*h_srt(i,kL,j) * min(h_supply_frac_R(kR), h_supply_frac_R(kR-1))
-          wt_b = deep_wt_Ru(j)%p(I,k)
-          h_used_R(kR-1) = h_used_R(kR-1) + (1.0 - wt_b)*hP_Ru(j)%p(I,k)
-          h_used_R(kR) = h_used_R(kR) + wt_b*hP_Ru(j)%p(I,k)
+        if (deep_wt_Ru(I,k,j) < 1.0) then
+          hP_Ru(I,k,j) = 0.5*h_srt(i,kL,j) * min(h_supply_frac_R(kR), h_supply_frac_R(kR-1))
+          wt_b = deep_wt_Ru(I,k,j)
+          h_used_R(kR-1) = h_used_R(kR-1) + (1.0 - wt_b)*hP_Ru(I,k,j)
+          h_used_R(kR) = h_used_R(kR) + wt_b*hP_Ru(I,k,j)
         else
-          hP_Ru(j)%p(I,k) = 0.5*h_srt(i,kL,j) * h_supply_frac_R(kR)
-          h_used_R(kR) = h_used_R(kR) + hP_Ru(j)%p(I,k)
+          hP_Ru(I,k,j) = 0.5*h_srt(i,kL,j) * h_supply_frac_R(kR)
+          h_used_R(kR) = h_used_R(kR) + hP_Ru(I,k,j)
         endif
       endif
       if (right_set(k)) then ! Add the contributing thicknesses on the left.
-        if (deep_wt_Lu(j)%p(I,k) < 1.0) then
-          hP_Lu(j)%p(I,k) = 0.5*h_srt(i+1,kR,j) * min(h_supply_frac_L(kL), h_supply_frac_L(kL-1))
-          wt_b = deep_wt_Lu(j)%p(I,k)
-          h_used_L(kL-1) = h_used_L(kL-1) + (1.0 - wt_b)*hP_Lu(j)%p(I,k)
-          h_used_L(kL) = h_used_L(kL) + wt_b*hP_Lu(j)%p(I,k)
+        if (deep_wt_Lu(I,k,j) < 1.0) then
+          hP_Lu(I,k,j) = 0.5*h_srt(i+1,kR,j) * min(h_supply_frac_L(kL), h_supply_frac_L(kL-1))
+          wt_b = deep_wt_Lu(I,k,j)
+          h_used_L(kL-1) = h_used_L(kL-1) + (1.0 - wt_b)*hP_Lu(I,k,j)
+          h_used_L(kL) = h_used_L(kL) + wt_b*hP_Lu(I,k,j)
         else
-          hP_Lu(j)%p(I,k) = 0.5*h_srt(i+1,kR,j) * h_supply_frac_L(kL)
-          h_used_L(kL) = h_used_L(kL) + hP_Lu(j)%p(I,k)
+          hP_Lu(I,k,j) = 0.5*h_srt(i+1,kR,j) * h_supply_frac_L(kL)
+          h_used_L(kL) = h_used_L(kL) + hP_Lu(I,k,j)
         endif
       endif
     enddo
@@ -1071,33 +1102,32 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
     !   The left-over thickness (at least half the layer thickness) is now
     ! added to the thicknesses of the importing columns.
     do k=1,nPu(I,j)
-      if (left_set(k)) hP_Lu(j)%p(I,k) = hP_Lu(j)%p(I,k) + &
+      if (left_set(k)) hP_Lu(I,k,j) = hP_Lu(I,k,j) + &
                            (h_srt(i,kbs_Lp(k),j) - h_used_L(kbs_Lp(k)))
-      if (right_set(k)) hP_Ru(j)%p(I,k) = hP_Ru(j)%p(I,k) + &
+      if (right_set(k)) hP_Ru(I,k,j) = hP_Ru(I,k,j) + &
                             (h_srt(i+1,kbs_Rp(k),j) - h_used_R(kbs_Rp(k)))
     enddo
 
   endif ; enddo ; enddo ! i- & j- loops over zonal faces.
 
-  do J=js-1,je
-    k_size = max(max_srt(j)+max_srt(j+1),1)
-    allocate(deep_wt_Lv(J)%p(isd:ied,k_size))
-    allocate(deep_wt_Rv(J)%p(isd:ied,k_size))
-    allocate(hP_Lv(J)%p(isd:ied,k_size))
-    allocate(hP_Rv(J)%p(isd:ied,k_size))
-    allocate(k0a_Lv(J)%p(isd:ied,k_size))
-    allocate(k0a_Rv(J)%p(isd:ied,k_size))
-    allocate(k0b_Lv(J)%p(isd:ied,k_size))
-    allocate(k0b_Rv(J)%p(isd:ied,k_size))
-  enddo
+  allocate(deep_wt_Lv(isd:ied,k_size,JsdB:JedB))
+  allocate(deep_wt_Rv(isd:ied,k_size,JsdB:JedB))
+  allocate(hP_Lv(isd:ied,k_size,JsdB:JedB))
+  allocate(hP_Rv(isd:ied,k_size,JsdB:JedB))
+  allocate(k0a_Lv(isd:ied,k_size,JsdB:JedB))
+  allocate(k0a_Rv(isd:ied,k_size,JsdB:JedB))
+  allocate(k0b_Lv(isd:ied,k_size,JsdB:JedB))
+  allocate(k0b_Rv(isd:ied,k_size,JsdB:JedB))
+  !$omp target enter data map(alloc: deep_wt_Lv, deep_wt_Rv, hP_Lv, hP_Rv, k0a_Lv, k0a_Rv, k0b_Lv, &
+  !$omp   k0b_Rv)
 
-!$OMP parallel do default(none) shared(is,ie,js,je,G,num_srt,rho_srt,k0b_Lv,k0b_Rv, &
-!$OMP                                  k0_srt,k0a_Lv,k0a_Rv,deep_wt_Lv,deep_wt_Rv,  &
-!$OMP                                  h_srt,nkmb,nPv,hP_Lv,hP_Rv)                  &
+  !$omp target enter data map(alloc: nPv)
+
+!$OMP target teams loop collapse(2) &
 !$OMP                          private(h_demand_L,h_used_L,h_demand_R,h_used_R,     &
 !$OMP                                  kR,kL,nP,rho_pair,kbs_Lp,kbs_Rp,rho_a,rho_b, &
 !$OMP                                  wt_b,left_set,right_set,h_supply_frac_R,     &
-!$OMP                                  h_supply_frac_L)
+!$OMP                                  h_supply_frac_L,k) map(to: num_srt)
   do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.0) then
     ! Set up the pairings for fluxes through the meridional faces.
 
@@ -1127,14 +1157,14 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
         nP = nP+1 ; k = nP
         rho_pair = rho_srt(i,kR,j+1)
 
-        k0b_Lv(J)%p(i,k) = k0_srt(i,kL,j)   ; k0b_Rv(J)%p(i,k) = k0_srt(i,kR,j+1)
-        k0a_Lv(J)%p(i,k) = k0_srt(i,kL-1,j) ; k0a_Rv(J)%p(i,k) = k0b_Rv(J)%p(i,k)
+        k0b_Lv(i,k,J) = k0_srt(i,kL,j)   ; k0b_Rv(i,k,J) = k0_srt(i,kR,j+1)
+        k0a_Lv(i,k,J) = k0_srt(i,kL-1,j) ; k0a_Rv(i,k,J) = k0b_Rv(i,k,J)
         kbs_Lp(k) = kL ; kbs_Rp(k) = kR
 
         rho_a = rho_srt(i,kL-1,j) ; rho_b = rho_srt(i,kL,j)
         wt_b = 1.0 ; if (abs(rho_a - rho_b) > abs(rho_pair - rho_a)) &
           wt_b = (rho_pair - rho_a) / (rho_b - rho_a)
-        deep_wt_Lv(J)%p(i,k) = wt_b ; deep_wt_Rv(J)%p(i,k) = 1.0
+        deep_wt_Lv(I,k,J) = wt_b ; deep_wt_Rv(I,k,J) = 1.0
 
         h_demand_L(kL) = h_demand_L(kL) + 0.5*h_srt(i,kR,j+1) * wt_b
         h_demand_L(kL-1) = h_demand_L(kL-1) + 0.5*h_srt(i,kR,j+1) * (1.0-wt_b)
@@ -1144,15 +1174,15 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
       ! The left point is lighter and defines the density for this trio.
         nP = nP+1 ; k = nP
         rho_pair = rho_srt(i,kL,j)
-        k0b_Lv(J)%p(i,k) = k0_srt(i,kL,j) ; k0b_Rv(J)%p(i,k) = k0_srt(i,kR,j+1)
-        k0a_Lv(J)%p(i,k) = k0b_Lv(J)%p(i,k) ; k0a_Rv(J)%p(i,k) = k0_srt(i,kR-1,j+1)
+        k0b_Lv(i,k,J) = k0_srt(i,kL,j) ; k0b_Rv(i,k,J) = k0_srt(i,kR,j+1)
+        k0a_Lv(i,k,J) = k0b_Lv(i,k,J) ; k0a_Rv(i,k,J) = k0_srt(i,kR-1,j+1)
 
         kbs_Lp(k) = kL ; kbs_Rp(k) = kR
 
         rho_a = rho_srt(i,kR-1,j+1) ; rho_b = rho_srt(i,kR,j+1)
         wt_b = 1.0 ; if (abs(rho_a - rho_b) > abs(rho_pair - rho_a)) &
           wt_b = (rho_pair - rho_a) / (rho_b - rho_a)
-        deep_wt_Lv(J)%p(i,k) = 1.0 ; deep_wt_Rv(J)%p(i,k) = wt_b
+        deep_wt_Lv(I,k,J) = 1.0 ; deep_wt_Rv(I,k,J) = wt_b
 
         h_demand_R(kR) = h_demand_R(kR) + 0.5*h_srt(i,kL,j) * wt_b
         h_demand_R(kR-1) = h_demand_R(kR-1) + 0.5*h_srt(i,kL,j) * (1.0-wt_b)
@@ -1161,10 +1191,10 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
       elseif ((k0_srt(i,kL,j) <= nkmb) .or. (k0_srt(i,kR,j+1) <= nkmb)) then
         ! The densities are exactly equal and one layer is above the interior.
         nP = nP+1 ; k = nP
-        k0b_Lv(J)%p(i,k) = k0_srt(i,kL,j) ; k0b_Rv(J)%p(i,k) = k0_srt(i,kR,j+1)
-        k0a_Lv(J)%p(i,k) = k0b_Lv(J)%p(i,k)  ; k0a_Rv(J)%p(i,k) = k0b_Rv(J)%p(i,k)
+        k0b_Lv(i,k,J) = k0_srt(i,kL,j) ; k0b_Rv(i,k,J) = k0_srt(i,kR,j+1)
+        k0a_Lv(i,k,J) = k0b_Lv(i,k,J)  ; k0a_Rv(i,k,J) = k0b_Rv(i,k,J)
         kbs_Lp(k) = kL ; kbs_Rp(k) = kR
-        deep_wt_Lv(J)%p(i,k) = 1.0 ; deep_wt_Rv(J)%p(i,k) = 1.0
+        deep_wt_Lv(I,k,J) = 1.0 ; deep_wt_Rv(I,k,J) = 1.0
 
         h_demand_L(kL) = h_demand_L(kL) + 0.5*h_srt(i,kR,j+1)
         h_demand_R(kR) = h_demand_R(kR) + 0.5*h_srt(i,kL,j)
@@ -1196,27 +1226,27 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
     !  Distribute the "exported" thicknesses proportionately.
     do k=1,nPv(i,J)
       kL = kbs_Lp(k) ; kR = kbs_Rp(k)
-      hP_Lv(J)%p(i,k) = 0.0 ; hP_Rv(J)%p(i,k) = 0.0
+      hP_Lv(I,k,J) = 0.0 ; hP_Rv(I,k,J) = 0.0
       if (left_set(k)) then ! Add the contributing thicknesses on the right.
-        if (deep_wt_Rv(J)%p(i,k) < 1.0) then
-          hP_Rv(J)%p(i,k) = 0.5*h_srt(i,kL,j) * min(h_supply_frac_R(kR), h_supply_frac_R(kR-1))
-          wt_b = deep_wt_Rv(J)%p(i,k)
-          h_used_R(kR-1) = h_used_R(kR-1) + (1.0 - wt_b) * hP_Rv(J)%p(i,k)
-          h_used_R(kR) = h_used_R(kR) + wt_b * hP_Rv(J)%p(i,k)
+        if (deep_wt_Rv(I,k,J) < 1.0) then
+          hP_Rv(I,k,J) = 0.5*h_srt(i,kL,j) * min(h_supply_frac_R(kR), h_supply_frac_R(kR-1))
+          wt_b = deep_wt_Rv(I,k,J)
+          h_used_R(kR-1) = h_used_R(kR-1) + (1.0 - wt_b) * hP_Rv(I,k,J)
+          h_used_R(kR) = h_used_R(kR) + wt_b * hP_Rv(I,k,J)
         else
-          hP_Rv(J)%p(i,k) = 0.5*h_srt(i,kL,j) * h_supply_frac_R(kR)
-          h_used_R(kR) = h_used_R(kR) + hP_Rv(J)%p(i,k)
+          hP_Rv(I,k,J) = 0.5*h_srt(i,kL,j) * h_supply_frac_R(kR)
+          h_used_R(kR) = h_used_R(kR) + hP_Rv(I,k,J)
         endif
       endif
       if (right_set(k)) then ! Add the contributing thicknesses on the left.
-        if (deep_wt_Lv(J)%p(i,k) < 1.0) then
-          hP_Lv(J)%p(i,k) = 0.5*h_srt(i,kR,j+1) * min(h_supply_frac_L(kL), h_supply_frac_L(kL-1))
-          wt_b = deep_wt_Lv(J)%p(i,k)
-          h_used_L(kL-1) = h_used_L(kL-1) + (1.0 - wt_b) * hP_Lv(J)%p(i,k)
-          h_used_L(kL) = h_used_L(kL) + wt_b * hP_Lv(J)%p(i,k)
+        if (deep_wt_Lv(I,k,J) < 1.0) then
+          hP_Lv(I,k,J) = 0.5*h_srt(i,kR,j+1) * min(h_supply_frac_L(kL), h_supply_frac_L(kL-1))
+          wt_b = deep_wt_Lv(I,k,J)
+          h_used_L(kL-1) = h_used_L(kL-1) + (1.0 - wt_b) * hP_Lv(I,k,J)
+          h_used_L(kL) = h_used_L(kL) + wt_b * hP_Lv(I,k,J)
         else
-          hP_Lv(J)%p(i,k) = 0.5*h_srt(i,kR,j+1) * h_supply_frac_L(kL)
-          h_used_L(kL) = h_used_L(kL) + hP_Lv(J)%p(i,k)
+          hP_Lv(I,k,J) = 0.5*h_srt(i,kR,j+1) * h_supply_frac_L(kL)
+          h_used_L(kL) = h_used_L(kL) + hP_Lv(I,k,J)
         endif
       endif
     enddo
@@ -1224,37 +1254,47 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
     !   The left-over thickness (at least half the layer thickness) is now
     ! added to the thicknesses of the importing columns.
     do k=1,nPv(i,J)
-      if (left_set(k)) hP_Lv(J)%p(i,k) = hP_Lv(J)%p(i,k) + &
+      if (left_set(k)) hP_Lv(I,k,J) = hP_Lv(I,k,J) + &
                             (h_srt(i,kbs_Lp(k),j) - h_used_L(kbs_Lp(k)))
-      if (right_set(k)) hP_Rv(J)%p(i,k) = hP_Rv(J)%p(i,k) + &
+      if (right_set(k)) hP_Rv(I,k,J) = hP_Rv(I,k,J) + &
                              (h_srt(i,kbs_Rp(k),j+1) - h_used_R(kbs_Rp(k)))
     enddo
 
 
   endif ; enddo ; enddo ! i- & j- loops over meridional faces.
-
+  !$omp target exit data map(release: h_srt, k0_srt)
   ! The tracer-specific calculations start here.
+
+  !$omp target enter data map(alloc: Tr_flux_3d, Tr_adj_vert_L, Tr_adj_vert_R, tr_flux_N, &
+  !$omp   tr_flux_S, tr_flux_E, tr_flux_W, tr_flux_conv)
 
   do itt=1,max_itt
 
     if (itt > 1) then ! The halos have already been filled if itt==1.
-      call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass)
+      call do_group_pass(CS%pass_t, G%Domain, clock=id_clock_pass, omp_offload=.true.)
     endif
-
     do m=1,ntr
       ! Zero out tracer tendencies.
       if (CS%answer_date <= 20240330) then
-        tr_flux_conv(:,:,:) = 0.0
+        do concurrent (k=1:nz, j=jsd:jed, i=isd:ied)
+          tr_flux_conv(i,j,k) = 0.0
+        enddo
       else
-        tr_flux_N(:,:,:) = 0.0 ; tr_flux_S(:,:,:) = 0.0
-        tr_flux_E(:,:,:) = 0.0 ; tr_flux_W(:,:,:) = 0.0
+        do concurrent (k=1:nz, j=jsd:jed, i=isd:ied)
+          tr_flux_N(i,j,k) = 0.0 ; tr_flux_S(i,j,k) = 0.0
+          tr_flux_E(i,j,k) = 0.0 ; tr_flux_W(i,j,k) = 0.0
+        enddo
       endif
-      tr_flux_3d(:,:,:) = 0.0
-      tr_adj_vert_R(:,:,:) = 0.0 ; tr_adj_vert_L(:,:,:) = 0.0
+      do concurrent (k=1:2*nz, J=JsdB:JedB, i=isd:ied)
+        tr_flux_3d(i,j,k) = 0.0
+        tr_adj_vert_R(i,j,k) = 0.0 ; tr_adj_vert_L(i,j,k) = 0.0
+      enddo
 
-      !$OMP parallel do default(shared) private(Tr_min_face,Tr_max_face,kLa,kLb,kRa,kRb,Tr_La, &
-      !$OMP                                     Tr_Lb,Tr_Ra,Tr_Rb,Tr_av_L,wt_b,Tr_av_R,h_L,h_R, &
-      !$OMP                                     Tr_flux,Tr_adj_vert,wt_a,vol)
+      ! collapse(2) is reproducible for CS%answer_date > 20240330 but not <= 20240330.
+      ! Do concurrent around j-loop doesn't seem to do the right thing.
+      !$omp target teams loop collapse(2) private(Tr_min_face,Tr_max_face,kLa,kLb,kRa,kRb,      &
+      !$omp                                       Tr_La,Tr_Lb,Tr_Ra,Tr_Rb,Tr_av_L,wt_b,Tr_av_R, &
+      !$omp                                       h_L,h_R,Tr_flux,Tr_adj_vert,wt_a,vol)
       do j=js,je ; do I=is-1,ie ; if (G%mask2dCu(I,j) > 0.0) then
         ! Determine the fluxes through the zonal faces.
 
@@ -1286,32 +1326,32 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 
           ! Include all points in diffusive pairings at this face.
           do k=1,nPu(I,j)
-            Tr_Lb = Tr(m)%t(i,j,k0b_Lu(j)%p(I,k))
-            Tr_Rb = Tr(m)%t(i+1,j,k0b_Ru(j)%p(I,k))
+            Tr_Lb = Tr(m)%t(i,j,k0b_Lu(I,k,j))
+            Tr_Rb = Tr(m)%t(i+1,j,k0b_Ru(I,k,j))
             Tr_La = Tr_Lb ; Tr_Ra = Tr_Rb
-            if (deep_wt_Lu(j)%p(I,k) < 1.0) Tr_La = Tr(m)%t(i,j,k0a_Lu(j)%p(I,k))
-            if (deep_wt_Ru(j)%p(I,k) < 1.0) Tr_Ra = Tr(m)%t(i+1,j,k0a_Ru(j)%p(I,k))
+            if (deep_wt_Lu(I,k,j) < 1.0) Tr_La = Tr(m)%t(i,j,k0a_Lu(I,k,j))
+            if (deep_wt_Ru(I,k,j) < 1.0) Tr_Ra = Tr(m)%t(i+1,j,k0a_Ru(I,k,j))
             Tr_min_face = min(Tr_min_face, Tr_La, Tr_Lb, Tr_Ra, Tr_Rb)
             Tr_max_face = max(Tr_max_face, Tr_La, Tr_Lb, Tr_Ra, Tr_Rb)
           enddo
         endif
 
         do k=1,nPu(I,j)
-          kLb = k0b_Lu(j)%p(I,k) ; Tr_Lb = Tr(m)%t(i,j,kLb) ; Tr_av_L = Tr_Lb
-          if (deep_wt_Lu(j)%p(I,k) < 1.0) then
-            kLa = k0a_Lu(j)%p(I,k) ; Tr_La = Tr(m)%t(i,j,kLa)
-            wt_b = deep_wt_Lu(j)%p(I,k)
+          kLb = k0b_Lu(I,k,j) ; Tr_Lb = Tr(m)%t(i,j,kLb) ; Tr_av_L = Tr_Lb
+          if (deep_wt_Lu(I,k,j) < 1.0) then
+            kLa = k0a_Lu(I,k,j) ; Tr_La = Tr(m)%t(i,j,kLa)
+            wt_b = deep_wt_Lu(I,k,j)
             Tr_av_L = wt_b*Tr_Lb + (1.0-wt_b)*Tr_La
           endif
 
-          kRb = k0b_Ru(j)%p(I,k) ; Tr_Rb = Tr(m)%t(i+1,j,kRb) ; Tr_av_R = Tr_Rb
-          if (deep_wt_Ru(j)%p(I,k) < 1.0) then
-            kRa = k0a_Ru(j)%p(I,k) ; Tr_Ra = Tr(m)%t(i+1,j,kRa)
-            wt_b = deep_wt_Ru(j)%p(I,k)
+          kRb = k0b_Ru(I,k,j) ; Tr_Rb = Tr(m)%t(i+1,j,kRb) ; Tr_av_R = Tr_Rb
+          if (deep_wt_Ru(I,k,j) < 1.0) then
+            kRa = k0a_Ru(I,k,j) ; Tr_Ra = Tr(m)%t(i+1,j,kRa)
+            wt_b = deep_wt_Ru(I,k,j)
             Tr_av_R = wt_b*Tr_Rb + (1.0-wt_b)*Tr_Ra
           endif
 
-          h_L = hP_Lu(j)%p(I,k) ; h_R = hP_Ru(j)%p(I,k)
+          h_L = hP_Lu(I,k,j) ; h_R = hP_Ru(I,k,j)
           if (CS%answer_date <= 20240330) then
             Tr_flux = I_maxitt * khdt_epi_x(I,j) * (Tr_av_L - Tr_av_R) * &
                       ((2.0 * h_L * h_R) / (h_L + h_R))
@@ -1320,7 +1360,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
                       khdt_epi_x(I,j) * (Tr_av_L - Tr_av_R)
           endif
 
-          if (deep_wt_Lu(j)%p(I,k) >= 1.0) then
+          if (deep_wt_Lu(I,k,j) >= 1.0) then
             if (CS%answer_date <= 20240330) then
               tr_flux_conv(i,j,kLb) = tr_flux_conv(i,j,kLb) - Tr_flux
             else
@@ -1328,8 +1368,8 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
             endif
           else
             Tr_adj_vert = 0.0
-            wt_b = deep_wt_Lu(j)%p(I,k) ; wt_a = 1.0 - wt_b
-            vol = hP_Lu(j)%p(I,k) * G%areaT(i,j)
+            wt_b = deep_wt_Lu(I,k,j) ; wt_a = 1.0 - wt_b
+            vol = hP_Lu(I,k,j) * G%areaT(i,j)
 
             !   Ensure that the tracer flux does not drive the tracer values
             ! outside of the range Tr_min_face <= Tr <= Tr_max_face, or if it
@@ -1364,7 +1404,7 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
             endif
           endif
 
-          if (deep_wt_Ru(j)%p(I,k) >= 1.0) then
+          if (deep_wt_Ru(I,k,j) >= 1.0) then
             if (CS%answer_date <= 20240330) then
               tr_flux_conv(i+1,j,kRb) = tr_flux_conv(i+1,j,kRb) + Tr_flux
             else
@@ -1372,8 +1412,8 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
             endif
           else
             Tr_adj_vert = 0.0
-            wt_b = deep_wt_Ru(j)%p(I,k) ; wt_a = 1.0 - wt_b
-            vol = hP_Ru(j)%p(I,k) * G%areaT(i+1,j)
+            wt_b = deep_wt_Ru(I,k,j) ; wt_a = 1.0 - wt_b
+            vol = hP_Ru(I,k,j) * G%areaT(i+1,j)
 
             !   Ensure that the tracer flux does not drive the tracer values
             ! outside of the range Tr_min_face <= Tr <= Tr_max_face, or if it
@@ -1412,9 +1452,10 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
         enddo ! Loop over pairings at faces.
       endif ; enddo ; enddo ! i- & j- loops over zonal faces.
 
-      !$OMP parallel do default(shared) private(Tr_min_face,Tr_max_face,kLa,kLb,kRa,kRb,             &
-      !$OMP                                  Tr_La,Tr_Lb,Tr_Ra,Tr_Rb,Tr_av_L,wt_b,Tr_av_R,        &
-      !$OMP                                  h_L,h_R,Tr_flux,Tr_adj_vert,wt_a,vol)
+      ! this gives wrong result when using do concurrent on NVHPC 25.9
+      !$omp target teams loop collapse(2) private(Tr_min_face,Tr_max_face,kLa,kLb,kRa,kRb,      &
+      !$omp                                       Tr_La,Tr_Lb,Tr_Ra,Tr_Rb,Tr_av_L,wt_b,Tr_av_R, &
+      !$omp                                       h_L,h_R,Tr_flux,Tr_adj_vert,wt_a,vol)
       do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.0) then
         ! Determine the fluxes through the meridional faces.
 
@@ -1446,39 +1487,39 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
 
           ! Include all points in diffusive pairings at this face.
           do k=1,nPv(i,J)
-            Tr_Lb = Tr(m)%t(i,j,k0b_Lv(J)%p(i,k)) ; Tr_Rb = Tr(m)%t(i,j+1,k0b_Rv(J)%p(i,k))
+            Tr_Lb = Tr(m)%t(i,j,k0b_Lv(i,k,J)) ; Tr_Rb = Tr(m)%t(i,j+1,k0b_Rv(i,k,J))
             Tr_La = Tr_Lb ; Tr_Ra = Tr_Rb
-            if (deep_wt_Lv(J)%p(i,k) < 1.0) Tr_La = Tr(m)%t(i,j,k0a_Lv(J)%p(i,k))
-            if (deep_wt_Rv(J)%p(i,k) < 1.0) Tr_Ra = Tr(m)%t(i,j+1,k0a_Rv(J)%p(i,k))
+            if (deep_wt_Lv(I,k,J) < 1.0) Tr_La = Tr(m)%t(i,j,k0a_Lv(i,k,J))
+            if (deep_wt_Rv(I,k,J) < 1.0) Tr_Ra = Tr(m)%t(i,j+1,k0a_Rv(i,k,J))
             Tr_min_face = min(Tr_min_face, Tr_La, Tr_Lb, Tr_Ra, Tr_Rb)
             Tr_max_face = max(Tr_max_face, Tr_La, Tr_Lb, Tr_Ra, Tr_Rb)
           enddo
         endif
 
         do k=1,nPv(i,J)
-          kLb = k0b_Lv(J)%p(i,k) ; Tr_Lb = Tr(m)%t(i,j,kLb) ; Tr_av_L = Tr_Lb
-          if (deep_wt_Lv(J)%p(i,k) < 1.0) then
-            kLa = k0a_Lv(J)%p(i,k) ; Tr_La = Tr(m)%t(i,j,kLa)
-            wt_b = deep_wt_Lv(J)%p(i,k)
+          kLb = k0b_Lv(i,k,J) ; Tr_Lb = Tr(m)%t(i,j,kLb) ; Tr_av_L = Tr_Lb
+          if (deep_wt_Lv(I,k,J) < 1.0) then
+            kLa = k0a_Lv(i,k,J) ; Tr_La = Tr(m)%t(i,j,kLa)
+            wt_b = deep_wt_Lv(I,k,J)
             Tr_av_L = wt_b * Tr_Lb + (1.0-wt_b) * Tr_La
           endif
 
-          kRb = k0b_Rv(J)%p(i,k) ; Tr_Rb = Tr(m)%t(i,j+1,kRb) ; Tr_av_R = Tr_Rb
-          if (deep_wt_Rv(J)%p(i,k) < 1.0) then
-            kRa = k0a_Rv(J)%p(i,k) ; Tr_Ra = Tr(m)%t(i,j+1,kRa)
-            wt_b = deep_wt_Rv(J)%p(i,k)
+          kRb = k0b_Rv(i,k,J) ; Tr_Rb = Tr(m)%t(i,j+1,kRb) ; Tr_av_R = Tr_Rb
+          if (deep_wt_Rv(I,k,J) < 1.0) then
+            kRa = k0a_Rv(i,k,J) ; Tr_Ra = Tr(m)%t(i,j+1,kRa)
+            wt_b = deep_wt_Rv(I,k,J)
             Tr_av_R = wt_b * Tr_Rb + (1.0-wt_b) * Tr_Ra
           endif
 
-          h_L = hP_Lv(J)%p(i,k) ; h_R = hP_Rv(J)%p(i,k)
+          h_L = hP_Lv(I,k,J) ; h_R = hP_Rv(I,k,J)
           Tr_flux = I_maxitt * ((2.0 * h_L * h_R) / (h_L + h_R)) * &
                     khdt_epi_y(i,J) * (Tr_av_L - Tr_av_R)
           Tr_flux_3d(i,J,k) = Tr_flux
 
-          if (deep_wt_Lv(J)%p(i,k) < 1.0) then
+          if (deep_wt_Lv(I,k,J) < 1.0) then
             Tr_adj_vert = 0.0
-            wt_b = deep_wt_Lv(J)%p(i,k) ; wt_a = 1.0 - wt_b
-            vol = hP_Lv(J)%p(i,k) * G%areaT(i,j)
+            wt_b = deep_wt_Lv(I,k,J) ; wt_a = 1.0 - wt_b
+            vol = hP_Lv(I,k,J) * G%areaT(i,j)
 
             !   Ensure that the tracer flux does not drive the tracer values
             ! outside of the range Tr_min_face <= Tr <= Tr_max_face.
@@ -1502,10 +1543,10 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
             Tr_adj_vert_L(i,J,k) = Tr_adj_vert
           endif
 
-          if (deep_wt_Rv(J)%p(i,k) < 1.0) then
+          if (deep_wt_Rv(I,k,J) < 1.0) then
             Tr_adj_vert = 0.0
-            wt_b = deep_wt_Rv(J)%p(i,k) ; wt_a = 1.0 - wt_b
-            vol = hP_Rv(J)%p(i,k) * G%areaT(i,j+1)
+            wt_b = deep_wt_Rv(I,k,J) ; wt_a = 1.0 - wt_b
+            vol = hP_Rv(I,k,J) * G%areaT(i,j+1)
 
             !   Ensure that the tracer flux does not drive the tracer values
             ! outside of the range Tr_min_face <= Tr <= Tr_max_face.
@@ -1533,95 +1574,95 @@ subroutine tracer_epipycnal_ML_diff(h, dt, Tr, ntr, khdt_epi_x, khdt_epi_y, G, &
         enddo ! Loop over pairings at faces.
       endif ; enddo ; enddo ! i- & j- loops over meridional faces.
 
-      !$OMP parallel do default(shared) private(kLa,kLb,kRa,kRb,wt_b,wt_a)
-      do J=js-1,je ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.0) then
-        ! The non-stride-1 loop order here is to facilitate openMP threading. However, it might be
-        ! suboptimal when openMP threading is not used, at which point it might be better to fuse
-        ! this loop with those that precede it and thereby eliminate the need for three 3-d arrays.
-        if (CS%answer_date <= 20240330) then
+      ! The non-stride-1 loop order here is to facilitate openMP threading. However, it might be
+      ! suboptimal when openMP threading is not used, at which point it might be better to fuse
+      ! this loop with those that precede it and thereby eliminate the need for three 3-d arrays.
+      if (CS%answer_date <= 20240330) then
+        ! KRa/b aren't guaranteed to be unique and update of tr_flux_conv(:, j/j+1, :) means this
+        ! loop must be serial in both j and k. i can be paralellised.
+        do concurrent (i=is:ie) DO_LOCALITY(local(j, k, kLb, kRb, kLa, wt_b, wt_a, kRa))
+          do J=js-1,je ; if (G%mask2dCv(i,J) > 0.0)  then
+            do k=1,nPv(i,J)
+              kLb = k0b_Lv(i,k,J) ; kRb = k0b_Rv(i,k,J)
+              if (deep_wt_Lv(I,k,J) >= 1.0) then
+                tr_flux_conv(i,j,kLb) = tr_flux_conv(i,j,kLb) - Tr_flux_3d(i,J,k)
+              else
+                kLa = k0a_Lv(i,k,J)
+                wt_b = deep_wt_Lv(I,k,J) ; wt_a = 1.0 - wt_b
+                tr_flux_conv(i,j,kLa) = tr_flux_conv(i,j,kLa) - (wt_a*Tr_flux_3d(i,J,k) + Tr_adj_vert_L(i,J,k))
+                tr_flux_conv(i,j,kLb) = tr_flux_conv(i,j,kLb) - (wt_b*Tr_flux_3d(i,J,k) - Tr_adj_vert_L(i,J,k))
+              endif
+              if (deep_wt_Rv(I,k,J) >= 1.0) then
+                tr_flux_conv(i,j+1,kRb) = tr_flux_conv(i,j+1,kRb) + Tr_flux_3d(i,J,k)
+              else
+                kRa = k0a_Rv(i,k,J)
+                wt_b = deep_wt_Rv(I,k,J) ; wt_a = 1.0 - wt_b
+                tr_flux_conv(i,j+1,kRa) = tr_flux_conv(i,j+1,kRa) + &
+                                                (wt_a*Tr_flux_3d(i,J,k) - Tr_adj_vert_R(i,J,k))
+                tr_flux_conv(i,j+1,kRb) = tr_flux_conv(i,j+1,kRb) + &
+                                                (wt_b*Tr_flux_3d(i,J,k) + Tr_adj_vert_R(i,J,k))
+              endif
+            enddo
+          endif ; enddo
+        enddo
+      else
+        ! Update of tr_flux_N/S can be done independently so both i and j can be parallelised.
+        do concurrent (J=js-1:je, i=is:ie, G%mask2dCv(i,J) > 0.0) DO_LOCALITY(local(k, kLb, kRb, kLa, wt_b, wt_a, kRa))
           do k=1,nPv(i,J)
-            kLb = k0b_Lv(J)%p(i,k); kRb = k0b_Rv(J)%p(i,k)
-            if (deep_wt_Lv(J)%p(i,k) >= 1.0) then
-              tr_flux_conv(i,j,kLb) = tr_flux_conv(i,j,kLb) - Tr_flux_3d(i,J,k)
-            else
-              kLa = k0a_Lv(J)%p(i,k)
-              wt_b = deep_wt_Lv(J)%p(i,k) ; wt_a = 1.0 - wt_b
-              tr_flux_conv(i,j,kLa) = tr_flux_conv(i,j,kLa) - (wt_a*Tr_flux_3d(i,J,k) + Tr_adj_vert_L(i,J,k))
-              tr_flux_conv(i,j,kLb) = tr_flux_conv(i,j,kLb) - (wt_b*Tr_flux_3d(i,J,k) - Tr_adj_vert_L(i,J,k))
-            endif
-            if (deep_wt_Rv(J)%p(i,k) >= 1.0) then
-              tr_flux_conv(i,j+1,kRb) = tr_flux_conv(i,j+1,kRb) + Tr_flux_3d(i,J,k)
-            else
-              kRa = k0a_Rv(J)%p(i,k)
-              wt_b = deep_wt_Rv(J)%p(i,k) ; wt_a = 1.0 - wt_b
-              tr_flux_conv(i,j+1,kRa) = tr_flux_conv(i,j+1,kRa) + &
-                                              (wt_a*Tr_flux_3d(i,J,k) - Tr_adj_vert_R(i,J,k))
-              tr_flux_conv(i,j+1,kRb) = tr_flux_conv(i,j+1,kRb) + &
-                                              (wt_b*Tr_flux_3d(i,J,k) + Tr_adj_vert_R(i,J,k))
-            endif
-          enddo
-        else
-          do k=1,nPv(i,J)
-            kLb = k0b_Lv(J)%p(i,k); kRb = k0b_Rv(J)%p(i,k)
-            if (deep_wt_Lv(J)%p(i,k) >= 1.0) then
+            kLb = k0b_Lv(i,k,J) ; kRb = k0b_Rv(i,k,J)
+            if (deep_wt_Lv(I,k,J) >= 1.0) then
               tr_flux_N(i,j,kLb) = tr_flux_N(i,j,kLb) + Tr_flux_3d(i,J,k)
             else
-              kLa = k0a_Lv(J)%p(i,k)
-              wt_b = deep_wt_Lv(J)%p(i,k) ; wt_a = 1.0 - wt_b
+              kLa = k0a_Lv(i,k,J)
+              wt_b = deep_wt_Lv(I,k,J) ; wt_a = 1.0 - wt_b
               tr_flux_N(i,j,kLa) = tr_flux_N(i,j,kLa) + (wt_a*Tr_flux_3d(i,J,k) + Tr_adj_vert_L(i,J,k))
               tr_flux_N(i,j,kLb) = tr_flux_N(i,j,kLb) + (wt_b*Tr_flux_3d(i,J,k) - Tr_adj_vert_L(i,J,k))
             endif
-            if (deep_wt_Rv(J)%p(i,k) >= 1.0) then
+            if (deep_wt_Rv(I,k,J) >= 1.0) then
               tr_flux_S(i,j+1,kRb) = tr_flux_S(i,j+1,kRb) + Tr_flux_3d(i,J,k)
             else
-              kRa = k0a_Rv(J)%p(i,k)
-              wt_b = deep_wt_Rv(J)%p(i,k) ; wt_a = 1.0 - wt_b
+              kRa = k0a_Rv(i,k,J)
+              wt_b = deep_wt_Rv(I,k,J) ; wt_a = 1.0 - wt_b
               tr_flux_S(i,j+1,kRa) = tr_flux_S(i,j+1,kRa) + (wt_a*Tr_flux_3d(i,J,k) - Tr_adj_vert_R(i,J,k))
               tr_flux_S(i,j+1,kRb) = tr_flux_S(i,j+1,kRb) + (wt_b*Tr_flux_3d(i,J,k) + Tr_adj_vert_R(i,J,k))
             endif
           enddo
-        endif
-      endif ; enddo ; enddo
-
-      if (CS%answer_date >= 20240331) then
-        !$OMP parallel do default(shared)
-        do k=1,PEmax_kRho ; do j=js,je ; do i=is,ie
-          tr_flux_conv(i,j,k) = ((tr_flux_W(i,j,k) - tr_flux_E(i,j,k)) + &
-                                 (tr_flux_S(i,j,k) - tr_flux_N(i,j,k)))
-        enddo ; enddo ; enddo
+        enddo
       endif
 
-      !$OMP parallel do default(shared)
-      do k=1,PEmax_kRho ; do j=js,je ; do i=is,ie
-        if ((G%mask2dT(i,j) > 0.0) .and. (h(i,j,k) > 0.0)) then
-          Tr(m)%t(i,j,k) = Tr(m)%t(i,j,k) + tr_flux_conv(i,j,k) / (h(i,j,k)*G%areaT(i,j))
-        endif
-      enddo ; enddo ; enddo
+      if (CS%answer_date >= 20240331) then
+        do concurrent (k=1:PEmax_kRho, j=js:je, i=is:ie)
+          tr_flux_conv(i,j,k) = ((tr_flux_W(i,j,k) - tr_flux_E(i,j,k)) + &
+                                 (tr_flux_S(i,j,k) - tr_flux_N(i,j,k)))
+        enddo
+      endif
+
+      do concurrent (k=1:PEmax_kRho, j=js:je, i=is:ie, (G%mask2dT(i,j) > 0.0) .and. (h(i,j,k) > 0.0))
+        Tr(m)%t(i,j,k) = Tr(m)%t(i,j,k) + tr_flux_conv(i,j,k) / (h(i,j,k)*G%areaT(i,j))
+      enddo
 
       ! Do user controlled underflow of the tracer concentrations.
       if (Tr(m)%conc_underflow > 0.0) then
+        !$omp target update from(Tr(m)%t)
         !$OMP parallel do default(shared)
         do k=1,nz ; do j=js,je ; do i=is,ie
           if (abs(Tr(m)%t(i,j,k)) < Tr(m)%conc_underflow) Tr(m)%t(i,j,k) = 0.0
         enddo ; enddo ; enddo
+        !$omp target update to(Tr(m)%t)
       endif
 
     enddo ! Loop over tracers
   enddo ! Loop over iterations
 
-  do j=js,je
-    deallocate(deep_wt_Lu(j)%p) ; deallocate(deep_wt_Ru(j)%p)
-    deallocate(Hp_Lu(j)%p)  ; deallocate(Hp_Ru(j)%p)
-    deallocate(k0a_Lu(j)%p) ; deallocate(k0a_Ru(j)%p)
-    deallocate(k0b_Lu(j)%p) ; deallocate(k0b_Ru(j)%p)
-  enddo
+  !$omp target exit data map(release: Tr_flux_3d, Tr_adj_vert_L, Tr_adj_vert_R, tr_flux_N, &
+  !$omp   tr_flux_S, tr_flux_E, tr_flux_W, tr_flux_conv, nPv, nPu, max_kRho, rho_srt, num_srt, &
+  !$omp   max_srt)
 
-  do J=js-1,je
-    deallocate(deep_wt_Lv(J)%p) ; deallocate(deep_wt_Rv(J)%p)
-    deallocate(Hp_Lv(J)%p)  ; deallocate(Hp_Rv(J)%p)
-    deallocate(k0a_Lv(J)%p) ; deallocate(k0a_Rv(J)%p)
-    deallocate(k0b_Lv(J)%p) ; deallocate(k0b_Rv(J)%p)
-  enddo
+  !$omp target exit data map(release: deep_wt_Lu, deep_wt_Ru, hP_Lu, hP_Ru, k0a_Lu, k0a_Ru, &
+  !$omp   k0b_Lu, k0b_Ru)
+
+  !$omp target exit data map(release: deep_wt_Lv, deep_wt_Rv, hP_Lv, hP_Rv, k0a_Lv, k0a_Rv, &
+  !$Omp   k0b_Lv, k0b_Rv)
 
 end subroutine tracer_epipycnal_ML_diff
 
@@ -1716,12 +1757,11 @@ subroutine tracer_hor_diff_init(Time, G, GV, US, param_file, diag, EOS, diabatic
                  "along-isopycnal mixed layer to interior mixing code, while higher values use "//&
                  "mathematically equivalent expressions that recover rotational symmetry "//&
                  "when DIFFUSE_ML_TO_INTERIOR is true.", &
-                 default=20240101, do_not_log=.not.CS%Diffuse_ML_interior)
-                 !### Change the default later to default_answer_date.
+                 default=default_answer_date, do_not_log=.not.CS%Diffuse_ML_interior)
   call get_param(param_file, mdl, "HOR_DIFF_LIMIT_BUG", CS%limit_bug, &
                  "If true and the answer date is 20240330 or below, use a rotational symmetry "//&
                  "breaking bug when limiting the tracer properties in tracer_epipycnal_ML_diff.", &
-                 default=.true., do_not_log=((.not.CS%Diffuse_ML_interior).or.(CS%answer_date>=20240331)))
+                 default=.false., do_not_log=((.not.CS%Diffuse_ML_interior).or.(CS%answer_date>=20240331)))
   CS%ML_KhTR_scale = 1.0
   if (CS%Diffuse_ML_interior) then
     call get_param(param_file, mdl, "ML_KHTR_SCALE", CS%ML_KhTR_scale, &

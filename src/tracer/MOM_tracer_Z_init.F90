@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Used to initialize tracers from a depth- (or z*-) space file.
 module MOM_tracer_Z_init
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, MOM_mesg, is_root_pe
 use MOM_file_parser, only : get_param, log_version, param_file_type
@@ -636,7 +638,7 @@ subroutine determine_temperature(temp, salt, R_tgt, EOS, p_ref, niter, k_start, 
                  "to determine when the iterations have converged when DETERMINE_TEMP_ADJUST_T_AND_S "//&
                  "is false.  For realistic equations of state and the default values of the "//&
                  "various tolerances, this bug does not impact the solutions.", &
-                 default=.true., do_not_log=just_read) !### Change the default to false.
+                 default=.false., do_not_log=just_read)
 
   call get_param(PF, mdl, "DETERMINE_TEMP_T_MIN", T_min, &
                  "The minimum temperature that can be found by determine_temperature.", &

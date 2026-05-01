@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Provides transparent structures with groups of MOM6 variables and supporting routines
 module MOM_variables
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_array_transform, only : rotate_array, rotate_vector
 use MOM_coupler_types, only : coupler_1d_bc_type, coupler_2d_bc_type
@@ -89,9 +91,9 @@ type, public :: thermo_var_ptrs
                          !! When conservative temperature is used, this is
                          !! constant and exactly 3991.86795711963 J degC-1 kg-1.
   logical :: T_is_conT = .false. !< If true, the temperature variable tv%T is
-                         !! actually the conservative temperature [degC].
+                         !! actually the conservative temperature [C ~> degC].
   logical :: S_is_absS = .false. !< If true, the salinity variable tv%S is
-                         !! actually the absolute salinity in units of [gSalt kg-1].
+                         !! actually the absolute salinity in units of [S ~> gSalt kg-1].
   real :: min_salinity   !< The minimum value of salinity when BOUND_SALINITY=True [S ~> ppt].
   real, allocatable, dimension(:,:,:) :: SpV_avg
                          !< The layer averaged in situ specific volume [R-1 ~> m3 kg-1].
@@ -101,8 +103,9 @@ type, public :: thermo_var_ptrs
   ! These arrays are accumulated fluxes for communication with other components.
   real, dimension(:,:), pointer :: frazil => NULL()
                          !< The energy needed to heat the ocean column to the
-                         !! freezing point since calculate_surface_state was2
+                         !! freezing point since calculate_surface_state was
                          !! last called [Q Z R ~> J m-2].
+  logical :: frazil_was_reset !< If true, frazil has not accumulated since it was last reset.
   real, dimension(:,:), pointer :: salt_deficit => NULL()
                          !<   The salt needed to maintain the ocean column
                          !! at a minimum salinity of MIN_SALINITY since the last time
@@ -401,7 +404,7 @@ subroutine allocate_surface_state(sfc_state, G, use_temperature, do_integrals, &
 
   is  = G%isc ; ie  = G%iec ; js  = G%jsc ; je  = G%jec
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
-  isdB = G%isdB ; iedB = G%iedB; jsdB = G%jsdB ; jedB = G%jedB
+  isdB = G%isdB ; iedB = G%iedB ; jsdB = G%jsdB ; jedB = G%jedB
 
   use_temp = .true. ; if (present(use_temperature)) use_temp = use_temperature
   alloc_integ = .true. ; if (present(do_integrals)) alloc_integ = do_integrals
@@ -576,12 +579,16 @@ subroutine alloc_BT_cont_type(BT_cont, G, GV, alloc_faces)
     "alloc_BT_cont_type called with an associated BT_cont_type pointer.")
 
   allocate(BT_cont)
+  !$omp target enter data map(to: BT_cont)
   allocate(BT_cont%FA_u_WW(IsdB:IedB,jsd:jed), source=0.0)
   allocate(BT_cont%FA_u_W0(IsdB:IedB,jsd:jed), source=0.0)
   allocate(BT_cont%FA_u_E0(IsdB:IedB,jsd:jed), source=0.0)
   allocate(BT_cont%FA_u_EE(IsdB:IedB,jsd:jed), source=0.0)
   allocate(BT_cont%uBT_WW(IsdB:IedB,jsd:jed), source=0.0)
   allocate(BT_cont%uBT_EE(IsdB:IedB,jsd:jed), source=0.0)
+  !$omp target enter data map(to: BT_cont%FA_u_WW, BT_cont%FA_u_W0)
+  !$omp target enter data map(to: BT_cont%FA_u_E0, BT_cont%FA_u_EE)
+  !$omp target enter data map(to: BT_cont%uBT_WW, BT_cont%uBT_EE)
 
   allocate(BT_cont%FA_v_SS(isd:ied,JsdB:JedB), source=0.0)
   allocate(BT_cont%FA_v_S0(isd:ied,JsdB:JedB), source=0.0)
@@ -589,10 +596,14 @@ subroutine alloc_BT_cont_type(BT_cont, G, GV, alloc_faces)
   allocate(BT_cont%FA_v_NN(isd:ied,JsdB:JedB), source=0.0)
   allocate(BT_cont%vBT_SS(isd:ied,JsdB:JedB), source=0.0)
   allocate(BT_cont%vBT_NN(isd:ied,JsdB:JedB), source=0.0)
+  !$omp target enter data map(to: BT_cont%FA_v_SS, BT_cont%FA_v_S0)
+  !$omp target enter data map(to: BT_cont%FA_v_N0, BT_cont%FA_v_NN)
+  !$omp target enter data map(to: BT_cont%vBT_SS, BT_cont%vBT_NN)
 
   if (present(alloc_faces)) then ; if (alloc_faces) then
     allocate(BT_cont%h_u(IsdB:IedB,jsd:jed,1:nz), source=0.0)
     allocate(BT_cont%h_v(isd:ied,JsdB:JedB,1:nz), source=0.0)
+    !$omp target enter data map(to: BT_cont%h_u, BT_cont%h_v)
   endif ; endif
 
 end subroutine alloc_BT_cont_type
@@ -603,19 +614,28 @@ subroutine dealloc_BT_cont_type(BT_cont)
 
   if (.not.associated(BT_cont)) return
 
-  deallocate(BT_cont%FA_u_WW) ; deallocate(BT_cont%FA_u_W0)
-  deallocate(BT_cont%FA_u_E0) ; deallocate(BT_cont%FA_u_EE)
+  !$omp target exit data map(delete: BT_cont%FA_u_EE, BT_cont%FA_u_E0)
+  !$omp target exit data map(delete: BT_cont%FA_u_W0, BT_cont%FA_u_WW)
+  !$omp target exit data map(delete: BT_cont%uBT_WW, BT_cont%uBT_EE)
+  deallocate(BT_cont%FA_u_EE) ; deallocate(BT_cont%FA_u_E0)
+  deallocate(BT_cont%FA_u_W0) ; deallocate(BT_cont%FA_u_WW)
   deallocate(BT_cont%uBT_WW)  ; deallocate(BT_cont%uBT_EE)
 
-  deallocate(BT_cont%FA_v_SS) ; deallocate(BT_cont%FA_v_S0)
-  deallocate(BT_cont%FA_v_N0) ; deallocate(BT_cont%FA_v_NN)
+  !$omp target exit data map(delete: BT_cont%FA_v_NN, BT_cont%FA_v_N0)
+  !$omp target exit data map(delete: BT_cont%FA_v_S0, BT_cont%FA_v_SS)
+  !$omp target exit data map(delete: BT_cont%vBT_SS, BT_cont%vBT_NN)
+  deallocate(BT_cont%FA_v_NN) ; deallocate(BT_cont%FA_v_N0)
+  deallocate(BT_cont%FA_v_S0) ; deallocate(BT_cont%FA_v_SS)
   deallocate(BT_cont%vBT_SS)  ; deallocate(BT_cont%vBT_NN)
 
-  if (allocated(BT_cont%h_u)) deallocate(BT_cont%h_u)
-  if (allocated(BT_cont%h_v)) deallocate(BT_cont%h_v)
+  ! These are always allocated in pairs.
+  if (allocated(BT_cont%h_u) .and. allocated(BT_cont%h_v)) then
+    !$omp target exit data map(delete: BT_cont%h_u, BT_cont%h_v)
+    deallocate(BT_cont%h_u, BT_cont%h_v)
+  endif
 
+  !$omp target exit data map(delete: BT_cont)
   deallocate(BT_cont)
-
 end subroutine dealloc_BT_cont_type
 
 !> Diagnostic checksums on various elements of a thermo_var_ptrs type for debugging.

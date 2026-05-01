@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A generic type for equations of state
 module MOM_EOS_base_type
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 implicit none ; private
 
@@ -42,6 +44,8 @@ contains
   procedure :: calculate_density_scalar => a_calculate_density_scalar
   !> Calculates the in-situ density or density anomaly for array inputs [m3 kg-1]
   procedure :: calculate_density_array => a_calculate_density_array
+  !> Calculates the in-situ density or density anomaly for 2d array inputs [m3 kg-1]
+  procedure :: calculate_density_array_2d => a_calculate_density_array_2d
   !> Calculates the in-situ specific volume or specific volume anomaly for scalar inputs [m3 kg-1]
   procedure :: calculate_spec_vol_scalar => a_calculate_spec_vol_scalar
   !> Calculates the in-situ specific volume or specific volume anomaly for array inputs [m3 kg-1]
@@ -50,6 +54,8 @@ contains
   procedure :: calculate_density_derivs_scalar => a_calculate_density_derivs_scalar
   !> Calculates the derivatives of density for array inputs
   procedure :: calculate_density_derivs_array => a_calculate_density_derivs_array
+  !> Calculates the derivatives of density for array inputs
+  procedure :: calculate_density_derivs_2d => a_calculate_density_derivs_2d
   !> Calculates the second derivatives of density for scalar inputs
   procedure :: calculate_density_second_derivs_scalar => a_calculate_density_second_derivs_scalar
   !> Calculates the second derivatives of density for array inputs
@@ -252,6 +258,36 @@ contains
 
   end subroutine a_calculate_density_array
 
+  !> Calculate the in-situ density for 2D array inputs and outputs.
+  subroutine a_calculate_density_array_2d(this, T, S, pressure, rho, dom, rho_ref)
+    class(EOS_base), intent(in) :: this     !< This EOS
+    real, intent(in) :: T(:,:)
+      !< Potential temperature relative to the surface [degC]
+    real, intent(in) :: S(:,:)
+      !< Salinity [PSU]
+    real, intent(in) :: pressure(:,:)
+      !< Pressure [Pa]
+    real, intent(out) :: rho(:,:)
+      !< In situ density [kg m-3]
+    integer, intent(in) :: dom(2,2)
+      !< Index bounds of domain.  First index is rank, second is bounds
+    real, optional, intent(in) :: rho_ref
+      !< A reference density [kg m-3]
+
+    integer :: is, ie, js, je
+
+    is = dom(1,1) ; ie = dom(1,2)
+    js = dom(2,1) ; je = dom(2,2)
+
+    if (present(rho_ref)) then
+      rho(is:ie, js:je) = this%density_anomaly_elem(T(is:ie, js:je), &
+          S(is:ie, js:je), pressure(is:ie, js:je), rho_ref)
+    else
+      rho(is:ie, js:je) = this%density_elem(T(is:ie, js:je), S(is:ie, js:je), &
+          pressure(is:ie, js:je))
+    endif
+  end subroutine a_calculate_density_array_2d
+
   !> In situ specific volume [m3 kg-1]
   real function a_spec_vol_fn(this, T, S, pressure, spv_ref)
     class(EOS_base), intent(in) :: this     !< This EOS
@@ -349,6 +385,34 @@ contains
     call this%calculate_density_derivs_elem(T(js:je), S(js:je), pressure(js:je), drho_dt(js:je), drho_ds(js:je))
 
   end subroutine a_calculate_density_derivs_array
+
+  !> Calculate the derivatives of density with respect to temperature, salinity and pressure
+  !! for array inputs
+  subroutine a_calculate_density_derivs_2d(this, T, S, pressure, drho_dT, drho_dS, dom)
+    class(EOS_base), intent(in) :: this
+      !< This EOS
+    real, intent(in) :: T(:,:)
+      !< Potential temperature relative to the surface [degC]
+    real, intent(in)  :: S(:,:)
+      !< Salinity [PSU]
+    real, intent(in)  :: pressure(:,:)
+      !< Pressure [Pa]
+    real, intent(out) :: drho_dT(:,:)
+      !< The partial derivative of density with potential temperature
+      !! [kg m-3 degC-1]
+    real, intent(out) :: drho_dS(:,:)
+      !< The partial derivative of density with salinity, in [kg m-3 PSU-1]
+    integer, intent(in) :: dom(2,2)
+      !< Index bounds of domain.  First index is rank, second is bounds
+
+    integer :: is, ie, js, je
+
+    is = dom(1,1) ; ie = dom(1,2)
+    js = dom(2,1) ; je = dom(2,2)
+
+    call this%calculate_density_derivs_elem(T(is:ie, js:je), S(is:ie, js:je), &
+        pressure(is:ie, js:je), drho_dt(is:ie, js:je), drho_ds(is:ie, js:je))
+  end subroutine a_calculate_density_derivs_2d
 
   !> Calculate the second derivatives of density with respect to temperature, salinity and pressure
   !! for scalar inputs

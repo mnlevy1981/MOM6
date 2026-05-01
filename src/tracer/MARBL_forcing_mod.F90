@@ -1,3 +1,7 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module provides a common datatype to provide forcing for MARBL tracers
 !! regardless of driver
 module MARBL_forcing_mod
@@ -374,7 +378,7 @@ contains
         endwhere
         fluxes%fracr_cat(i,j,:) = G%mask2dT(i,j) * fluxes%fracr_cat(i,j,:)
         fluxes%qsw_cat(i,j,:)   = (US%W_m2_to_QRZ_T * G%mask2dT(i,j)) * fluxes%qsw_cat(i,j,:)
-      enddo; enddo
+      enddo ; enddo
     endif
 
   end subroutine convert_driver_fields_to_forcings

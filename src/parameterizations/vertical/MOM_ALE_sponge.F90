@@ -1,3 +1,7 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module contains the routines used to apply sponge layers when using
 !! the ALE mode.
 !!
@@ -11,7 +15,6 @@
 module MOM_ALE_sponge
 
 
-! This file is part of MOM6. See LICENSE.md for the license.
 use MOM_array_transform, only: rotate_array
 use MOM_coms,          only : sum_across_PEs
 use MOM_diag_mediator, only : post_data, query_averaging_enabled, register_diag_field
@@ -142,8 +145,9 @@ type, public :: ALE_sponge_CS ; private
                                    !! It is not clear why this needs to be greater than 0.
 
   !>@{ Diagnostic IDs
-  integer, dimension(MAX_FIELDS_) :: id_sp_tendency  !< Diagnostic ids for tracer
-                                               !! tendencies due to sponges
+  integer, dimension(MAX_FIELDS_) :: id_sp_tendency = reshape([-1], [MAX_FIELDS_], [-1]) !< Diagnostic ids for tracer
+                                                                                         !! tendencies due to sponges.
+                                                                                         !! Init all to -1.
   integer :: id_sp_u_tendency                  !< Diagnostic id for zonal momentum tendency due to
                                                !! Rayleigh damping
   integer :: id_sp_v_tendency                  !< Diagnostic id for meridional momentum tendency due to
@@ -188,7 +192,6 @@ subroutine initialize_ALE_sponge_fixed(Iresttime, G, GV, param_file, CS, data_h,
 # include "version_variable.h"
   character(len=64)  :: remapScheme
   logical :: use_sponge
-  logical :: data_h_to_Z
   logical :: bndExtrapolation = .true. ! If true, extrapolate boundaries
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   logical :: om4_remap_via_sub_cells ! If true, use the OM4 remapping algorithm
@@ -671,7 +674,6 @@ subroutine init_ALE_sponge_diags(Time, G, diag, CS, US)
   CS%diag => diag
 
   do m=1,CS%fldno
-    CS%id_sp_tendency(m) = -1
     if ((trim(CS%Ref_val(m)%unit) == 'none') .or. (len_trim(CS%Ref_val(m)%unit) == 0)) then
       tend_unit = "s-1"
     else
@@ -729,7 +731,7 @@ subroutine set_up_ALE_sponge_field_fixed(sp_val, G, GV, f_ptr, CS,  &
 
   CS%fldno = CS%fldno + 1
   if (CS%fldno > MAX_FIELDS_) then
-    write(mesg,'("Increase MAX_FIELDS_ to at least ",I3," in MOM_memory.h or decrease &
+    write(mesg,'("Increase MAX_FIELDS_ to at least ",I0," in MOM_memory.h or decrease &
            &the number of fields to be damped in the call to &
            &initialize_ALE_sponge." )') CS%fldno
     call MOM_error(FATAL,"set_up_ALE_sponge_field: "//mesg)
@@ -795,7 +797,7 @@ subroutine set_up_ALE_sponge_field_varying(filename, fieldname, Time, G, GV, US,
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
   CS%fldno = CS%fldno + 1
   if (CS%fldno > MAX_FIELDS_) then
-    write(mesg, '("Increase MAX_FIELDS_ to at least ",I3," in MOM_memory.h or decrease "//&
+    write(mesg, '("Increase MAX_FIELDS_ to at least ",I0," in MOM_memory.h or decrease "//&
         &"the number of fields to be damped in the call to initialize_ALE_sponge." )') CS%fldno
     call MOM_error(FATAL,"set_up_ALE_sponge_field: "//mesg)
   endif

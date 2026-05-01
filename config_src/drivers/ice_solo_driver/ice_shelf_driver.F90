@@ -1,6 +1,8 @@
-program Shelf_main
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
 
-! This file is part of MOM6. See LICENSE.md for the license.
+program Shelf_main
 
 !********+*********+*********+*********+*********+*********+*********+**
 !*                                                                     *
@@ -43,9 +45,10 @@ program Shelf_main
   use MOM_io,              only : APPEND_FILE, READONLY_FILE, SINGLE_FILE
   use MOM_open_boundary,   only : ocean_OBC_type
   use MOM_restart,         only : save_restart
+  use MOM_shared_initialization, only : write_ocean_geometry_file
   use MOM_string_functions,only : uppercase
   use MOM_time_manager,    only : time_type, set_date, get_date
-  use MOM_time_manager,    only : real_to_time, time_type_to_real
+  use MOM_time_manager,    only : real_to_time, time_to_real
   use MOM_time_manager,    only : operator(+), operator(-), operator(*), operator(/)
   use MOM_time_manager,    only : operator(>), operator(<), operator(>=)
   use MOM_time_manager,    only : increment_date, set_calendar_type, month_name
@@ -202,11 +205,11 @@ program Shelf_main
     call close_file(unit)
   else
     calendar = uppercase(calendar)
-    if (calendar(1:6) == 'JULIAN') then ;        calendar_type = JULIAN
-    elseif (calendar(1:9) == 'GREGORIAN') then ; calendar_type = GREGORIAN
-    elseif (calendar(1:6) == 'NOLEAP') then ;    calendar_type = NOLEAP
-    elseif (calendar(1:10)=='THIRTY_DAY') then ; calendar_type = THIRTY_DAY_MONTHS
-    elseif (calendar(1:11)=='NO_CALENDAR') then; calendar_type = NO_CALENDAR
+    if (calendar(1:6) == 'JULIAN') then ;         calendar_type = JULIAN
+    elseif (calendar(1:9) == 'GREGORIAN') then ;  calendar_type = GREGORIAN
+    elseif (calendar(1:6) == 'NOLEAP') then ;     calendar_type = NOLEAP
+    elseif (calendar(1:10)=='THIRTY_DAY') then ;  calendar_type = THIRTY_DAY_MONTHS
+    elseif (calendar(1:11)=='NO_CALENDAR') then ; calendar_type = NO_CALENDAR
     elseif (calendar(1:1) /= ' ') then
       call MOM_error(FATAL,'Shelf_driver: Invalid namelist value '//trim(calendar)//' for calendar')
     else
@@ -217,8 +220,8 @@ program Shelf_main
 
 
   if (sum(date_init) > 0) then
-    Start_time = set_date(date_init(1),date_init(2), date_init(3), &
-         date_init(4),date_init(5),date_init(6))
+    Start_time = set_date(date_init(1), date_init(2), date_init(3), &
+                          date_init(4), date_init(5), date_init(6))
   else
     Start_time = real_to_time(0.0)
   endif
@@ -268,7 +271,10 @@ program Shelf_main
   call clone_MOM_domain(ocn_grid%Domain, dG%Domain)
 
   ! Initialize the ocean grid and topography.
-  call MOM_initialize_fixed(dG, US, OBC, param_file, .true., dirs%output_directory)
+  call MOM_initialize_fixed(dG, US, OBC, param_file)
+  ! Write out all of the grid data used by this run.
+  call write_ocean_geometry_file(dG, param_file, dirs%output_directory, US=US)
+
   call MOM_grid_init(ocn_grid, param_file, US, HI)
   call copy_dyngrid_to_MOM_grid(dG, ocn_grid, US)
   call destroy_dyn_horgrid(dG)
@@ -297,8 +303,8 @@ program Shelf_main
   segment_start_time = Time
   elapsed_time = 0.0
 
-  Time_step_shelf = real_to_time(US%T_to_s*time_step)
-  elapsed_time_master = (abs(time_step - US%s_to_T*time_type_to_real(Time_step_shelf)) > 1.0e-12*time_step)
+  Time_step_shelf = real_to_time(time_step, unscale=US%T_to_s)
+  elapsed_time_master = (abs(time_step - time_to_real(Time_step_shelf, scale=US%s_to_T)) > 1.0e-12*time_step)
   if (elapsed_time_master) &
     call MOM_mesg("Using real elapsed time for the master clock.", 2)
 
@@ -407,12 +413,12 @@ program Shelf_main
       ! does not lose resolution of order the timetype's resolution, provided that the timestep and
       ! tick are larger than 10-5 seconds.  If a clock with a finer resolution is used, a smaller
       ! value would be required.
-      time_chg = real_to_time(US%T_to_s*elapsed_time)
+      time_chg = real_to_time(elapsed_time, unscale=US%T_to_s)
       segment_start_time = segment_start_time + time_chg
-      elapsed_time = elapsed_time - US%s_to_T*time_type_to_real(time_chg)
+      elapsed_time = elapsed_time - time_to_real(time_chg, scale=US%s_to_T)
     endif
     if (elapsed_time_master) then
-      Master_Time = segment_start_time + real_to_time(US%T_to_s*elapsed_time)
+      Master_Time = segment_start_time + real_to_time(elapsed_time, unscale=US%T_to_s)
     else
       Master_Time = Master_Time + Time_step_shelf
     endif

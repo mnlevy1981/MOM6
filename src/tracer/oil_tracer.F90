@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A tracer package to mimic dissolved oil.
 module oil_tracer
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms,            only : EFP_type
 use MOM_coupler_types,   only : set_coupler_type_data, atmos_ocn_coupler_flux
@@ -494,7 +496,7 @@ end subroutine oil_tracer_end
 !!
 !!    This tracer package was central to the simulations used by Adcroft et al.,
 !!  GRL 2010, to prove that the Deepwater Horizon spill was an important regional
-!!  event, with implications for dissolved oxygen levels in the Gulf of Mexico,
-!!  but not one that would directly impact the East Coast of the U.S.
+!!  event, with implications for dissolved oxygen levels in certains regions,
+!!  see above reference for details.
 
 end module oil_tracer

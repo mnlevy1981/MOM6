@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Calculate vertical diffusivity from all mixing processes
 module MOM_set_diffusivity
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_bkgnd_mixing,        only : calculate_bkgnd_mixing, bkgnd_mixing_init, bkgnd_mixing_cs
 use MOM_bkgnd_mixing,        only : bkgnd_mixing_end
@@ -82,6 +84,8 @@ type, public :: set_diffusivity_CS ; private
                              !! and those those used for TKE [Z2 L-2 ~> nondim].
   real    :: ePBL_BBL_effic  !< efficiency with which the energy extracted
                              !! by bottom drag drives BBL diffusion in the ePBL BBL scheme [nondim]
+  logical :: ePBL_BBL_mstar  !< logical if the bottom boundary layer uses an mstar x ustar^3 formulation
+                             !! needed here to know whether or not to populate the bottom ustar
   real    :: cdrag           !< quadratic drag coefficient [nondim]
   real    :: dz_BBL_avg_min  !< A minimal distance over which to average to determine the average
                              !! bottom boundary layer density [Z ~> m]
@@ -227,8 +231,7 @@ type diffusivity_diags
 
   real, pointer, dimension(:,:,:) :: TKE_to_Kd => NULL()
                           !< conversion rate (~1.0 / (G_Earth + dRho_lay)) between TKE
-                          !! dissipated within a layer and Kd in that layer
-                          !! [H Z T-1 / H Z2 T-3 = T2 Z-1 ~> s2 m-1]
+                          !! dissipated within a layer and Kd in that layer [T2 Z-1 ~> s2 m-1]
 
 end type diffusivity_diags
 
@@ -305,8 +308,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     prof_Froude_2d, & !< vertical profile for Froude drag [Z-1 ~> m-1]
     prof_slope_2d, & !< vertical profile for critical slopes [Z-1 ~> m-1]
     TKE_to_Kd     !< Conversion rate (~1.0 / (G_Earth + dRho_lay)) between
-                  !< TKE dissipated within a layer and Kd in that layer
-                  !< [H Z T-1 / H Z2 T-3 = T2 Z-1 ~> s2 m-1]
+                  !< TKE dissipated within a layer and Kd in that layer [T2 Z-1 ~> s2 m-1]
 
   real, dimension(SZI_(G),SZK_(GV)+1) :: &
     N2_int,   &   !< squared buoyancy frequency associated at interfaces [T-2 ~> s-2]
@@ -532,7 +534,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
       enddo ; enddo ; endif
       if (associated(VBF%Kd_ddiff_S)) then ; do K=1,nz+1 ; do i=is,ie
         VBF%Kd_ddiff_S(i,j,K) = KS_extra(i,K)
-      enddo ; enddo ; endif ;
+      enddo ; enddo ; endif
     endif
 
     ! Apply double diffusion via CVMix
@@ -550,7 +552,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
       enddo ; enddo ; endif
       if (associated(VBF%Kd_ddiff_S)) then ; do K=1,nz+1 ; do i=is,ie
         VBF%Kd_ddiff_S(i,j,K) = KS_extra(i,K)
-      enddo ; enddo ; endif ;
+      enddo ; enddo ; endif
       call cpu_clock_end(id_clock_CVMix_ddiff)
     endif
 
@@ -631,34 +633,34 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
         dd%Kd_slope(i,j,K) = Kd_slope_2d(i,K)
       enddo ; enddo ; endif
       if (associated (VBF%Kd_leak)) then ; do K=1,nz+1 ; do i=is,ie
-        VBF%Kd_leak(i,j,K) = Kd_leak_2d(i,K)
+        VBF%Kd_leak(i,j,K) = min(Kd_leak_2d(i,K), CS%Kd_max)
       enddo ; enddo ; endif
       if (associated (VBF%Kd_quad)) then ; do K=1,nz+1 ; do i=is,ie
-        VBF%Kd_quad(i,j,K) = Kd_quad_2d(i,K)
+        VBF%Kd_quad(i,j,K) = min(Kd_quad_2d(i,K), CS%Kd_max)
       enddo ; enddo ; endif
       if (associated (VBF%Kd_itidal)) then ; do K=1,nz+1 ; do i=is,ie
-        VBF%Kd_itidal(i,j,K) = Kd_itidal_2d(i,K)
+        VBF%Kd_itidal(i,j,K) = min(Kd_itidal_2d(i,K), CS%Kd_max)
       enddo ; enddo ; endif
       if (associated (VBF%Kd_Froude)) then ; do K=1,nz+1 ; do i=is,ie
-        VBF%Kd_Froude(i,j,K) = Kd_Froude_2d(i,K)
+        VBF%Kd_Froude(i,j,K) = min(Kd_Froude_2d(i,K), CS%Kd_max)
       enddo ; enddo ; endif
       if (associated (VBF%Kd_slope)) then ; do K=1,nz+1 ; do i=is,ie
-        VBF%Kd_slope(i,j,K) = Kd_slope_2d(i,K)
+        VBF%Kd_slope(i,j,K) = min(Kd_slope_2d(i,K), CS%Kd_max)
       enddo ; enddo ; endif
 
-      if (CS%id_prof_leak > 0) then ; do k=1,nz; do i=is,ie
+      if (CS%id_prof_leak > 0) then ; do k=1,nz ; do i=is,ie
         dd%prof_leak(i,j,k) = prof_leak_2d(i,k)
       enddo ; enddo ; endif
-      if (CS%id_prof_quad > 0) then ; do k=1,nz; do i=is,ie
+      if (CS%id_prof_quad > 0) then ; do k=1,nz ; do i=is,ie
         dd%prof_quad(i,j,k) = prof_quad_2d(i,k)
       enddo ; enddo ; endif
-      if (CS%id_prof_itidal > 0) then ; do k=1,nz; do i=is,ie
+      if (CS%id_prof_itidal > 0) then ; do k=1,nz ; do i=is,ie
         dd%prof_itidal(i,j,k) = prof_itidal_2d(i,k)
       enddo ; enddo ; endif
-      if (CS%id_prof_Froude > 0) then ; do k=1,nz; do i=is,ie
+      if (CS%id_prof_Froude > 0) then ; do k=1,nz ; do i=is,ie
         dd%prof_Froude(i,j,k) = prof_Froude_2d(i,k)
       enddo ; enddo ; endif
-      if (CS%id_prof_slope > 0) then ; do k=1,nz; do i=is,ie
+      if (CS%id_prof_slope > 0) then ; do k=1,nz ; do i=is,ie
         dd%prof_slope(i,j,k) = prof_slope_2d(i,k)
       enddo ; enddo ; endif
     endif
@@ -696,7 +698,7 @@ subroutine set_diffusivity(u, v, h, u_h, v_h, tv, fluxes, optics, visc, dt, Kd_i
     if (CS%Kd_add > 0.0) then
       do K=1,nz+1 ; do i=is,ie
         Kd_int_2d(i,K) = Kd_int_2d(i,K) + CS%Kd_add
-      enddo; enddo
+      enddo ; enddo
       VBF%Kd_add = CS%Kd_add
     endif
 
@@ -886,7 +888,7 @@ subroutine find_TKE_to_Kd(h, tv, dRho_int, N2_lay, j, dt, G, GV, US, CS, &
                                                           !! TKE dissipated within a layer and the
                                                           !! diapycnal diffusivity within that layer,
                                                           !! usually (~Rho_0 / (G_Earth * dRho_lay))
-                                                          !! [H Z T-1 / H Z2 T-3 = T2 Z-1 ~> s2 m-1]
+                                                          !! [T2 Z-1 ~> s2 m-1]
   real, dimension(SZI_(G),SZK_(GV)), intent(out)  :: maxTKE !< The energy required to for a layer to entrain to its
                                                           !! maximum realizable thickness [H Z2 T-3 ~> m3 s-3 or W m-2]
   integer, dimension(SZI_(G)),      intent(out)   :: kb   !< Index of lightest layer denser than the buffer
@@ -1380,7 +1382,7 @@ subroutine add_drag_diffusivity(h, u, v, tv, fluxes, visc, j, TKE_to_Kd, maxTKE,
                                                           !! TKE dissipated within a layer and the
                                                           !! diapycnal diffusivity within that layer,
                                                           !! usually (~Rho_0 / (G_Earth * dRho_lay))
-                                                          !! [H Z T-1 / H Z2 T-3 = T2 Z-1 ~> s2 m-1]
+                                                          !! [T2 Z-1 ~> s2 m-1]
   real, dimension(SZI_(G),SZK_(GV)), intent(in)   :: maxTKE !< The energy required to for a layer to entrain to its
                                                           !! maximum-realizable thickness [H Z2 T-3 ~> m3 s-3 or W m-2]
   integer, dimension(SZI_(G)),      intent(in)    :: kb   !< Index of lightest layer denser than the buffer
@@ -1803,7 +1805,7 @@ subroutine add_MLrad_diffusivity(dz, fluxes, tv, j, Kd_int, G, GV, US, CS, TKE_t
                                                             !! TKE dissipated within  a layer and the
                                                             !! diapycnal diffusivity witin that layer,
                                                             !! usually (~Rho_0 / (G_Earth * dRho_lay))
-                                                            !! [H Z T-1 / H Z2 T-3 = T2 Z-1 ~> s2 m-1]
+                                                            !! [T2 Z-1 ~> s2 m-1]
   real, dimension(SZI_(G),SZK_(GV)), &
                           optional, intent(inout) :: Kd_lay !< The diapycnal diffusivity in layers
                                                             !! [H Z T-1 ~> m2 s-1 or kg m-1 s-1].
@@ -2002,7 +2004,8 @@ subroutine set_BBL_TKE(u, v, h, tv, fluxes, visc, G, GV, US, CS, OBC)
   if (.not.CS%initialized) call MOM_error(FATAL,"set_BBL_TKE: "//&
          "Module must be initialized before it is used.")
 
-  if (.not.CS%bottomdraglaw .or. (CS%BBL_effic<=0.0 .and. CS%ePBL_BBL_effic<=0.0)) then
+  if (.not.CS%bottomdraglaw .or. (CS%BBL_effic<=0.0 .and. CS%ePBL_BBL_effic<=0.0 .and. &
+      (.not.CS%ePBL_BBL_mstar))) then
     if (allocated(visc%ustar_BBL)) then
       do j=js,je ; do i=is,ie ; visc%ustar_BBL(i,j) = 0.0 ; enddo ; enddo
     endif
@@ -2042,15 +2045,13 @@ subroutine set_BBL_TKE(u, v, h, tv, fluxes, visc, G, GV, US, CS, OBC)
         ! Determine if grid point is an OBC
         has_obc = .false.
         if (local_open_v_BC) then
-          l_seg = OBC%segnum_v(i,J)
-          if (l_seg /= OBC_NONE) then
-            has_obc = OBC%segment(l_seg)%open
-          endif
+          l_seg = abs(OBC%segnum_v(i,J))
+          if (l_seg /= 0) has_obc = OBC%segment(l_seg)%open
         endif
 
         ! Compute h based on OBC state
         if (has_obc) then
-          if (OBC%segment(l_seg)%direction == OBC_DIRECTION_N) then
+          if (OBC%segnum_v(i,J) > 0) then ! OBC_DIRECTION_N
             hvel = dz(i,j,k)
           else
             hvel = dz(i,j+1,k)
@@ -2094,15 +2095,13 @@ subroutine set_BBL_TKE(u, v, h, tv, fluxes, visc, G, GV, US, CS, OBC)
         ! Determine if grid point is an OBC
         has_obc = .false.
         if (local_open_u_BC) then
-          l_seg = OBC%segnum_u(I,j)
-          if (l_seg /= OBC_NONE) then
-            has_obc = OBC%segment(l_seg)%open
-          endif
+          l_seg = abs(OBC%segnum_u(I,j))
+          if (l_seg /= 0)  has_obc = OBC%segment(l_seg)%open
         endif
 
         ! Compute h based on OBC state
         if (has_obc) then
-          if (OBC%segment(l_seg)%direction == OBC_DIRECTION_E) then
+          if (OBC%segnum_u(I,j) > 0) then !  OBC_DIRECTION_E
             hvel = dz(i,j,k)
           else ! OBC_DIRECTION_W
             hvel = dz(i+1,j,k)
@@ -2430,7 +2429,9 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
                  "diffusion.  This is only used if BOTTOMDRAGLAW is true.", &
                  units="nondim", default=0.20, scale=US%L_to_Z**2)
     call get_param(param_file, mdl, "EPBL_BBL_EFFIC", CS%ePBL_BBL_effic, &
-                 units="nondim", default=0.0,do_not_log=.true.)
+                 units="nondim", default=0.0, do_not_log=.true.)
+    call get_param(param_file, mdl, "EPBL_BBL_USE_MSTAR", CS%ePBL_BBL_mstar, &
+                 default=.false., do_not_log=.true.)
     call get_param(param_file, mdl, "BBL_MIXING_MAX_DECAY", decay_length, &
                  "The maximum decay scale for the BBL diffusion, or 0 to allow the mixing "//&
                  "to penetrate as far as stratification and rotation permit.  The default "//&
@@ -2467,14 +2468,12 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
                "calculations.  Values below 20240630 recover the original answers, while "//&
                "higher values use more accurate expressions.  This only applies when "//&
                "USE_LOTW_BBL_DIFFUSIVITY is true.", &
-               default=20190101, do_not_log=.not.CS%use_LOTW_BBL_diffusivity)
-               !### Set default as default=default_answer_date, or use SET_DIFF_ANSWER_DATE.
+               default=default_answer_date, do_not_log=.not.CS%use_LOTW_BBL_diffusivity)
   call get_param(param_file, mdl, "DRAG_DIFFUSIVITY_ANSWER_DATE", CS%drag_diff_answer_date, &
                "The vintage of the order of arithmetic in the drag diffusivity calculations.  "//&
                "Values above 20250301 use less confusing expressions to set the bottom-drag "//&
                "generated diffusivity when USE_LOTW_BBL_DIFFUSIVITY is false. ", &
-               default=20250101, do_not_log=CS%use_LOTW_BBL_diffusivity.or.(CS%BBL_effic<=0.0))
-               !### Set default as default=default_answer_date, or use SET_DIFF_ANSWER_DATE.
+               default=CS%answer_date, do_not_log=CS%use_LOTW_BBL_diffusivity.or.(CS%BBL_effic<=0.0))
 
   CS%id_Kd_BBL = register_diag_field('ocean_model', 'Kd_BBL', diag%axesTi, Time, &
                  'Bottom Boundary Layer Diffusivity', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
@@ -2623,7 +2622,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
          'User-specified Extra Diffusivity', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
 
   call get_param(param_file, mdl, "DOUBLE_DIFFUSION", CS%double_diffusion, &
-                 "If true, increase diffusivites for temperature or salinity based on the "//&
+                 "If true, increase diffusivities for temperature or salinity based on the "//&
                  "double-diffusive parameterization described in Large et al. (1994).", &
                  default=.false.)
 
@@ -2668,7 +2667,7 @@ subroutine set_diffusivity_init(Time, G, GV, US, param_file, diag, CS, int_tide_
 
   if (CS%double_diffusion .and. CS%use_CVMix_ddiff) then
     call MOM_error(FATAL, 'set_diffusivity_init: '// &
-           'Multiple double-diffusion options selected (DOUBLE_DIFFUSION and'//&
+           'Multiple double-diffusion options selected (DOUBLE_DIFFUSION and '//&
            'USE_CVMIX_DDIFF), please disable all but one option to proceed.')
   endif
 

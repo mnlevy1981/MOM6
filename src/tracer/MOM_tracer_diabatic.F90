@@ -1,9 +1,11 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module contains routines that implement physical fluxes of tracers (e.g. due
 !! to surface fluxes or mixing). These are intended to be called from call_tracer_column_fns
 !! in the MOM_tracer_flow_control module.
 module MOM_tracer_diabatic
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_grid,             only : ocean_grid_type
 use MOM_verticalGrid,     only : verticalGrid_type
@@ -633,7 +635,7 @@ subroutine applyTracerBoundaryFluxesInOut(G, GV, Tr, dt, fluxes, h, evap_CFL_lim
     enddo
 
     if (numberOfGroundings - maxGroundings > 0) then
-      write(mesg, '(i4)') numberOfGroundings - maxGroundings
+      write(mesg, '(I0)') numberOfGroundings - maxGroundings
       call MOM_error(WARNING, "MOM_tracer_vertical.F90, applyTracerBoundaryFluxesInOut(): "//&
                               trim(mesg) // " groundings remaining", all_print=.true.)
     endif

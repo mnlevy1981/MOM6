@@ -1,8 +1,10 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Interfaces to non-domain-oriented communication subroutines, including the
 !! MOM6 reproducing sums facility
 module MOM_coms
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use, intrinsic :: iso_fortran_env, only : int64
 use MOM_coms_infra,    only : PE_here, root_PE, num_PEs, set_rootPE, Set_PElist, Get_PElist
@@ -23,6 +25,7 @@ public :: reproducing_sum, reproducing_sum_EFP, EFP_sum_across_PEs, EFP_list_sum
 public :: EFP_plus, EFP_minus, EFP_to_real, real_to_EFP, EFP_real_diff
 public :: operator(+), operator(-), assignment(=)
 public :: query_EFP_overflow_error, reset_EFP_overflow_error
+public :: max_count_prec
 
 ! This module provides interfaces to the non-domain-oriented communication subroutines.
 
@@ -358,7 +361,7 @@ function reproducing_sum_3d(array, isr, ier, jsr, jer, sums, EFP_sum, EFP_lay_su
   integer,            optional, intent(in)  :: jer     !< The ending j-index of the sum, noting
                                                        !! that the array indices starts at 1
   real, dimension(:), optional, intent(out) :: sums    !< The sums by vertical layer in the same
-                                                       !! abitrary units as array [a] or [A ~> a]
+                                                       !! arbitrary units as array [a] or [A ~> a]
   type(EFP_type),     optional, intent(out) :: EFP_sum !< The result in extended fixed point format
   type(EFP_type), dimension(:), &
                       optional, intent(out) :: EFP_lay_sums !< The sums by vertical layer in EFP format
@@ -408,7 +411,7 @@ function reproducing_sum_3d(array, isr, ier, jsr, jer, sums, EFP_sum, EFP_lay_su
     if (jer > je) call MOM_error(FATAL, "Value of jer too large in reproducing_sum(_3d).")
     je = jer
   endif
-  jsz = je+1-js; isz = ie+1-is
+  jsz = je+1-js ; isz = ie+1-is
 
   do_sum_across_PEs = .true. ; if (present(only_on_PE)) do_sum_across_PEs = .not.only_on_PE
   do_unscale = .false. ; if (present(unscale)) do_unscale = (unscale /= 1.0)
@@ -795,7 +798,7 @@ end subroutine EFP_assign
 !> Return the real number that an extended-fixed-point number corresponds with
 function EFP_to_real(EFP1)
   type(EFP_type), intent(inout) :: EFP1 !< The extended fixed point number being converted
-  real :: EFP_to_real  !< The real version of the number in abitrary units [a]
+  real :: EFP_to_real  !< The real version of the number in arbitrary units [a]
 
   call regularize_ints(EFP1%v)
   EFP_to_real = ints_to_real(EFP1%v)
@@ -877,7 +880,7 @@ subroutine EFP_list_sum_across_PEs(EFPs, nval, errors)
     do n=1,ni ; EFPs(i)%v(n) = ints(n,i) ; enddo
     if (present(errors)) errors(i) = overflow_error
     if (overflow_error) then
-      write (mesg,'("EFP_list_sum_across_PEs error at ",i6," val was ",ES12.6, ", prec_error = ",ES12.6)') &
+      write (mesg,'("EFP_list_sum_across_PEs error at ",i0," val was ",ES12.6, ", prec_error = ",ES12.6)') &
              i, EFP_to_real(EFPs(i)), real(prec_error)
       call MOM_error(WARNING, mesg)
     endif

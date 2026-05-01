@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Describes the decomposed MOM domain and has routines for communications across PEs
 module MOM_domains
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms_infra,       only : MOM_infra_init, MOM_infra_end
 use MOM_coms_infra,       only : PE_here, root_PE, num_PEs, broadcast
@@ -35,6 +37,7 @@ public :: MOM_infra_init, MOM_infra_end
 public :: MOM_domain_type, domain2D, domain1D
 public :: MOM_domains_init, create_MOM_domain, clone_MOM_domain, deallocate_MOM_domain
 public :: MOM_thread_affinity_set, set_MOM_thread_affinity
+public :: MOM_define_layout
 !  Domain query routines
 public :: get_domain_extent, get_domain_components, get_global_shape, same_domain
 public :: PE_here, root_PE, num_PEs
@@ -246,10 +249,10 @@ subroutine MOM_domains_init(MOM_dom, param_file, symmetric, static_memory, &
 
     ! Check the requirement of equal sized compute domains when STATIC_MEMORY_ is used.
     if ((MOD(NIGLOBAL, NIPROC) /= 0) .OR. (MOD(NJGLOBAL, NJPROC) /= 0)) then
-      write( char_xsiz, '(i4)' ) NIPROC
-      write( char_ysiz, '(i4)' ) NJPROC
-      write( char_niglobal, '(i4)' ) NIGLOBAL
-      write( char_njglobal, '(i4)' ) NJGLOBAL
+      write( char_xsiz, '(I0)' ) NIPROC
+      write( char_ysiz, '(I0)' ) NJPROC
+      write( char_niglobal, '(I0)' ) NIGLOBAL
+      write( char_njglobal, '(I0)' ) NJGLOBAL
       call MOM_error(WARNING, 'MOM_domains: Processor decomposition (NIPROC_,NJPROC_) = ('//&
               trim(char_xsiz)//','//trim(char_ysiz)//') does not evenly divide size '//&
               'set by preprocessor macro ('//trim(char_niglobal)//','//trim(char_njglobal)//').')
@@ -403,7 +406,7 @@ subroutine MOM_domains_init(MOM_dom, param_file, symmetric, static_memory, &
 
     if (layout(1)*layout(2) /= PEs_used .and. (.not. mask_table_exists) ) then
       write(mesg,'("MOM_domains_init: The product of the two components of layout, ", &
-            &      2i4,", is not the number of PEs used, ",i5,".")') &
+            &      I0,", ",I0,", is not the number of PEs used, ",I0,".")') &
             layout(1), layout(2), PEs_used
       call MOM_error(FATAL, mesg)
     endif
@@ -419,8 +422,8 @@ subroutine MOM_domains_init(MOM_dom, param_file, symmetric, static_memory, &
 
   ! Idiot check that fewer PEs than columns have been requested
   if (layout(1)*layout(2) > n_global(1)*n_global(2))  then
-    write(mesg,'(a,2(i5,1x,a))') 'You requested to use', layout(1)*layout(2), &
-      'PEs but there are only', n_global(1)*n_global(2), 'columns in the model'
+    write(mesg,'(a,I0,a,I0,a)') 'You requested to use ', layout(1)*layout(2), &
+      ' PEs but there are only ', n_global(1)*n_global(2), ' columns in the model'
     call MOM_error(FATAL, mesg)
   endif
 

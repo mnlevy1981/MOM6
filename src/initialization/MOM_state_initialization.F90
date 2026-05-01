@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Initialization functions for state variables, u, v, h, T and S.
 module MOM_state_initialization
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_debugging, only : hchksum, qchksum, uvchksum
 use MOM_density_integrals, only : int_specific_vol_dp
@@ -20,15 +22,10 @@ use MOM_grid, only : ocean_grid_type, isPointInCell
 use MOM_interface_heights, only : find_eta, dz_to_thickness, dz_to_thickness_simple
 use MOM_interface_heights, only : calc_derived_thermo
 use MOM_io, only : file_exists, field_size, MOM_read_data, MOM_read_vector, slasher
-use MOM_open_boundary, only : ocean_OBC_type, open_boundary_init, set_tracer_data
-use MOM_open_boundary, only : OBC_NONE
-use MOM_open_boundary, only : open_boundary_query
-use MOM_open_boundary, only : set_tracer_data, initialize_segment_data
-use MOM_open_boundary, only : open_boundary_test_extern_h
-use MOM_open_boundary, only : fill_temp_salt_segments
-use MOM_open_boundary, only : update_OBC_segment_data
-!use MOM_open_boundary, only : set_3D_OBC_data
-use MOM_grid_initialize, only : initialize_masks, set_grid_metrics
+use MOM_open_boundary, only : ocean_OBC_type, open_boundary_test_extern_h
+use MOM_open_boundary, only : fill_temp_salt_segments, setup_OBC_tracer_reservoirs
+use MOM_open_boundary, only : fill_thickness_segments
+use MOM_open_boundary, only : set_initialized_OBC_tracer_reservoirs
 use MOM_restart, only : restore_state, is_new_run, copy_restart_var, copy_restart_vector
 use MOM_restart, only : restart_registry_lock, MOM_restart_CS
 use MOM_sponge, only : set_up_sponge_field, set_up_sponge_ML_density
@@ -103,7 +100,7 @@ implicit none ; private
 
 #include <MOM_memory.h>
 
-public MOM_initialize_state
+public MOM_initialize_state, MOM_initialize_OBCs
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -118,7 +115,8 @@ contains
 !! conditions or by reading them from a restart (or saves) file.
 subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
                                 restart_CS, ALE_CSp, tracer_Reg, sponge_CSp, &
-                                ALE_sponge_CSp, oda_incupd_CSp, OBC, Time_in, frac_shelf_h, mass_shelf)
+                                ALE_sponge_CSp, oda_incupd_CSp, OBC_for_remap, &
+                                Time_in, frac_shelf_h, mass_shelf, OBC_for_bug)
   type(ocean_grid_type),      intent(inout) :: G    !< The ocean's grid structure.
   type(verticalGrid_type),    intent(in)    :: GV   !< The ocean's vertical grid structure.
   type(unit_scale_type),      intent(in)    :: US   !< A dimensional unit scaling type
@@ -142,7 +140,10 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
   type(tracer_registry_type), pointer       :: tracer_Reg !< A pointer to the tracer registry
   type(sponge_CS),            pointer       :: sponge_CSp !< The layerwise sponge control structure.
   type(ALE_sponge_CS),        pointer       :: ALE_sponge_CSp !< The ALE sponge control structure.
-  type(ocean_OBC_type),       pointer       :: OBC   !< The open boundary condition control structure.
+  type(ocean_OBC_type),       pointer       :: OBC_for_remap !< The open boundary condition control
+                                                    !! structure that may be used for remapping velocities.
+                                                    !! This must be on the unrotated grid, but only the
+                                                    !! position and directions of the OBC faces are used.
   type(oda_incupd_CS),        pointer       :: oda_incupd_CSp !< The oda_incupd control structure.
   type(time_type), optional,  intent(in)    :: Time_in !< Time at the start of the run segment.
   real, dimension(SZI_(G),SZJ_(G)), &
@@ -150,20 +151,24 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
                                                                !! by a floating ice shelf [nondim].
   real, dimension(SZI_(G),SZJ_(G)), &
                      optional, intent(in)   :: mass_shelf      !< The mass per unit area of the overlying
-                                                               !! ice shelf [ R Z ~> kg m-2 ]
+                                                               !! ice shelf [R Z ~> kg m-2]
+  type(ocean_OBC_type), optional, pointer   :: OBC_for_bug  !< An open boundary condition control structure
+                                                    !! that might be used to store OBC temperatures and
+                                                    !! salinities if OBC_RESERVOIR_INIT_BUG is true.
   ! Local variables
   real :: depth_tot(SZI_(G),SZJ_(G))   ! The nominal total depth of the ocean [Z ~> m]
   real :: dz(SZI_(G),SZJ_(G),SZK_(GV)) ! The layer thicknesses in geopotential (z) units [Z ~> m]
   character(len=200) :: inputdir   ! The directory where NetCDF input files are.
   character(len=200) :: config, h_config
-  real :: H_rescale   ! A rescaling factor for thicknesses from the representation in
-                      ! a restart file to the internal representation in this run [various units ~> 1]
   real :: dt          ! The baroclinic dynamics timestep for this run [T ~> s].
 
   logical :: from_Z_file, useALE
   logical :: new_sim, rotate_index
-  logical :: use_temperature, use_sponge, use_OBC, use_oda_incupd
+  logical :: use_temperature, use_sponge, use_oda_incupd
   logical :: verify_restart_time
+  logical :: OBC_reservoir_init_bug  ! If true, set the OBC tracer reservoirs at the startup of a new
+                         ! run from the interior tracer concentrations regardless of properties that
+                         ! may be explicitly specified for the reservoir concentrations.
   logical :: use_EOS     ! If true, density is calculated from T & S using an equation of state.
   logical :: depress_sfc ! If true, remove the mass that would be displaced
                          ! by a large surface pressure by squeezing the column.
@@ -176,8 +181,9 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
                         ! is a run from a restart file; this option
                         ! allows the use of Fatal unused parameters.
   type(EOS_type), pointer :: eos => NULL()
+  logical :: enable_bugs  ! If true, the defaults for recently added bug-fix flags are set to
+                          ! recreate the bugs, or if false bugs are only used if actively selected.
   logical :: debug      ! If true, write debugging output.
-  logical :: debug_obc  ! If true, do debugging calls related to OBCs.
   logical :: debug_layers = .false.
   logical :: use_ice_shelf
   character(len=80) :: mesg
@@ -201,7 +207,6 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
   call callTree_enter("MOM_initialize_state(), MOM_state_initialization.F90")
   call log_version(PF, mdl, version, "")
   call get_param(PF, mdl, "DEBUG", debug, default=.false.)
-  call get_param(PF, mdl, "DEBUG_OBC", debug_obc, default=.false.)
 
   new_sim = is_new_run(restart_CS)
   just_read = .not.new_sim
@@ -213,7 +218,6 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
   use_temperature = associated(tv%T)
   useALE = associated(ALE_CSp)
   use_EOS = associated(tv%eqn_of_state)
-  use_OBC = associated(OBC)
   if (use_EOS) eos => tv%eqn_of_state
   use_ice_shelf = PRESENT(frac_shelf_h)
 
@@ -440,8 +444,23 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
       end select
     endif
   endif  ! not from_Z_file.
-  if (use_temperature .and. use_OBC) &
-    call fill_temp_salt_segments(G, GV, US, OBC, tv)
+
+  if (present(OBC_for_bug)) then ; if (use_temperature .and. associated(OBC_for_bug)) then
+    call get_param(PF, mdl, "ENABLE_BUGS_BY_DEFAULT", enable_bugs, &
+                 default=.true., do_not_log=.true.)  ! This is logged from MOM.F90.
+    ! Log this parameter later with the other OBC parameters.
+    call get_param(PF, mdl, "OBC_RESERVOIR_INIT_BUG", OBC_reservoir_init_bug, &
+                 "If true, set the OBC tracer reservoirs at the startup of a new run from the "//&
+                 "interior tracer concentrations regardless of properties that may be explicitly "//&
+                 "specified for the reservoir concentrations.", default=enable_bugs, do_not_log=.true.)
+    if (OBC_reservoir_init_bug) then
+      ! These calls should be moved down to join the OBC code, but doing so changes answers because
+      ! the temperatures and salinities can change due to the remapping and reading from the restarts.
+      call pass_var(tv%T, G%Domain, complete=.false.)
+      call pass_var(tv%S, G%Domain, complete=.true.)
+      call fill_temp_salt_segments(G, GV, US, OBC_for_bug, tv)
+    endif
+  endif ; endif
 
   init_t_perturb = 0.0
   if (use_temperature) then
@@ -519,8 +538,10 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
 
       if (new_sim .and. debug) &
         call hchksum(h, "Pre-ALE_regrid: h ", G%HI, haloshift=1, unscale=GV%H_to_MKS)
-      call ALE_regrid_accelerated(ALE_CSp, G, GV, US, h, tv, regrid_iterations, u, v, OBC, tracer_Reg, &
-                                  dt=dt, initial=.true.)
+      ! In this call, OBC_for_remap is only used for the directions of OBCs when setting thicknesses at
+      ! velocity points.
+      call ALE_regrid_accelerated(ALE_CSp, G, GV, US, h, tv, regrid_iterations, u, v, OBC_for_remap, &
+                                  tracer_Reg, dt=dt, initial=.true.)
     endif
   endif
 
@@ -607,9 +628,9 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
     if ( use_temperature ) call hchksum(tv%T, "MOM_initialize_state: T ", G%HI, haloshift=1, unscale=US%C_to_degC)
     if ( use_temperature ) call hchksum(tv%S, "MOM_initialize_state: S ", G%HI, haloshift=1, unscale=US%S_to_ppt)
     if ( use_temperature .and. debug_layers) then ; do k=1,nz
-      write(mesg,'("MOM_IS: T[",I2,"]")') k
+      write(mesg,'("MOM_IS: T[",I0,"]")') k
       call hchksum(tv%T(:,:,k), mesg, G%HI, haloshift=1, unscale=US%C_to_degC)
-      write(mesg,'("MOM_IS: S[",I2,"]")') k
+      write(mesg,'("MOM_IS: S[",I0,"]")') k
       call hchksum(tv%S(:,:,k), mesg, G%HI, haloshift=1, unscale=US%S_to_ppt)
     enddo ; endif
   endif
@@ -636,7 +657,7 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
                                                       sponge_CSp, ALE_sponge_CSp)
       case ("ISOMIP"); call ISOMIP_initialize_sponges(G, GV, US, tv, depth_tot, PF, useALE, &
                                                       sponge_CSp, ALE_sponge_CSp)
-      case("RGC"); call RGC_initialize_sponges(G, GV, US, tv, u, v, depth_tot, PF, useALE, &
+      case ("RGC"); call RGC_initialize_sponges(G, GV, US, tv, u, v, depth_tot, PF, useALE, &
                                                      sponge_CSp, ALE_sponge_CSp)
       case ("USER"); call user_initialize_sponges(G, GV, use_temperature, tv, PF, sponge_CSp, h)
       case ("BFB"); call BFB_initialize_sponges_southonly(G, GV, US, use_temperature, tv, depth_tot, PF, &
@@ -653,19 +674,72 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
     end select
   endif
 
-  ! Reads OBC parameters not pertaining to the location of the boundaries
-  call open_boundary_init(G, GV, US, PF, OBC, restart_CS)
+  ! Set-up of data Assimilation with incremental update
+  if (use_oda_incupd) then
+    call initialize_oda_incupd_file(G, GV, US, use_temperature, tv, h, u, v, &
+                                    PF, oda_incupd_CSp, restart_CS, Time)
+  endif
 
-  ! This controls user code for setting open boundary data
+  call callTree_leave('MOM_initialize_state()')
+
+end subroutine MOM_initialize_state
+
+subroutine MOM_initialize_OBCs(h, tv, OBC, Time, G, GV, US, PF, restart_CS, tracer_Reg)
+  type(ocean_grid_type),      intent(inout) :: G    !< The ocean's grid structure.
+  type(verticalGrid_type),    intent(in)    :: GV   !< The ocean's vertical grid structure.
+  type(unit_scale_type),      intent(in)    :: US   !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                              intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2]
+  type(thermo_var_ptrs),      intent(inout) :: tv   !< A structure pointing to various thermodynamic
+                                                    !! variables
+  type(ocean_OBC_type),       pointer       :: OBC   !< The open boundary condition control structure.
+  type(time_type),            intent(in)    :: Time !< Time at the start of the run segment.
+  type(param_file_type),      intent(in)    :: PF   !< A structure indicating the open file to parse
+                                                    !! for model parameter values.
+  type(MOM_restart_CS),       intent(inout) :: restart_CS !< MOM restart control structure
+  type(tracer_registry_type), pointer       :: tracer_Reg !< A pointer to the tracer registry
+
+  ! Local variables
+  character(len=200) :: config
+  logical :: enable_bugs  ! If true, the defaults for recently added bug-fix flags are set to
+                          ! recreate the bugs, or if false bugs are only used if actively selected.
+  logical :: debug      ! If true, write debugging output.
+  logical :: debug_obc  ! If true, do additional calls resetting values to help debug the correctness
+                        ! of the open boundary condition code.
+  logical :: OBC_reservoir_init_bug  ! If true, set the OBC tracer reservoirs at the startup of a new
+                        ! run from the interior tracer concentrations regardless of properties that
+                        ! may be explicitly specified for the reservoir concentrations.
+
+  call callTree_enter('MOM_initialize_OBCs()')
   if (associated(OBC)) then
-    call initialize_segment_data(G, GV, US, OBC, PF)
-!     call open_boundary_config(G, US, PF, OBC)
-    ! Call this once to fill boundary arrays from fixed values
-    if (OBC%some_need_no_IO_for_data) then
-      call calc_derived_thermo(tv, h, G, GV, US)
-      call update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
+    call get_param(PF, mdl, "DEBUG", debug, default=.false.)
+    call get_param(PF, mdl, "OBC_DEBUGGING_TESTS", debug_obc, &
+                 "If true, do additional calls resetting values to help verify the correctness "//&
+                 "of the open boundary condition code.", default=.false.,  &
+                 do_not_log=.true., old_name="DEBUG_OBC", debuggingParam=.true.)
+    call get_param(PF, mdl, "ENABLE_BUGS_BY_DEFAULT", enable_bugs, &
+                 default=.true., do_not_log=.true.)  ! This is logged from MOM.F90.
+    call get_param(PF, mdl, "OBC_RESERVOIR_INIT_BUG", OBC_reservoir_init_bug, &
+                 "If true, set the OBC tracer reservoirs at the startup of a new run from the "//&
+                 "interior tracer concentrations regardless of properties that may be explicitly "//&
+                 "specified for the reservoir concentrations.", default=enable_bugs)
+    if (associated(tv%T)) then
+      if (OBC_reservoir_init_bug) then
+        if (is_new_run(restart_CS)) then
+          ! Set up OBC%trex_x and OBC%tres_y as they have not been read from a restart file.
+          call setup_OBC_tracer_reservoirs(G, GV, OBC)
+          ! Ensure that the values of the tracer reservoirs that have just been set will not be revised.
+          call set_initialized_OBC_tracer_reservoirs(G, OBC, restart_CS)
+        endif
+      else
+        ! Store the updated temperatures and salinities at the open boundaries, noting that they may
+        ! still be updated by the calls in the next 50 lines, so the code setting the tracer
+        ! reservoir values will come later in the calling routine.
+        call fill_temp_salt_segments(G, GV, US, OBC, tv)
+      endif
     endif
 
+    ! This controls user code for setting open boundary data
     call get_param(PF, mdl, "OBC_USER_CONFIG", config, &
                  "A string that sets how the user code is invoked to set open boundary data: \n"//&
                  "   DOME - specified inflow on northern boundary\n"//&
@@ -697,30 +771,21 @@ subroutine MOM_initialize_state(u, v, h, tv, Time, G, GV, US, PF, dirs, &
       call MOM_error(FATAL, "The open boundary conditions specified by "//&
               "OBC_USER_CONFIG = "//trim(config)//" have not been fully implemented.")
     endif
-    if (open_boundary_query(OBC, apply_open_OBC=.true.)) then
-      call set_tracer_data(OBC, tv, h, G, GV, PF)
+
+    if (debug) then
+      call hchksum(G%mask2dT, 'MOM_initialize_OBCs: mask2dT ', G%HI)
+      call uvchksum('MOM_initialize_OBCs: mask2dC[uv]', G%mask2dCu, G%mask2dCv, G%HI)
+      call qchksum(G%mask2dBu, 'MOM_initialize_OBCs: mask2dBu ', G%HI)
     endif
-  endif
-! if (open_boundary_query(OBC, apply_nudged_OBC=.true.)) then
-!   call set_3D_OBC_data(OBC, tv, h, G, PF, tracer_Reg)
-! endif
-  ! Still need a way to specify the boundary values
-  if (debug.and.associated(OBC)) then
-    call hchksum(G%mask2dT, 'MOM_initialize_state: mask2dT ', G%HI)
-    call uvchksum('MOM_initialize_state: mask2dC[uv]', G%mask2dCu,  &
-                  G%mask2dCv, G%HI)
-    call qchksum(G%mask2dBu, 'MOM_initialize_state: mask2dBu ', G%HI)
+    if (debug_OBC) call open_boundary_test_extern_h(G, GV, OBC, h)
+
+    if (OBC%use_h_res) &
+      call fill_thickness_segments(G, GV, US, OBC, h)
   endif
 
-  if (debug_OBC) call open_boundary_test_extern_h(G, GV, OBC, h)
-  call callTree_leave('MOM_initialize_state()')
+  call callTree_leave('MOM_initialize_OBCs()')
 
-  ! Set-up of data Assimilation with incremental update
-  if (use_oda_incupd) then
-    call initialize_oda_incupd_file(G, GV, US, use_temperature, tv, h, u, v, &
-                                    PF, oda_incupd_CSp, restart_CS, Time)
-  endif
-end subroutine MOM_initialize_state
+end subroutine MOM_initialize_OBCs
 
 !> Reads the layer thicknesses or interface heights from a file.
 subroutine initialize_thickness_from_file(h, depth_tot, G, GV, US, param_file, file_has_thickness, &
@@ -847,7 +912,7 @@ subroutine initialize_thickness_from_file(h, depth_tot, G, GV, US, param_file, f
 
       if ((inconsistent > 0) .and. (is_root_pe())) then
         write(mesg,'("Thickness initial conditions are inconsistent ",'// &
-                 '"with topography in ",I8," places.")') inconsistent
+                 '"with topography in ",I0," places.")') inconsistent
         call MOM_error(WARNING, mesg)
       endif
     endif
@@ -892,7 +957,7 @@ subroutine adjustEtaToFitBathymetry(G, GV, US, eta, h, ht, dZ_ref_eta)
   call sum_across_PEs(contractions)
   if ((contractions > 0) .and. (is_root_pe())) then
     write(mesg,'("Thickness initial conditions were contracted ",'// &
-               '"to fit topography in ",I8," places.")') contractions
+               '"to fit topography in ",I0," places.")') contractions
     call MOM_error(WARNING, 'adjustEtaToFitBathymetry: '//mesg)
   endif
 
@@ -930,7 +995,7 @@ subroutine adjustEtaToFitBathymetry(G, GV, US, eta, h, ht, dZ_ref_eta)
   call sum_across_PEs(dilations)
   if ((dilations > 0) .and. (is_root_pe())) then
     write(mesg,'("Thickness initial conditions were dilated ",'// &
-               '"to fit topography in ",I8," places.")') dilations
+               '"to fit topography in ",I0," places.")') dilations
     call MOM_error(WARNING, 'adjustEtaToFitBathymetry: '//mesg)
   endif
 
@@ -1189,11 +1254,14 @@ subroutine depress_surface(h, G, GV, US, param_file, tv, just_read, z_top_shelf)
   else
     do j=js,je ; do i=is,ie
       eta_sfc(i,j) = z_top_shelf(i,j)
-    enddo; enddo
+    enddo ; enddo
   endif
 
   ! Convert thicknesses to interface heights.
+  !$omp target update from(h)
+  !$omp target enter data map(alloc: eta)
   call find_eta(h, tv, G, GV, US, eta, dZref=G%Z_ref)
+  !$omp target exit data map(from: eta)
 
   do j=js,je ; do i=is,ie ; if (G%mask2dT(i,j) > 0.0) then
 !    if (eta_sfc(i,j) < eta(i,j,nz+1)) then
@@ -1375,7 +1443,10 @@ subroutine calc_sfc_displacement(PF, G, GV, US, mass_shelf, tv, h)
   max_iter = 1e3
   call MOM_mesg("Started calculating initial interface position under ice shelf ")
   ! Convert thicknesses to interface heights.
+  !$omp target update to(h)
+  !$omp target enter data map(alloc: eta)
   call find_eta(h, tv, G, GV, US, eta, dZref=G%Z_ref)
+  !$omp target exit data map(from: eta)
   do j=js,je ; do i=is,ie
     iter = 1
     z_top_shelf(i,j) = 0.0
@@ -1411,7 +1482,7 @@ subroutine calc_sfc_displacement(PF, G, GV, US, mass_shelf, tv, h)
         enddo
         residual = mass_shelf(i,j) - mass_disp
         iter = iter+1
-      end do
+      enddo
       if (iter >= max_iter) call MOM_mesg("Warning: calc_sfc_displacement too many iterations.")
       z_top_shelf(i,j) = z_top
     endif
@@ -2013,7 +2084,6 @@ subroutine initialize_sponges_file(G, GV, US, use_temperature, tv, u, v, depth_t
   ! Local variables
   real, allocatable, dimension(:,:,:) :: eta ! The target interface heights [Z ~> m].
   real, allocatable, dimension(:,:,:) :: dz  ! The target interface thicknesses in height units [Z ~> m]
-  real, allocatable, dimension(:,:,:) :: h   ! The target interface thicknesses [H ~> m or kg m-2].
 
   real, dimension (SZI_(G),SZJ_(G),SZK_(GV)) :: &
     tmp, &    ! A temporary array for temperatures [C ~> degC] or other tracers.
@@ -2230,7 +2300,7 @@ subroutine initialize_sponges_file(G, GV, US, use_temperature, tv, u, v, depth_t
       enddo ; enddo ; enddo
       do k=1,nz_data ; do j=js,je ; do i=is,ie
         dz(i,j,k) = eta(i,j,k)-eta(i,j,k+1)
-      enddo; enddo ; enddo
+      enddo ; enddo ; enddo
       deallocate(eta)
 
       if (use_temperature) then
@@ -2616,11 +2686,9 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
                                    ! from data when finding the initial interface locations in
                                    ! layered mode from a dataset of T and S.
   character(len=64) :: remappingScheme
-  real :: tempAvg  ! Spatially averaged temperatures on a layer [C ~> degC]
-  real :: saltAvg  ! Spatially averaged salinities on a layer [S ~> ppt]
   logical :: om4_remap_via_sub_cells ! If true, use the OM4 remapping algorithm (only used if useALEremapping)
   logical :: do_conv_adj, ignore
-  integer :: nPoints
+  logical :: use_depth_based_time_fitler, use_adjust_interface_motion
   integer :: id_clock_routine, id_clock_ALE
 
   id_clock_routine = cpu_clock_id('(Initialize from Z)', grain=CLOCK_ROUTINE)
@@ -2775,6 +2843,10 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
                  "from an input dataset using horiz_interp_and_extrap_tracer.  This routine "//&
                  "converges slowly, so an overly small tolerance can get expensive.", &
                  units="ppt", default=1.0e-3, scale=US%ppt_to_S, do_not_log=just_read)
+  call get_param(PF, mdl, "REGRID_USE_DEPTH_BASED_TIME_FILTER", use_depth_based_time_fitler, &
+                 default=.true., do_not_log=.true.)
+  call get_param(PF, mdl, "USE_ADJUST_INTERFACE_MOTION", use_adjust_interface_motion, &
+                 default=.true., do_not_log=.true.)
 
   if (just_read) then
     if ((.not.useALEremapping) .and. adjust_temperature) &
@@ -2873,7 +2945,7 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
 
     ! Build the target grid (and set the model thickness to it)
 
-    call ALE_initRegridding( GV, US, G%max_depth, PF, mdl, regridCS ) ! sets regridCS
+    call ALE_initRegridding( G, GV, US, G%max_depth, PF, mdl, regridCS ) ! sets regridCS
     if (remap_general) then
       dz_neglect = set_h_neglect(GV, remap_answer_date, dz_neglect_edge)
     else
@@ -2885,8 +2957,10 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
 
     ! Now remap from source grid to target grid, first setting reconstruction parameters
     if (remap_general) then
-      call set_regrid_params( regridCS, min_thickness=0. )
-      allocate( dz_interface(isd:ied,jsd:jed,nkd+1) ) ! Need for argument to regridding_main() but is not used
+      call set_regrid_params( regridCS, min_thickness=0., &
+                              use_adjust_interface_motion=use_adjust_interface_motion, &
+                              use_depth_based_time_filter=use_depth_based_time_fitler)
+      allocate( dz_interface(isd:ied,jsd:jed,nkd+1), source=0.) ! Need for argument to regridding_main() but is not used
 
       call regridding_preadjust_reqs(regridCS, do_conv_adj, ignore)
       if (do_conv_adj) call convective_adjustment(G, GV_loc, h1, tv_loc)
@@ -2970,7 +3044,7 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
     call find_interfaces(rho_z, z_in, kd, Rb, Z_bottom, zi, G, GV, US, nlevs, nkml, &
                          Hmix_depth, eps_z, eps_rho, density_extrap_bug)
 
-    deallocate(rho_z)
+    deallocate(rho_z, Rb)
 
     dz(:,:,:) = 0.0
     if (correct_thickness) then
@@ -2993,7 +3067,7 @@ subroutine MOM_temp_salt_initialize_from_Z(h, tv, depth_tot, G, GV, US, PF, just
 
       if ((inconsistent > 0) .and. (is_root_pe())) then
         write(mesg, '("Thickness initial conditions are inconsistent ",'// &
-                    '"with topography in ",I5," places.")') inconsistent
+                    '"with topography in ",I0," places.")') inconsistent
         call MOM_error(WARNING, mesg)
       endif
     endif
