@@ -82,12 +82,8 @@ AC_SRCDIR := $(CODEBASE)/ac
 -include config.mk
 
 # Set the FMS library
-#FMS_COMMIT ?= 2025.02.01
-#FMS_URL ?= https://github.com/NOAA-GFDL/FMS.git
-
-# Temporarily point to the GPU-friendly versions
-FMS_COMMIT ?= 06169594154e4ad6bd808d8d3d519fe05d47fbc3
-FMS_URL ?= https://github.com/edoyango/FMS.git
+FMS_COMMIT ?= 7e526687b96ca685100f73edf7ef49214d5d5a19
+FMS_URL ?= https://github.com/TURBO-ESM/FMS.git
 export FMS_COMMIT
 export FMS_URL
 
