@@ -11,14 +11,14 @@ SHELL = bash
 MAKEFLAGS += -R
 
 # FMS framework
-FMS_URL ?= https://github.com/NOAA-GFDL/FMS.git
-FMS_COMMIT ?= 2023.03
+FMS_URL ?= https://github.com/TURBO-ESM/FMS.git
+FMS_COMMIT ?= 7e526687b96ca685100f73edf7ef49214d5d5a19
 
 GSW_URL ?= https://github.com/mom-ocean/GSW-Fortran.git
 GSW_COMMIT ?= 29e64d652786e1d076a05128c920f394202bfe10
 
 CVMIX_URL ?= https://github.com/mom-ocean/CVMix-src.git
-CVMIX_COMMIT ?= 65ef5c73bc7f5663d5688f75c3855d431da4baea
+CVMIX_COMMIT ?= 14939c5704d57b4d68d86b57b13161ea59ab6b5c
 
 
 # List of source files to link this Makefile's dependencies to model Makefiles
