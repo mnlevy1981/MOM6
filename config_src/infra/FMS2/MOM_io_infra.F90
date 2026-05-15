@@ -718,17 +718,6 @@ function find_index(vec) result(loc)
 end function find_index
 
 
-!> Get the axis size from an axistype
-function get_axis_size(axis) result(axis_size)
-  type(axistype), intent(in) :: axis
-    !< Infra axis
-  integer :: axis_size
-    !< Axis size
-
-  axis_size = size(axis%ax_data)
-end function get_axis_size
-
-
 !> Extracts and returns the axis data stored in an axistype.
 subroutine get_axis_data(axis, axis_name, axis_data)
   type(axistype), intent(in) :: axis   !< Infra axis
