@@ -2066,25 +2066,4 @@ function find_unlimited_dimension_name(fileobj) result(label)
     label = ''
 end function find_unlimited_dimension_name
 
-! NOTE: `lowercase is duplicated from `src/framework/MOM_string_functions.F90`
-!   in order to avoid any dependency of the infra on the framework.
-
-!> Return a string in which all uppercase letters have been replaced by
-!! their lowercase counterparts.
-function lowercase(input_string)
-  character(len=*),     intent(in) :: input_string !< The string to modify
-  character(len=len(input_string)) :: lowercase !< The modified output string
-!   This function returns a string in which all uppercase letters have been
-! replaced by their lowercase counterparts.  It is loosely based on the
-! lowercase function in mpp_util.F90.
-  integer, parameter :: co=iachar('a')-iachar('A') ! case offset
-  integer :: k
-
-  lowercase = input_string
-  do k=1, len_trim(input_string)
-    if (lowercase(k:k) >= 'A' .and. lowercase(k:k) <= 'Z') &
-        lowercase(k:k) = achar(ichar(lowercase(k:k))+co)
-  enddo
-end function lowercase
-
 end module MOM_io_infra
