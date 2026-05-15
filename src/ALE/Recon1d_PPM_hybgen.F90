@@ -1,3 +1,7 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Piecewise Parabolic Method 1D reconstruction following Colella and Woodward, 1984
 !!
 !! This implementation of PPM follows Colella and Woodward, 1984 \cite colella1984, with
@@ -9,8 +13,6 @@
 !! regrid_edge_values.edge_values_explicit_h4cw() function followed by ppm_functions.ppm_reconstruction()
 !! (reached with "PPM_CW"), are equivalent. Similarly recon1d_ppm_hybgen (this implementation) is equivalent also.
 module Recon1d_PPM_hybgen
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use Recon1d_type, only : testing
 use Recon1d_PPM_CW, only : PPM_CW
@@ -127,14 +129,14 @@ subroutine reconstruct(this, h, u)
   this%ur(n) = u(n) ! PCM
   this%ul(n) = u(n) ! PCM
 
-  do K = 2, n ! K=2 is interface between cells 1 and 2
+  do K = 2, n-1 ! K=2 is interface between cells 1 and 2
     u0 = u(k-1)
     u1 = u(k)
     u2 = u(k+1)
     a6 = 3.0 * ( ( u1 - this%ul(k) ) + ( u1 - this%ur(k) ) )
     a6 = 6.0 * u1 - 3.0 * ( this%ul(k) + this%ur(k) )
     du = this%ur(k) - this%ul(k)
-    if ( ( u2 - u1 ) * ( u1 - u0 ) <- 0.0 ) then ! Large scale extrema
+    if ( ( u2 - u1 ) * ( u1 - u0 ) <= 0.0 ) then ! Large scale extrema
       this%ul(k) = u1
       this%ur(k) = u1
     elseif ( du * a6 > du * du ) then ! Extrema on right

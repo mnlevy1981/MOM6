@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A sample tracer package that has striped initial conditions
 module USER_tracer_example
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coms,            only : EFP_type
 use MOM_coupler_types,   only : set_coupler_type_data, atmos_ocn_coupler_flux
@@ -116,8 +118,7 @@ function USER_register_tracer_example(G, GV, US, param_file, CS, tr_Reg, restart
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
 
   do m=1,NTR
-    if (m < 10) then ; write(name,'("tr",I1.1)') m
-    else ; write(name,'("tr",I2.2)') m ; endif
+    write(name,'("tr",I0)') m
     write(longname,'("Concentration of Tracer ",I2.2)') m
     CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
 

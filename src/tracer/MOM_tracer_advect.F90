@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !>  This module contains the subroutines that advect tracers along coordinate surfaces.
 module MOM_tracer_advect
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_cpu_clock,       only : cpu_clock_id, cpu_clock_begin, cpu_clock_end
 use MOM_cpu_clock,       only : CLOCK_MODULE, CLOCK_ROUTINE
@@ -135,7 +137,7 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   do m = 1,ntr
 
      local_advect_scheme(m) = Reg%Tr(m)%advect_scheme
-     if(local_advect_scheme(m) < 0) local_advect_scheme(m) = CS%default_advect_scheme
+     if (local_advect_scheme(m) < 0) local_advect_scheme(m) = CS%default_advect_scheme
 
      if (local_advect_scheme(m) == ADVECT_PLM) then
        stencil_local = 2
@@ -223,15 +225,15 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   !$OMP end parallel
 
   isv = is ; iev = ie ; jsv = js ; jev = je
+  nsten_halo = min(is - isd, ied - ie, js - jsd, jed - je) / stencil
 
   do itt=1,max_iter
 
     if (isv > is-stencil) then
       call do_group_pass(CS%pass_uhr_vhr_t_hprev, G%Domain, clock=id_clock_pass)
 
-      nsten_halo = min(is-isd,ied-ie,js-jsd,jed-je)/stencil
-      isv = is-nsten_halo*stencil ; jsv = js-nsten_halo*stencil
-      iev = ie+nsten_halo*stencil ; jev = je+nsten_halo*stencil
+      isv = is - nsten_halo * stencil ; jsv = js - nsten_halo * stencil
+      iev = ie + nsten_halo * stencil ; jev = je + nsten_halo * stencil
       ! Reevaluate domore_u & domore_v unless the valid range is the same size as
       ! before.  Also, do this if there is Strang splitting.
       if ((nsten_halo > 1) .or. (itt==1)) then
@@ -680,16 +682,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
 
     ! Update do_i so that nothing changes outside of the OBC (problem for interior OBCs only)
     if (associated(OBC)) then
-      if ((OBC%exterior_OBC_bug .eqv. .false.) .and. (OBC%OBC_pe)) then
-        if (OBC%specified_u_BCs_exist_globally .or. OBC%open_u_BCs_exist_globally) then
-          do i=is,ie-1 ; if (OBC%segnum_u(I,j) /= OBC_NONE) then
-            if (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_E) then
-              do_i(i+1,j) = .false.
-            elseif (OBC%segment(OBC%segnum_u(I,j))%direction == OBC_DIRECTION_W) then
-              do_i(i,j) = .false.
-            endif
-          endif ; enddo
-        endif
+      if ((.not.OBC%exterior_OBC_bug) .and. (OBC%OBC_pe) .and. &
+          (OBC%specified_u_BCs_exist_globally .or. OBC%open_u_BCs_exist_globally)) then
+        ! OBC_DIRECTION_E / OBC_DIRECTION_W on the west / east edge
+        do i=is,ie ; if ((OBC%segnum_u(I-1,j) > 0) .or. (OBC%segnum_u(I,j) < 0)) &
+          do_i(i,j) = .false.
+        enddo
       endif
     endif
 
@@ -1096,21 +1094,12 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
 
     ! Update do_i so that nothing changes outside of the OBC (problem for interior OBCs only)
     if (associated(OBC)) then
-      if ((OBC%exterior_OBC_bug .eqv. .false.) .and. (OBC%OBC_pe)) then
-        if (OBC%specified_v_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally) then
-          do i=is,ie
-            if (OBC%segnum_v(i,J-1) /= OBC_NONE) then
-              if (OBC%segment(OBC%segnum_v(i,J-1))%direction == OBC_DIRECTION_N) then
-                do_i(i,j) = .false.
-              endif
-            endif
-            if (OBC%segnum_v(i,J) /= OBC_NONE) then
-              if (OBC%segment(OBC%segnum_v(i,J))%direction == OBC_DIRECTION_S) then
-                do_i(i,j) = .false.
-              endif
-            endif
-          enddo
-        endif
+      if ((.not.OBC%exterior_OBC_bug) .and. (OBC%OBC_pe) .and. &
+          (OBC%specified_v_BCs_exist_globally .or. OBC%open_v_BCs_exist_globally)) then
+        ! OBC_DIRECTION_N / OBC_DIRECTION_S on the south / north edge
+        do i=is,ie ; if ((OBC%segnum_v(i,J-1) > 0) .or. (OBC%segnum_v(i,J) < 0)) &
+          do_i(i,j) = .false.
+        enddo
       endif
     endif
 

@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module contains a thin inteface to mpp and fms I/O code
 module MOM_io_infra
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_domain_infra,     only : MOM_domain_type, rescale_comp_data, AGRID, BGRID_NE, CGRID_NE
 use MOM_domain_infra,     only : domain2d, domain1d, CENTER, CORNER, NORTH_FACE, EAST_FACE
@@ -2063,5 +2065,26 @@ function find_unlimited_dimension_name(fileobj) result(label)
   if (.not. allocated(label)) &
     label = ''
 end function find_unlimited_dimension_name
+
+! NOTE: `lowercase is duplicated from `src/framework/MOM_string_functions.F90`
+!   in order to avoid any dependency of the infra on the framework.
+
+!> Return a string in which all uppercase letters have been replaced by
+!! their lowercase counterparts.
+function lowercase(input_string)
+  character(len=*),     intent(in) :: input_string !< The string to modify
+  character(len=len(input_string)) :: lowercase !< The modified output string
+!   This function returns a string in which all uppercase letters have been
+! replaced by their lowercase counterparts.  It is loosely based on the
+! lowercase function in mpp_util.F90.
+  integer, parameter :: co=iachar('a')-iachar('A') ! case offset
+  integer :: k
+
+  lowercase = input_string
+  do k=1, len_trim(input_string)
+    if (lowercase(k:k) >= 'A' .and. lowercase(k:k) <= 'Z') &
+        lowercase(k:k) = achar(ichar(lowercase(k:k))+co)
+  enddo
+end function lowercase
 
 end module MOM_io_infra

@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> The central module of the MOM6 ocean model
 module MOM
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 ! Infrastructure modules
 use MOM_array_transform,      only : rotate_array, rotate_vector
@@ -44,7 +46,7 @@ use MOM_restart,              only : register_restart_field, register_restart_pa
 use MOM_restart,              only : query_initialized, set_initialized, restart_registry_lock
 use MOM_restart,              only : restart_init, is_new_run, determine_is_new_run, MOM_restart_CS
 use MOM_spatial_means,        only : global_mass_integral
-use MOM_time_manager,         only : time_type, real_to_time, time_type_to_real, operator(+)
+use MOM_time_manager,         only : time_type, real_to_time, operator(+)
 use MOM_time_manager,         only : operator(-), operator(>), operator(*), operator(/)
 use MOM_time_manager,         only : operator(>=), operator(==), increment_date
 use MOM_unit_tests,           only : unit_tests
@@ -96,13 +98,14 @@ use MOM_forcing_type,          only : copy_common_forcing_fields, set_derived_fo
 use MOM_forcing_type,          only : homogenize_forcing, homogenize_mech_forcing
 use MOM_grid,                  only : ocean_grid_type, MOM_grid_init, MOM_grid_end
 use MOM_grid,                  only : set_first_direction
-use MOM_harmonic_analysis,     only : HA_accum_FtF, HA_accum_FtSSH, harmonic_analysis_CS
+use MOM_harmonic_analysis,     only : HA_accum, harmonic_analysis_CS
 use MOM_hor_index,             only : hor_index_type, hor_index_init
 use MOM_hor_index,             only : rotate_hor_index
 use MOM_interface_heights,     only : find_eta, calc_derived_thermo, thickness_to_dz
 use MOM_interface_filter,      only : interface_filter, interface_filter_init, interface_filter_end
 use MOM_interface_filter,      only : interface_filter_CS
 use MOM_internal_tides,        only : int_tide_CS
+use MOM_kappa_shear,           only : kappa_shear_at_vertex
 use MOM_lateral_mixing_coeffs, only : calc_slope_functions, VarMix_init, VarMix_end
 use MOM_lateral_mixing_coeffs, only : calc_resoln_function, calc_depth_function, VarMix_CS
 use MOM_MEKE,                  only : MEKE_alloc_register_restart, step_forward_MEKE
@@ -111,11 +114,16 @@ use MOM_MEKE_types,            only : MEKE_type
 use MOM_mixed_layer_restrat,   only : mixedlayer_restrat, mixedlayer_restrat_init, mixedlayer_restrat_CS
 use MOM_mixed_layer_restrat,   only : mixedlayer_restrat_register_restarts
 use MOM_obsolete_diagnostics,  only : register_obsolete_diagnostics
-use MOM_open_boundary,         only : ocean_OBC_type, OBC_registry_type
+use MOM_open_boundary,         only : ocean_OBC_type, open_boundary_end
 use MOM_open_boundary,         only : register_temp_salt_segments, update_segment_tracer_reservoirs
+use MOM_open_boundary,         only : read_OBC_segment_data, initialize_OBC_segment_reservoirs
+use MOM_open_boundary,         only : setup_OBC_tracer_reservoirs
+use MOM_open_boundary,         only : setup_OBC_thickness_reservoirs
 use MOM_open_boundary,         only : open_boundary_register_restarts, remap_OBC_fields
-use MOM_open_boundary,         only : open_boundary_setup_vert
-use MOM_open_boundary,         only : rotate_OBC_config, rotate_OBC_init
+use MOM_open_boundary,         only : open_boundary_setup_vert, initialize_segment_data
+use MOM_open_boundary,         only : update_OBC_segment_data, rotate_OBC_config
+use MOM_open_boundary,         only : open_boundary_halo_update, write_OBC_info, chksum_OBC_segments
+use MOM_open_boundary,         only : segment_thickness_reservoir_init
 use MOM_porous_barriers,       only : porous_widths_layer, porous_widths_interface, porous_barriers_init
 use MOM_porous_barriers,       only : porous_barrier_CS
 use MOM_set_visc,              only : set_viscous_BBL, set_viscous_ML, set_visc_CS
@@ -123,7 +131,7 @@ use MOM_set_visc,              only : set_visc_register_restarts, remap_vertvisc
 use MOM_set_visc,              only : set_visc_init, set_visc_end
 use MOM_shared_initialization, only : write_ocean_geometry_file
 use MOM_sponge,                only : init_sponge_diags, sponge_CS
-use MOM_state_initialization,  only : MOM_initialize_state
+use MOM_state_initialization,  only : MOM_initialize_state, MOM_initialize_OBCs
 use MOM_stoch_eos,             only : MOM_stoch_eos_init, MOM_stoch_eos_run, MOM_stoch_eos_CS
 use MOM_stoch_eos,             only : stoch_EOS_register_restarts, post_stoch_EOS_diags, mom_calc_varT
 use MOM_sum_output,            only : write_energy, accumulate_net_input
@@ -227,6 +235,7 @@ type, public :: MOM_control_struct ; private
   logical :: rotate_index = .false.   !< True if index map is rotated
   logical :: homogenize_forcings = .false. !< True if all inputs are homogenized
   logical :: update_ustar = .false.   !< True to update ustar from homogenized tau
+  logical :: vertex_shear = .false. !< True if vertex shear is on
 
   type(verticalGrid_type), pointer :: &
     GV => NULL()    !< structure containing vertical grid info
@@ -286,9 +295,12 @@ type, public :: MOM_control_struct ; private
   logical :: count_calls = .false.   !< If true, count the calls to step_MOM, rather than the
                                      !! number of dynamics steps in nstep_tot
   logical :: debug                   !< If true, write verbose checksums for debugging purposes.
+  logical :: debug_OBCs              !< If true, write verbose OBC values for debugging purposes.
   integer :: ntrunc                  !< number u,v truncations since last call to write_energy
 
   integer :: cont_stencil            !< The stencil for thickness from the continuity solver.
+  integer :: dyn_h_stencil           !< The stencil for thickness for the dynamics based on
+                                     !! the continuity solver and Coriolis schemes.
   ! These elements are used to control the dynamics updates.
   logical :: do_dynamics             !< If false, does not call step_MOM_dyn_*. This is an
                                      !! undocumented run-time flag that is fragile.
@@ -309,8 +321,6 @@ type, public :: MOM_control_struct ; private
   logical :: useMEKE                 !< If true, call the MEKE parameterization.
   logical :: use_stochastic_EOS      !< If true, use the stochastic EOS parameterizations.
   logical :: useWaves                !< If true, update Stokes drift
-  logical :: use_diabatic_time_bug   !< If true, uses the wrong calendar time for diabatic processes,
-                                     !! as was done in MOM6 versions prior to February 2018.
   real :: dtbt_reset_period          !< The time interval between dynamic recalculation of the
                                      !! barotropic time step [T ~> s]. If this is negative dtbt is never
                                      !! calculated, and if it is 0, dtbt is calculated every step.
@@ -377,6 +387,7 @@ type, public :: MOM_control_struct ; private
                                 !! roundoff for non-Boussinesq cases.
   logical :: use_particles      !< Turns on the particles package
   logical :: use_uh_particles   !< particles are advected by uh/h
+  logical :: uh_particles_bug   !< If true, uses an inconsistent timestep for particle advection
   logical :: use_dbclient       !< Turns on the database client used for ML inference/analysis
   character(len=10) :: particle_type !< Particle types include: surface(default), profiling and sail drone.
 
@@ -475,6 +486,7 @@ public save_MOM_restart
 integer :: id_clock_ocean
 integer :: id_clock_dynamics
 integer :: id_clock_thermo
+integer :: id_clock_MOM_end
 integer :: id_clock_remap
 integer :: id_clock_tracer
 integer :: id_clock_diabatic
@@ -493,6 +505,7 @@ integer :: id_clock_pass_init  ! also in dynamics d/r
 integer :: id_clock_ALE
 integer :: id_clock_other
 integer :: id_clock_offline_tracer
+integer :: id_clock_save_restart
 integer :: id_clock_unit_tests
 integer :: id_clock_stoch
 integer :: id_clock_varT
@@ -596,6 +609,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   real :: I_wt_ssh  ! The inverse of the time weights [T-1 ~> s-1]
 
   type(time_type) :: Time_local, end_time_thermo
+  type(time_type) :: Time_end_diag ! End time of a diagnostic segment, as a time type
+
   type(group_pass_type) :: pass_tau_ustar_psurf
   logical :: showCallTree
 
@@ -670,6 +685,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   if (do_dyn) then
     n_max = 1
     if (time_interval > CS%dt) n_max = ceiling(time_interval/CS%dt - 0.001)
+
     dt = time_interval / real(n_max)
     thermo_does_span_coupling = (CS%thermo_spans_coupling .and. &
                                 (CS%dt_therm > 1.5*cycle_time))
@@ -682,7 +698,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     elseif (.not.do_thermo) then
       dt_therm = CS%dt_therm
       if (present(cycle_length)) dt_therm = min(CS%dt_therm, cycle_length)
-      ! ntstep is not used.
+      ntstep = 1 ! ntstep is initialized to avoid an error in a secondary logical test,
+                 ! but the nonzero value of ntstep does not matter when do_thermo is false.
     else
       ntstep = MAX(1, MIN(n_max, floor(CS%dt_therm/dt + 0.001)))
       dt_therm = dt*ntstep
@@ -694,7 +711,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     elseif (.not.do_thermo) then
       dt_tr_adv = CS%dt_tr_adv
       if (present(cycle_length)) dt_tr_adv = min(CS%dt_tr_adv, cycle_length)
-      ! ntstep is not used.
+      ! ntastep is not used.
     else
       ntastep = MAX(1, MIN(n_max, floor(CS%dt_tr_adv/dt + 0.001)))
       dt_tr_adv = dt*ntastep
@@ -764,7 +781,10 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
 
   if (therm_reset) then
     CS%time_in_thermo_cycle = 0.0
-    if (associated(CS%tv%frazil))        CS%tv%frazil(:,:)        = 0.0
+    if (associated(CS%tv%frazil)) then
+      CS%tv%frazil(:,:) = 0.0
+      CS%tv%frazil_was_reset = .true.
+    endif
     if (associated(CS%tv%salt_deficit))  CS%tv%salt_deficit(:,:)  = 0.0
     if (associated(CS%tv%TempxPmE))      CS%tv%TempxPmE(:,:)      = 0.0
     if (associated(CS%tv%internal_heat)) CS%tv%internal_heat(:,:) = 0.0
@@ -775,8 +795,9 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     do j=js,je ; do i=is,ie ; CS%ssh_rint(i,j) = 0.0 ; enddo ; enddo
 
     if (CS%VarMix%use_variable_mixing) then
-      call enable_averages(cycle_time, Time_start + real_to_time(US%T_to_s*cycle_time), CS%diag)
-      call calc_resoln_function(h, CS%tv, G, GV, US, CS%VarMix, CS%MEKE, dt)
+      Time_end_diag = Time_start + real_to_time(cycle_time, unscale=US%T_to_s)
+      call enable_averages(cycle_time, Time_end_diag, CS%diag)
+      call calc_resoln_function(h, CS%tv, G, GV, US, CS%VarMix, CS%MEKE, CS%OBC, dt)
       call calc_depth_function(G, CS%VarMix)
       call disable_averaging(CS%diag)
     endif
@@ -803,7 +824,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
     endif
     if (CS%UseWaves) then
       ! Update wave information, which is presently kept static over each call to step_mom
-      call enable_averages(time_interval, Time_start + real_to_time(US%T_to_s*time_interval), CS%diag)
+      Time_end_diag = Time_start + real_to_time(time_interval, unscale=US%T_to_s)
+      call enable_averages(time_interval, Time_end_diag, CS%diag)
       call find_ustar(forces, CS%tv, U_star, G, GV, US, halo=1)
       call thickness_to_dz(h, CS%tv, dz, G, GV, US, halo_size=1)
       call Update_Stokes_Drift(G, GV, US, Waves, dz, U_star, time_interval, do_dyn)
@@ -831,17 +853,11 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
 
   rel_time = 0.0
   do n=1,n_max
-    if (CS%use_diabatic_time_bug) then
-      ! This wrong form of update was used until Feb 2018, recovered with CS%use_diabatic_time_bug=T.
-      CS%Time = Time_start + real_to_time(US%T_to_s*int(floor(rel_time+0.5*dt+0.5)))
-      rel_time = rel_time + dt
-    else
-      rel_time = rel_time + dt ! The relative time at the end of the step.
-      ! Set the universally visible time to the middle of the time step.
-      CS%Time = Time_start + real_to_time(US%T_to_s*(rel_time - 0.5*dt))
-    endif
+    rel_time = rel_time + dt ! The relative time at the end of the step.
+    ! Set the universally visible time to the middle of the time step.
+    CS%Time = Time_start + real_to_time(rel_time - 0.5*dt, unscale=US%T_to_s)
     ! Set the local time to the end of the time step.
-    Time_local = Time_start + real_to_time(US%T_to_s*rel_time)
+    Time_local = Time_start + real_to_time(rel_time, unscale=US%T_to_s)
 
     if (showCallTree) call callTree_enter("DT cycles (step_MOM) n=",n)
 
@@ -869,17 +885,13 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       endif
 
       end_time_thermo = Time_local
-      if (dtdia > dt .and. .not. CS%use_diabatic_time_bug) then
+      if (dtdia > dt) then
         ! If necessary, temporarily reset CS%Time to the center of the period covered
         ! by the call to step_MOM_thermo, noting that they begin at the same time.
-        ! This step was missing prior to Feb 2018, and is skipped with CS%use_diabatic_time_bug=T.
-        CS%Time = CS%Time + real_to_time(0.5*US%T_to_s*(dtdia-dt))
-      endif
-      if (dtdia > dt .or. CS%use_diabatic_time_bug) then
+        CS%Time = CS%Time + real_to_time(0.5*(dtdia-dt), unscale=US%T_to_s)
         ! The end-time of the diagnostic interval needs to be set ahead if there
         ! are multiple dynamic time steps worth of thermodynamics applied here.
-        ! This line was not conditional prior to Feb 2018, recovered with CS%use_diabatic_time_bug=T.
-        end_time_thermo = Time_local + real_to_time(US%T_to_s*(dtdia-dt))
+        end_time_thermo = Time_local + real_to_time(dtdia-dt, unscale=US%T_to_s)
       endif
 
       ! Apply diabatic forcing, do mixing, and regrid.
@@ -894,9 +906,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       CS%t_dyn_rel_thermo = -dtdia
       if (showCallTree) call callTree_waypoint("finished diabatic_first (step_MOM)")
 
-      if (dtdia > dt .and. .not. CS%use_diabatic_time_bug) & ! Reset CS%Time to its previous value.
-        ! This step was missing prior to Feb 2018, recovered with CS%use_diabatic_time_bug=T.
-        CS%Time = Time_start + real_to_time(US%T_to_s*(rel_time - 0.5*dt))
+      if (dtdia > dt) & ! Reset CS%Time to its previous value.
+        CS%Time = Time_start + real_to_time(rel_time - 0.5*dt, unscale=US%T_to_s)
     endif ! end of block "(CS%diabatic_first .and. (CS%t_dyn_rel_adv==0.0))"
 
     if (do_dyn) then
@@ -950,18 +961,15 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
         enddo ; enddo
       endif
 
-      if (associated(CS%HA_CSp)) call HA_accum_FtF(Time_Local, CS%HA_CSp)
-
       call step_MOM_dynamics(forces, CS%p_surf_begin, CS%p_surf_end, dt, &
                              dt_tradv_here, bbl_time_int, CS, &
                              Time_local, Waves=Waves)
 
       !===========================================================================
       ! This is the start of the tracer advection part of the algorithm.
-      do_advection = .false.
       if (tradv_does_span_coupling .or. .not.do_thermo) then
-        do_advection = (CS%t_dyn_rel_adv + 0.5*dt > dt_tr_adv)
-        if (CS%t_dyn_rel_thermo + 0.5*dt > dt_therm) do_advection = .true.
+        do_advection = ((CS%t_dyn_rel_adv + 0.5*dt > dt_tr_adv) .or. &
+                        (CS%t_dyn_rel_thermo + 0.5*dt > dt_therm))
       else
         do_advection = ((MOD(n,ntastep) == 0) .or. (n==n_max))
       endif
@@ -976,15 +984,12 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
 
     !===========================================================================
     ! This is the second place where the diabatic processes and remapping could occur.
-    if (do_thermo) then
-      do_diabatic = .false.
-      if (thermo_does_span_coupling .or. .not.do_dyn) then
-        do_diabatic = (CS%t_dyn_rel_thermo + 0.5*dt > dt_therm)
-      else
-        do_diabatic = ((MOD(n,ntstep) == 0) .or. (n==n_max))
-      endif
+    if (thermo_does_span_coupling .or. .not.do_dyn) then
+      do_diabatic = (do_thermo .and. (CS%t_dyn_rel_thermo + 0.5*dt > dt_therm))
+    else
+      do_diabatic = (do_thermo .and. ((MOD(n,ntstep) == 0) .or. (n==n_max)))
     endif
-    if ((CS%t_dyn_rel_adv==0.0) .and. do_thermo .and. (.not.CS%diabatic_first) .and. do_diabatic) then
+    if ((CS%t_dyn_rel_adv==0.0) .and. (.not.CS%diabatic_first) .and. do_diabatic) then
 
       dtdia = CS%t_dyn_rel_thermo
       ! If the MOM6 dynamic and thermodynamic time stepping is being orchestrated
@@ -999,9 +1004,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
 
       ! If necessary, temporarily reset CS%Time to the center of the period covered
       ! by the call to step_MOM_thermo, noting that they end at the same time.
-      ! This step was missing prior to Feb 2018, and is skipped with CS%use_diabatic_time_bug=T.
-      if (dtdia > dt .and. .not. CS%use_diabatic_time_bug) &
-        CS%Time = CS%Time - real_to_time(0.5*US%T_to_s*(dtdia-dt))
+      if (dtdia > dt) &
+        CS%Time = CS%Time - real_to_time(0.5*(dtdia-dt), unscale=US%T_to_s)
 
       ! Apply diabatic forcing, do mixing, and regrid.
       call step_MOM_thermo(CS, G, GV, US, u, v, h, CS%tv, fluxes, dtdia, &
@@ -1019,9 +1023,8 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       endif
 
       ! Reset CS%Time to its previous value.
-      ! This step was missing prior to Feb 2018, and is skipped with CS%use_diabatic_time_bug=T.
-      if (dtdia > dt .and. .not. CS%use_diabatic_time_bug) &
-        CS%Time = Time_start + real_to_time(US%T_to_s*(rel_time - 0.5*dt))
+      if (dtdia > dt) &
+        CS%Time = Time_start + real_to_time(rel_time - 0.5*dt, unscale=US%T_to_s)
     endif
 
     if (do_dyn) then
@@ -1076,7 +1079,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
       ssh(i,j) = CS%ssh_rint(i,j)*I_wt_ssh
       CS%ave_ssh_ibc(i,j) = ssh(i,j)
     enddo ; enddo
-    if (associated(CS%HA_CSp)) call HA_accum_FtSSH('ssh', ssh, Time_local, G, CS%HA_CSp)
+    if (associated(CS%HA_CSp)) call HA_accum('ssh', ssh, Time_local, G, CS%HA_CSp)
     if (do_dyn) then
       call adjust_ssh_for_p_atm(CS%tv, G, GV, US, CS%ave_ssh_ibc, forces%p_surf_SSH, &
                                 CS%calc_rho_for_sea_lev)
@@ -1139,7 +1142,7 @@ subroutine step_MOM(forces_in, fluxes_in, sfc_state, Time_start, time_int_in, CS
   if (MOM_state_is_synchronized(CS)) &
     call write_energy(CS%u, CS%v, CS%h, CS%tv, Time_local, CS%nstep_tot, &
                       G, GV, US, CS%sum_output_CSp, CS%tracer_flow_CSp, &
-                      dt_forcing=real_to_time(US%T_to_s*time_interval) )
+                      dt_forcing=real_to_time(time_interval, unscale=US%T_to_s) )
 
   call cpu_clock_end(id_clock_other)
 
@@ -1192,6 +1195,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
     v => NULL(), & ! v : meridional velocity component [L T-1 ~> m s-1]
     h => NULL()    ! h : layer thickness [H ~> m or kg m-2]
 
+  type(time_type) :: Time_end_diag ! End time of a diagnostic segment, as a time type
   logical :: calc_dtbt  ! Indicates whether the dynamically adjusted
                         ! barotropic time step needs to be updated.
   logical :: showCallTree
@@ -1221,7 +1225,8 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
   if ((CS%t_dyn_rel_adv == 0.0) .and. CS%thickness_diffuse_first .and. &
       (CS%thickness_diffuse .or. CS%interface_filter)) then
 
-    call enable_averages(dt_tr_adv, Time_local+real_to_time(US%T_to_s*(dt_tr_adv-dt)), CS%diag)
+    Time_end_diag = Time_local + real_to_time(dt_tr_adv - dt, unscale=US%T_to_s)
+    call enable_averages(dt_tr_adv, Time_end_diag, CS%diag)
     if (CS%thickness_diffuse) then
       call cpu_clock_begin(id_clock_thick_diff)
       if (CS%VarMix%use_variable_mixing) &
@@ -1230,7 +1235,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
                              CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp, &
                              CS%stoch_CS)
       call cpu_clock_end(id_clock_thick_diff)
-      call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
+      call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
       if (showCallTree) call callTree_waypoint("finished thickness_diffuse_first (step_MOM)")
     endif
 
@@ -1241,7 +1246,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
       call interface_filter(h, CS%uhtr, CS%vhtr, CS%tv, dt_tr_adv, G, GV, US, &
                             CS%CDp, CS%interface_filter_CSp)
       call cpu_clock_end(id_clock_int_filter)
-      call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
+      call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
       if (showCallTree) call callTree_waypoint("finished interface_filter_first (step_MOM)")
     endif
 
@@ -1262,8 +1267,8 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
 
   ! The bottom boundary layer properties need to be recalculated.
   if (bbl_time_int > 0.0) then
-    call enable_averages(bbl_time_int, &
-              Time_local + real_to_time(US%T_to_s*(bbl_time_int-dt)), CS%diag)
+    Time_end_diag = Time_local + real_to_time(bbl_time_int - dt, unscale=US%T_to_s)
+    call enable_averages(bbl_time_int, Time_end_diag, CS%diag)
     ! Calculate the BBL properties and store them inside visc (u,h).
     call cpu_clock_begin(id_clock_BBL_visc)
     call set_viscous_BBL(CS%u, CS%v, CS%h, CS%tv, CS%visc, G, GV, US, CS%set_visc_CSp, CS%pbv)
@@ -1283,6 +1288,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
       endif
     endif
   endif
+  ! if (CS%debug_OBCs .and. associated(CS%OBC)) call chksum_OBC_segments(CS%OBC, G, GV, US, 3)
 
   if (CS%do_dynamics .and. CS%split) then !--------------------------- start SPLIT
     ! This section uses a split time stepping scheme for the dynamic equations,
@@ -1343,17 +1349,15 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
     call particles_to_z_space(CS%particles, h)
   endif
 
-
-
   ! Update the model's current to reflect wind-wave growth
   if (Waves%Stokes_DDT .and. (.not.Waves%Passive_Stokes_DDT)) then
     do J=jsq,jeq ; do i=is,ie
       v(i,J,:) = v(i,J,:) + Waves%ddt_us_y(i,J,:)*dt
-    enddo; enddo
+    enddo ; enddo
     do j=js,je ; do I=isq,ieq
       u(I,j,:) = u(I,j,:) + Waves%ddt_us_x(I,j,:)*dt
-    enddo; enddo
-    call pass_vector(u,v,G%Domain)
+    enddo ; enddo
+    call pass_vector(u, v, G%Domain)
   endif
   ! Added an additional output to track Stokes drift time tendency.
   ! It is mostly for debugging, and perhaps doesn't need to hang
@@ -1361,12 +1365,12 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
   if (Waves%Stokes_DDT .and. (Waves%id_3dstokes_y_from_ddt>0)) then
     do J=jsq,jeq ; do i=is,ie
       Waves%us_y_from_ddt(i,J,:) = Waves%us_y_from_ddt(i,J,:) + Waves%ddt_us_y(i,J,:)*dt
-    enddo; enddo
+    enddo ; enddo
   endif
   if (Waves%Stokes_DDT .and. (Waves%id_3dstokes_x_from_ddt>0)) then
     do j=js,je ; do I=isq,ieq
       Waves%us_x_from_ddt(I,j,:) = Waves%us_x_from_ddt(I,j,:) + Waves%ddt_us_x(I,j,:)*dt
-    enddo; enddo
+    enddo ; enddo
   endif
 
 
@@ -1382,9 +1386,9 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
       call thickness_diffuse(h, CS%uhtr, CS%vhtr, CS%tv, dt, G, GV, US, &
                              CS%MEKE, CS%VarMix, CS%CDp, CS%thickness_diffuse_CSp, CS%stoch_CS)
 
-      if (CS%debug) call hchksum(h,"Post-thickness_diffuse h", G%HI, haloshift=1, unscale=GV%H_to_MKS)
       call cpu_clock_end(id_clock_thick_diff)
-      call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
+      call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
+      if (CS%debug) call hchksum(h,"Post-thickness_diffuse h", G%HI, haloshift=1, unscale=GV%H_to_MKS)
       if (showCallTree) call callTree_waypoint("finished thickness_diffuse (step_MOM)")
     endif
 
@@ -1400,7 +1404,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
                               CS%CDp, CS%interface_filter_CSp)
       endif
       call cpu_clock_end(id_clock_int_filter)
-      call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
+      call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
       if (showCallTree) call callTree_waypoint("finished interface_filter (step_MOM)")
     endif
   endif
@@ -1416,7 +1420,7 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
     call mixedlayer_restrat(h, CS%uhtr, CS%vhtr, CS%tv, forces, dt, CS%visc%MLD, CS%visc%h_ML, &
                             CS%visc%sfc_buoy_flx, CS%VarMix, G, GV, US, CS%mixedlayer_restrat_CSp)
     call cpu_clock_end(id_clock_ml_restrat)
-    call pass_var(h, G%Domain, clock=id_clock_pass, halo=max(2,CS%cont_stencil))
+    call pass_var(h, G%Domain, clock=id_clock_pass, halo=CS%dyn_h_stencil)
     if (CS%debug) then
       call hchksum(h,"Post-mixedlayer_restrat h", G%HI, haloshift=1, unscale=GV%H_to_MKS)
       call uvchksum("Post-mixedlayer_restrat [uv]htr", &
@@ -1438,10 +1442,11 @@ subroutine step_MOM_dynamics(forces, p_surf_begin, p_surf_end, dt, dt_tr_adv, &
   ! Advance the dynamics time by dt.
   CS%t_dyn_rel_adv = CS%t_dyn_rel_adv + dt
 
-  if (CS%use_particles .and. CS%do_dynamics .and. CS%use_uh_particles) then
-    !Run particles using thickness-weighted velocity
+  if (CS%use_particles .and. CS%do_dynamics .and. CS%use_uh_particles .and. &
+      CS%uh_particles_bug) then
+    ! Run particles using thickness-weighted velocity
     call particles_run(CS%particles, Time_local, CS%uhtr, CS%vhtr, CS%h, &
-        CS%tv, CS%t_dyn_rel_adv, CS%use_uh_particles)
+                       CS%tv, CS%t_dyn_rel_adv, CS%use_uh_particles)
   endif
 
   CS%n_dyn_steps_in_adv = CS%n_dyn_steps_in_adv + 1
@@ -1505,6 +1510,13 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
   call cpu_clock_begin(id_clock_thermo) ; call cpu_clock_begin(id_clock_tracer)
   call enable_averages(CS%t_dyn_rel_adv, Time_local, CS%diag)
 
+  if (CS%use_particles .and. CS%use_uh_particles .and. (.not. CS%uh_particles_bug)) then
+    ! Run particles using thickness-weighted velocity
+    call particles_run(CS%particles, Time_local, CS%uhtr, CS%vhtr, CS%h, &
+                       CS%tv, CS%t_dyn_rel_adv, CS%use_uh_particles)
+  endif
+
+
   if (CS%alternate_first_direction) then
     ! This calculation of the value of G%first_direction from the start of the accumulation of
     ! mass transports for use by the tracers is the equivalent to adding 2*n_dyn_steps before
@@ -1524,7 +1536,7 @@ subroutine step_MOM_tracer_dyn(CS, G, GV, US, h, Time_local)
   if (associated(CS%OBC)) then
     call pass_vector(CS%uhtr, CS%vhtr, G%Domain)
     call update_segment_tracer_reservoirs(G, GV, CS%uhtr, CS%vhtr, h, CS%OBC, &
-                     CS%t_dyn_rel_adv, CS%tracer_Reg)
+                     CS%tracer_Reg)
   endif
   call cpu_clock_end(id_clock_tracer) ; call cpu_clock_end(id_clock_thermo)
 
@@ -1605,13 +1617,11 @@ subroutine step_MOM_thermo(CS, G, GV, US, u, v, h, tv, fluxes, dtdia, &
 
   logical :: debug_redundant ! If true, check redundant values on PE boundaries when debugging.
   logical :: showCallTree
-  type(group_pass_type) :: pass_T_S, pass_T_S_h, pass_uv_T_S_h
+  type(group_pass_type) :: pass_T_S
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
   integer :: halo_sz ! The size of a halo where data must be valid.
-  integer :: i, j, k, is, ie, js, je, nz
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   showCallTree = callTree_showQuery()
   if (showCallTree) call callTree_enter("step_MOM_thermo(), MOM.F90")
   if (CS%debug) call query_debugging_checks(do_redundant=debug_redundant)
@@ -1772,9 +1782,7 @@ subroutine ALE_regridding_and_remapping(CS, G, GV, US, u, v, h, tv, dtdia, Time_
   logical :: use_ice_shelf ! Needed for selecting the right ALE interface.
   logical :: debug_redundant ! If true, check redundant values on PE boundaries when debugging.
   logical :: showCallTree
-  type(group_pass_type) :: pass_T_S, pass_T_S_h, pass_uv_T_S_h
-  integer :: dynamics_stencil  ! The computational stencil for the calculations
-                               ! in the dynamic core.
+  type(group_pass_type) :: pass_T_S_h
   integer :: i, j, k, is, ie, js, je, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -1937,12 +1945,10 @@ subroutine post_diabatic_halo_updates(CS, G, GV, US, u, v, h, tv)
 
   logical :: debug_redundant ! If true, check redundant values on PE boundaries when debugging.
   logical :: showCallTree
-  type(group_pass_type) :: pass_T_S, pass_T_S_h, pass_uv_T_S_h
+  type(group_pass_type) :: pass_uv_T_S_h
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
-  integer :: i, j, k, is, ie, js, je, nz
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   showCallTree = callTree_showQuery()
   if (showCallTree) call callTree_enter("post_diabatic_halo_updates, MOM.F90")
   if (CS%debug) call query_debugging_checks(do_redundant=debug_redundant)
@@ -1959,6 +1965,9 @@ subroutine post_diabatic_halo_updates(CS, G, GV, US, u, v, h, tv)
     call create_group_pass(pass_uv_T_S_h, tv%S, G%Domain, halo=dynamics_stencil)
   call create_group_pass(pass_uv_T_S_h, h, G%Domain, halo=dynamics_stencil)
   call do_group_pass(pass_uv_T_S_h, G%Domain, clock=id_clock_pass)
+
+  if (associated(tv%frazil) .and. (.not.tv%frazil_was_reset) .and. CS%vertex_shear) &
+    call pass_var(tv%frazil, G%Domain, halo=1)
 
   ! Update derived thermodynamic quantities.
   if (allocated(tv%SpV_avg)) then
@@ -2033,12 +2042,12 @@ subroutine step_offline(forces, fluxes, sfc_state, Time_start, time_interval, CS
 
   ! Check to see if vertical tracer functions should be done
   do_vertical = (first_iter .or. (accumulated_time >= vertical_time))
-  if (do_vertical) vertical_time = accumulated_time + real_to_time(US%T_to_s*dt_offline_vertical)
+  if (do_vertical) vertical_time = accumulated_time + real_to_time(dt_offline_vertical, unscale=US%T_to_s)
 
   ! Increment the amount of time elapsed since last read and check if it's time to roll around
-  accumulated_time = accumulated_time + real_to_time(US%T_to_s*time_interval)
+  accumulated_time = accumulated_time + real_to_time(time_interval, unscale=US%T_to_s)
 
-  last_iter = (accumulated_time >= real_to_time(US%T_to_s*dt_offline))
+  last_iter = (accumulated_time >= real_to_time(dt_offline, unscale=US%T_to_s))
 
   if (CS%use_ALE_algorithm) then
     ! If this is the first iteration in the offline timestep, then we need to read in fields and
@@ -2065,7 +2074,7 @@ subroutine step_offline(forces, fluxes, sfc_state, Time_start, time_interval, CS
         if (.not. skip_diffusion) then
           if (CS%VarMix%use_variable_mixing) then
             call pass_var(CS%h, G%Domain)
-            call calc_resoln_function(CS%h, CS%tv, G, GV, US, CS%VarMix, CS%MEKE, dt_offline)
+            call calc_resoln_function(CS%h, CS%tv, G, GV, US, CS%VarMix, CS%MEKE, CS%OBC, dt_offline)
             call calc_depth_function(G, CS%VarMix)
             call calc_slope_functions(CS%h, CS%tv, dt_offline, G, GV, US, CS%VarMix, OBC=CS%OBC)
           endif
@@ -2092,7 +2101,7 @@ subroutine step_offline(forces, fluxes, sfc_state, Time_start, time_interval, CS
         if (.not. skip_diffusion) then
           if (CS%VarMix%use_variable_mixing) then
             call pass_var(CS%h, G%Domain)
-            call calc_resoln_function(CS%h, CS%tv, G, GV, US, CS%VarMix, CS%MEKE, dt_offline)
+            call calc_resoln_function(CS%h, CS%tv, G, GV, US, CS%VarMix, CS%MEKE, CS%OBC, dt_offline)
             call calc_depth_function(G, CS%VarMix)
             call calc_slope_functions(CS%h, CS%tv, dt_offline, G, GV, US, CS%VarMix, OBC=CS%OBC)
           endif
@@ -2314,12 +2323,17 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   integer :: first_direction   ! An integer that indicates which direction is to be
                                ! updated first in directionally split parts of the
                                ! calculation.
+  logical :: enable_bugs       ! If true, the defaults for certain recently added bug-fix flags are
+                               ! set to recreate the bugs so that the code can be moved forward
+                               ! without changing answers for existing configurations.  When this is
+                               ! false, bugs are only used if they are actively selected.
   logical :: non_Bous          ! If true, this run is fully non-Boussinesq
   logical :: Boussinesq        ! If true, this run is fully Boussinesq
   logical :: semi_Boussinesq   ! If true, this run is partially non-Boussinesq
   logical :: use_KPP           ! If true, diabatic is using KPP vertical mixing
   logical :: MLE_use_PBL_MLD   ! If true, use stored boundary layer depths for submesoscale restratification.
-  integer :: nkml, nkbl, verbosity, write_geom
+  logical :: OBC_reservoir_init_bug
+  integer :: nkml, nkbl, verbosity, write_geom, number_of_OBC_segments
   integer :: dynamics_stencil  ! The computational stencil for the calculations
                                ! in the dynamic core.
   real :: salin_underflow      ! A tiny value of salinity below which the it is set to 0 [S ~> ppt]
@@ -2338,8 +2352,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
 
   CS%Time => Time
 
+  id_clock_ocean    = cpu_clock_id('Ocean', grain=CLOCK_COMPONENT)
   id_clock_init = cpu_clock_id('Ocean Initialization', grain=CLOCK_SUBCOMPONENT)
-  call cpu_clock_begin(id_clock_init)
+  call cpu_clock_begin(id_clock_ocean) ; call cpu_clock_begin(id_clock_init)
 
   Start_time = Time ; if (present(Time_in)) Start_time = Time_in
 
@@ -2455,7 +2470,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       call get_param(param_file, "MOM", "ADVECT_TS", advect_TS, &
                    "If True, advect temperature and salinity horizontally "//&
                    "If False, T/S are registered for advection. "//&
-                   "This is intended only to be used in offline tracer mode."//&
+                   "This is intended only to be used in offline tracer mode, "//&
                    "and is by default false in that case", &
                    default=.false. )
     endif
@@ -2500,6 +2515,20 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call get_param(param_file, "MOM", "DEBUG_TRUNCATIONS", debug_truncations, &
                  "If true, calculate all diagnostics that are useful for "//&
                  "debugging truncations.", default=.false., debuggingParam=.true.)
+  call get_param(param_file, "MOM", "OBC_NUMBER_OF_SEGMENTS", number_of_OBC_segments, &
+                 default=0, do_not_log=.true.)
+  call get_param(param_file, "MOM", "DEBUG_OBCS", CS%debug_OBCs, &
+                 "If true, write out verbose debugging data about OBCs.", &
+                 default=.false., debuggingParam=.true., do_not_log=(number_of_OBC_segments<=0))
+  call get_param(param_file, "MOM", "ENABLE_BUGS_BY_DEFAULT", enable_bugs, &
+                 "If true, the defaults for certain recently added bug-fix flags are set to "//&
+                 "recreate the bugs so that the code can be moved forward without changing "//&
+                 "answers for existing configurations.  The defaults for groups of bug-fix "//&
+                 "flags are periodically changed to correct the bugs, at which point this "//&
+                 "parameter will no longer be used to set their default.  Setting this to false "//&
+                 "means that bugs are only used if they are actively selected, but it also "//&
+                 "means that answers may change when code is updated due to newly found bugs.", &
+                 default=.true.)
 
   call get_param(param_file, "MOM", "DT", CS%dt, &
                  "The (baroclinic) dynamics time step.  The time-step that "//&
@@ -2600,7 +2629,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                "The time between OBC segment data updates for OBGC tracers. "//&
                "This must be an integer multiple of DT and DT_THERM. "//&
                "The default is set to DT.", &
-               units="s", default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(CS%OBC))
+               units="s", default=US%T_to_s*CS%dt, scale=US%s_to_T, do_not_log=.not.associated(OBC_in))
 
   ! This is here in case these values are used inappropriately.
   use_frazil = .false. ; bound_salinity = .false. ; use_p_surf_in_EOS = .false.
@@ -2705,11 +2734,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                default=default_answer_date, do_not_log=non_Bous)
   if (non_Bous) CS%answer_date = 99991231
 
-  call get_param(param_file, "MOM", "USE_DIABATIC_TIME_BUG", CS%use_diabatic_time_bug, &
-                 "If true, uses the wrong calendar time for diabatic processes, as was "//&
-                 "done in MOM6 versions prior to February 2018. This is not recommended.", &
-                 default=.false.)
-
   call get_param(param_file, "MOM", "SAVE_INITIAL_CONDS", save_IC, &
                  "If true, write the initial conditions to a file given "//&
                  "by IC_OUTPUT_FILE.", default=.false.)
@@ -2755,7 +2779,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call get_param(param_file, "MOM", "USE_PARTICLES", CS%use_particles, &
                  "If true, use the particles package.", default=.false.)
   call get_param(param_file, "MOM", "USE_UH_PARTICLES", CS%use_uh_particles, &
-                 "If true, use the uh velocity in the particles package.",default=.false.)
+                 "If true, use the uh velocity in the particles package.", &
+                 default=.false., do_not_log=.not.CS%use_particles)
+  call get_param(param_file, "MOM", "UH_PARTICLES_BUG", CS%uh_particles_bug, &
+                 "If true, use a bug in which the particles are advected inconsistently"//&
+                 "with the dynamics timestep instead of the tracer timestep.", &
+                 default=enable_bugs, do_not_log=.not.CS%use_uh_particles)
   CS%ensemble_ocean=.false.
   call get_param(param_file, "MOM", "ENSEMBLE_OCEAN", CS%ensemble_ocean, &
                  "If False, The model is being run in serial mode as a single realization. "//&
@@ -2794,6 +2823,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call get_param(param_file, "MOM", "INDEX_TURNS", turns, &
         "Number of counterclockwise quarter-turn index rotations.", &
         default=1, debuggingParam=.true.)
+  else
+    turns = 0
   endif
 
   ! Set up the model domain and grids.
@@ -2845,7 +2876,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call MOM_grid_init(G_in, param_file, US, HI_in, bathymetry_at_vel=bathy_at_vel)
 
   ! Allocate initialize time-invariant MOM variables.
-  call MOM_initialize_fixed(dG_in, US, OBC_in, param_file, .false., dirs%output_directory)
+  call MOM_initialize_fixed(dG_in, US, OBC_in, param_file)
 
   ! Copy the grid metrics and bathymetry to the ocean_grid_type
   call copy_dyngrid_to_MOM_grid(dG_in, G_in, US)
@@ -2864,9 +2895,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   endif
   CS%HFrz = (US%Z_to_m * GV%m_to_H) * HFrz_z
 
-  ! Finish OBC configuration that depend on the vertical grid
-  call open_boundary_setup_vert(GV, US, OBC_in)
-
   !   Shift from using the temporary dynamic grid type to using the final (potentially static)
   ! and properly rotated ocean-specific grid type and horizontal index type.
   if (CS%rotate_index) then
@@ -2882,9 +2910,6 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
     call copy_dyngrid_to_MOM_grid(dG, G, US)
 
     if (associated(OBC_in)) then
-      ! TODO: General OBC index rotations is not yet supported.
-      if (modulo(turns, 4) /= 1) &
-        call MOM_error(FATAL, "OBC index rotation of 180 and 270 degrees is not yet supported.")
       allocate(CS%OBC)
       call rotate_OBC_config(OBC_in, dG_in, CS%OBC, dG, turns)
     endif
@@ -2965,7 +2990,10 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   endif
 
   if (use_p_surf_in_EOS) allocate(CS%tv%p_surf(isd:ied,jsd:jed), source=0.0)
-  if (use_frazil) allocate(CS%tv%frazil(isd:ied,jsd:jed), source=0.0)
+  if (use_frazil) then
+    allocate(CS%tv%frazil(isd:ied,jsd:jed), source=0.0)
+    CS%tv%frazil_was_reset = .true.
+  endif
   if (bound_salinity) allocate(CS%tv%salt_deficit(isd:ied,jsd:jed), source=0.0)
 
   allocate(CS%Hml(isd:ied,jsd:jed), source=0.0)
@@ -3024,7 +3052,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   ! initialization routine for tv.
   if (use_EOS) then
     allocate(CS%tv%eqn_of_state)
-    call EOS_init(param_file, CS%tv%eqn_of_state, US)
+    call EOS_init(param_file, CS%tv%eqn_of_state, US, use_conT_absS)
   endif
   if (use_temperature) then
     allocate(CS%tv%TempxPmE(isd:ied,jsd:jed), source=0.0)
@@ -3064,36 +3092,35 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call mixedlayer_restrat_register_restarts(HI, GV, US, param_file, &
            CS%mixedlayer_restrat_CSp, restart_CSp)
 
-  if (CS%rotate_index .and. associated(OBC_in) .and. use_temperature) then
-    ! NOTE: register_temp_salt_segments includes allocation of tracer fields
-    !   along segments.  Bit reproducibility requires that MOM_initialize_state
-    !   be called on the input index map, so we must setup both OBC and OBC_in.
-    !
-    ! XXX: This call on OBC_in allocates the tracer fields on the unrotated
-    !   grid, but also incorrectly stores a pointer to a tracer_type for the
-    !   rotated registry (e.g. segment%tr_reg%Tr(n)%Tr) from CS%tracer_reg.
-    !
-    !   While incorrect and potentially dangerous, it does not seem that this
-    !   pointer is used during initialization, so we leave it for now.
-    call register_temp_salt_segments(GV, US, OBC_in, CS%tracer_Reg, param_file)
-  endif
-
   if (associated(CS%OBC)) then
+    ! This call initializes the relevant vertical remapping structures.
+    call open_boundary_setup_vert(GV, US, CS%OBC)
+
     ! Set up remaining information about open boundary conditions that is needed for OBCs.
+    ! Package specific changes to OBCs occur here.
     call call_OBC_register(G, GV, US, param_file, CS%update_OBC_CSp, CS%OBC, CS%tracer_Reg)
-  !### Package specific changes to OBCs need to go here?
 
     ! This is the equivalent to 2 calls to register_segment_tracer (per segment), which
     ! could occur with the call to update_OBC_data or after the main initialization.
     if (use_temperature) &
       call register_temp_salt_segments(GV, US, CS%OBC, CS%tracer_Reg, param_file)
-    !This is the equivalent call to register_temp_salt_segments for external tracers with OBC
+    ! This is the equivalent call to register_temp_salt_segments for external tracers with OBC
     call call_tracer_register_obc_segments(GV, param_file, CS%tracer_flow_CSp, CS%tracer_Reg, CS%OBC)
+
+    ! Set up the thickness reservoirs if using them.
+    if (CS%OBC%use_h_res) &
+      call segment_thickness_reservoir_init(GV, US, CS%OBC, param_file)
 
     ! This needs the number of tracers and to have called any code that sets whether
     ! reservoirs are used.
     call open_boundary_register_restarts(HI, GV, US, CS%OBC, CS%tracer_Reg, &
                           param_file, restart_CSp, use_temperature)
+
+    ! This call allocates the arrays on the segments for open boundary data, but it must occur
+    ! after any calls to call_tracer_register_obc_segments.
+    call initialize_segment_data(GV, US, CS%OBC, param_file, turns, use_temperature)
+
+    if (CS%debug_OBCs) call write_OBC_info(CS%OBC, G, GV, US)
   endif
 
   if (present(waves_CSp)) then
@@ -3120,7 +3147,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                           local_indexing=.not.global_indexing)
       call create_dyn_horgrid(dG_unmasked_in, HI_in_unmasked, bathymetry_at_vel=bathy_at_vel)
       call clone_MOM_domain(MOM_dom_unmasked, dG_unmasked_in%Domain)
-      call MOM_initialize_fixed(dG_unmasked_in, US, OBC_in, param_file, .false., dirs%output_directory)
+      call MOM_initialize_fixed(dG_unmasked_in, US, OBC_in, param_file)
       call write_ocean_geometry_file(dG_unmasked_in, param_file, dirs%output_directory, US=US, geom_file=geom_file)
       call deallocate_MOM_domain(MOM_dom_unmasked)
       call destroy_dyn_horgrid(dG_unmasked_in)
@@ -3136,7 +3163,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call callTree_waypoint("returned from MOM_initialize_coord() (initialize_MOM)")
 
   if (CS%use_ALE_algorithm) then
-    call ALE_init(param_file, GV, US, G%max_depth, CS%ALE_CSp)
+    call ALE_init(param_file, G, GV, US, G%max_depth, CS%ALE_CSp)
     call callTree_waypoint("returned from ALE_init() (initialize_MOM)")
   endif
 
@@ -3155,7 +3182,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   G%ke = GV%ke
 
   if (use_ice_shelf) then
-    point_calving=.false.; if (present(calve_ice_shelf_bergs)) point_calving=calve_ice_shelf_bergs
+    point_calving = .false. ; if (present(calve_ice_shelf_bergs)) point_calving = calve_ice_shelf_bergs
   endif
 
   if (CS%rotate_index) then
@@ -3176,6 +3203,16 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
 
       CS%tv%T => T_in
       CS%tv%S => S_in
+
+      if (associated(CS%OBC)) then
+        ! Log this parameter in MOM_initialize_state
+        call get_param(param_file, "MOM", "OBC_RESERVOIR_INIT_BUG", OBC_reservoir_init_bug, &
+                   "If true, set the OBC tracer reservoirs at the startup of a new run from the "//&
+                   "interior tracer concentrations regardless of properties that may be explicitly "//&
+                   "specified for the reservoir concentrations.", default=enable_bugs, do_not_log=.true.)
+        if (OBC_reservoir_init_bug .and. (allocated(CS%OBC%tres_x) .or. allocated(CS%OBC%tres_y))) &
+          call MOM_error(FATAL, "OBC_RESERVOIR_INIT_BUG can not be set to true with grid rotation.")
+      endif
     endif
 
     if (use_ice_shelf) then
@@ -3228,9 +3265,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       call update_ALE_sponge_field(CS%ALE_sponge_CSp, S_in, G, GV, CS%S)
     endif
 
-    if (associated(OBC_in)) &
-      call rotate_OBC_init(OBC_in, G, GV, US, param_file, CS%tv, restart_CSp, CS%OBC)
-
+   ! Deallocate the unrotated arrays and types that are no longer needed.
     deallocate(u_in)
     deallocate(v_in)
     deallocate(h_in)
@@ -3238,9 +3273,10 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       deallocate(T_in)
       deallocate(S_in)
     endif
-    if (use_ice_shelf) &
-      deallocate(frac_shelf_in,mass_shelf_in)
-  else
+    if (use_ice_shelf) deallocate(frac_shelf_in, mass_shelf_in)
+    if (associated(OBC_in)) call open_boundary_end(OBC_in)
+
+  else  ! The model is being run without grid rotation.  This is true of all production runs.
     if (use_ice_shelf) then
       call initialize_ice_shelf(param_file, G, Time, ice_shelf_CSp, diag_ptr, Time_init, &
                                dirs%output_directory, calve_ice_shelf_bergs=point_calving)
@@ -3249,12 +3285,12 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       call ice_shelf_query(ice_shelf_CSp,G,CS%frac_shelf_h, CS%mass_shelf)
       call MOM_initialize_state(CS%u, CS%v, CS%h, CS%tv, Time, G, GV, US, &
           param_file, dirs, restart_CSp, CS%ALE_CSp, CS%tracer_Reg, &
-          CS%sponge_CSp, CS%ALE_sponge_CSp,CS%oda_incupd_CSp, CS%OBC, Time_in, &
-          frac_shelf_h=CS%frac_shelf_h, mass_shelf=CS%mass_shelf)
+          CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%OBC, Time_in, &
+          frac_shelf_h=CS%frac_shelf_h, mass_shelf=CS%mass_shelf, OBC_for_bug=CS%OBC)
     else
       call MOM_initialize_state(CS%u, CS%v, CS%h, CS%tv, Time, G, GV, US, &
           param_file, dirs, restart_CSp, CS%ALE_CSp, CS%tracer_Reg, &
-          CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%OBC, Time_in)
+          CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%OBC, Time_in, OBC_for_bug=CS%OBC)
     endif
 
     ! Reset the first direction if it was found in a restart file.
@@ -3269,6 +3305,21 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   if (.not.(GV%Boussinesq .or. GV%semi_Boussinesq)) then
     allocate(CS%tv%SpV_avg(isd:ied,jsd:jed,nz), source=0.0)
     CS%tv%valid_SpV_halo = -1  ! This array does not yet have any valid data.
+  endif
+
+  if (associated(CS%OBC)) then
+    call MOM_initialize_OBCs(CS%h, CS%tv, CS%OBC, Time, G, GV, US, param_file, restart_CSp, CS%tracer_Reg)
+
+    if (use_temperature) then
+      call pass_var(CS%tv%T, G%Domain, complete=.false.)
+      call pass_var(CS%tv%S, G%Domain, complete=.true.)
+    endif
+    call calc_derived_thermo(CS%tv, CS%h, G, GV, US)
+
+    ! Call this during initialization to fill boundary arrays from fixed values
+    call read_OBC_segment_data(G, GV, US, CS%OBC, CS%tv, CS%h, Time)
+    call update_OBC_segment_data(G, GV, US, CS%OBC, CS%h, Time)
+    call initialize_OBC_segment_reservoirs(GV, CS%OBC)
   endif
 
   if (use_ice_shelf .and. CS%debug) then
@@ -3309,8 +3360,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
 
   if (ALE_remap_init_conds(CS%ALE_CSp) .and. .not. query_initialized(CS%h,"h",restart_CSp)) then
     ! This block is controlled by the ALE parameter REMAP_AFTER_INITIALIZATION.
-    ! \todo This block exists for legacy reasons and we should phase it out of
-    ! all examples. !###
+    ! \todo This block exists for legacy reasons and we should phase it out of all examples. !###
     if (CS%debug) then
       call uvchksum("Pre ALE adjust init cond [uv]", CS%u, CS%v, G%HI, haloshift=1, unscale=US%L_T_to_m_s)
       call hchksum(CS%h,"Pre ALE adjust init cond h", G%HI, haloshift=1, unscale=GV%H_to_MKS)
@@ -3482,16 +3532,18 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
               G, GV, US, param_file, diag, CS%dyn_split_RK2b_CSp, CS%HA_CSp, restart_CSp, &
               CS%dt, CS%ADp, CS%CDp, MOM_internal_state, CS%VarMix, CS%MEKE, &
               CS%thickness_diffuse_CSp, CS%OBC, CS%update_OBC_CSp, CS%ALE_CSp, CS%set_visc_CSp, &
-              CS%visc, dirs, CS%ntrunc, CS%pbv, calc_dtbt=calc_dtbt, cont_stencil=CS%cont_stencil)
+              CS%visc, dirs, CS%ntrunc, CS%pbv, calc_dtbt=calc_dtbt, &
+              cont_stencil=CS%cont_stencil, dyn_h_stencil=CS%dyn_h_stencil)
     else
       call initialize_dyn_split_RK2(CS%u, CS%v, CS%h, CS%tv, CS%uh, CS%vh, eta, Time, &
               G, GV, US, param_file, diag, CS%dyn_split_RK2_CSp, CS%HA_CSp, restart_CSp, &
               CS%dt, CS%ADp, CS%CDp, MOM_internal_state, CS%VarMix, CS%MEKE, &
               CS%thickness_diffuse_CSp, CS%OBC, CS%update_OBC_CSp, CS%ALE_CSp, CS%set_visc_CSp, &
-              CS%visc, dirs, CS%ntrunc, CS%pbv, calc_dtbt=calc_dtbt, cont_stencil=CS%cont_stencil)
+              CS%visc, dirs, CS%ntrunc, CS%pbv, calc_dtbt=calc_dtbt, &
+              cont_stencil=CS%cont_stencil, dyn_h_stencil=CS%dyn_h_stencil)
     endif
     if (CS%dtbt_reset_period > 0.0) then
-      CS%dtbt_reset_interval = real_to_time(US%T_to_s*CS%dtbt_reset_period)
+      CS%dtbt_reset_interval = real_to_time(CS%dtbt_reset_period, unscale=US%T_to_s)
       ! Set dtbt_reset_time to be the next even multiple of dtbt_reset_interval.
       CS%dtbt_reset_time = Time_init + CS%dtbt_reset_interval * &
                                  ((Time - Time_init) / CS%dtbt_reset_interval)
@@ -3503,22 +3555,23 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
       endif
     endif
   elseif (CS%use_RK2) then
-    call initialize_dyn_unsplit_RK2(CS%u, CS%v, CS%h, Time, G, GV, US,     &
-            param_file, diag, CS%dyn_unsplit_RK2_CSp,                      &
+    call initialize_dyn_unsplit_RK2(CS%u, CS%v, CS%h, CS%tv, Time, G, GV,  &
+            US, param_file, diag, CS%dyn_unsplit_RK2_CSp,                  &
             CS%ADp, CS%CDp, MOM_internal_state, CS%OBC,                    &
             CS%update_OBC_CSp, CS%ALE_CSp, CS%set_visc_CSp, CS%visc, dirs, &
-            CS%ntrunc, cont_stencil=CS%cont_stencil)
+            CS%ntrunc, cont_stencil=CS%cont_stencil, dyn_h_stencil=CS%dyn_h_stencil)
   else
-    call initialize_dyn_unsplit(CS%u, CS%v, CS%h, Time, G, GV, US,         &
-            param_file, diag, CS%dyn_unsplit_CSp,                          &
+    call initialize_dyn_unsplit(CS%u, CS%v, CS%h, CS%tv, Time, G, GV,      &
+            US, param_file, diag, CS%dyn_unsplit_CSp,                      &
             CS%ADp, CS%CDp, MOM_internal_state, CS%OBC,                    &
             CS%update_OBC_CSp, CS%ALE_CSp, CS%set_visc_CSp, CS%visc, dirs, &
-            CS%ntrunc, cont_stencil=CS%cont_stencil)
+            CS%ntrunc, cont_stencil=CS%cont_stencil, dyn_h_stencil=CS%dyn_h_stencil)
   endif
+  CS%dyn_h_stencil = max(2, CS%dyn_h_stencil)
 
   !Set OBC segment data update period
   if (associated(CS%OBC) .and. CS%dt_obc_seg_period > 0.0) then
-    CS%dt_obc_seg_interval = real_to_time(US%T_to_s*CS%dt_obc_seg_period)
+    CS%dt_obc_seg_interval = real_to_time(CS%dt_obc_seg_period, unscale=US%T_to_s)
     CS%dt_obc_seg_time = Time + CS%dt_obc_seg_interval
   endif
 
@@ -3561,6 +3614,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                               CS%sponge_CSp, CS%ALE_sponge_CSp, CS%oda_incupd_CSp, CS%int_tide_CSp)
   endif
 
+  CS%vertex_shear = kappa_shear_at_vertex(param_file)
+
   ! GMM, the following is needed to get BLDs into the dynamics module
   if (CS%split .and. fpmix) then
     call init_dyn_split_RK2_diabatic(CS%diabatic_CSp, CS%dyn_split_RK2_CSp)
@@ -3569,12 +3624,8 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   if (associated(CS%sponge_CSp)) &
     call init_sponge_diags(Time, G, GV, US, diag, CS%sponge_CSp)
 
-  if (associated(CS%ALE_sponge_CSp)) &
-    call init_ALE_sponge_diags(Time, G, diag, CS%ALE_sponge_CSp, US)
-
   if (associated(CS%oda_incupd_CSp)) &
     call init_oda_incupd_diags(Time, G, GV, diag, CS%oda_incupd_CSp, US)
-
 
   call tracer_advect_init(Time, G, US, param_file, diag, CS%tracer_adv_CSp)
   call tracer_hor_diff_init(Time, G, GV, US, param_file, diag, CS%tv%eqn_of_state, CS%diabatic_CSp, &
@@ -3609,6 +3660,9 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
              CS%ALE_sponge_CSp, CS%tv)
   if (present(tracer_flow_CSp)) tracer_flow_CSp => CS%tracer_flow_CSp
 
+  if (associated(CS%ALE_sponge_CSp)) &
+    call init_ALE_sponge_diags(Time, G, diag, CS%ALE_sponge_CSp, US)
+
   ! If running in offline tracer mode, initialize the necessary control structure and
   ! parameters
   if (present(offline_tracer_mode)) offline_tracer_mode=CS%offline_tracer_mode
@@ -3621,6 +3675,15 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
                               tracer_flow_CSp=CS%tracer_flow_CSp, tracer_Reg=CS%tracer_Reg, &
                               tv=CS%tv, x_before_y=(MODULO(first_direction,2)==0), debug=CS%debug )
     call register_diags_offline_transport(Time, CS%diag, CS%offline_CSp, GV, US)
+  endif
+
+  if (associated(CS%OBC)) then
+    ! At this point any information related to the tracer reservoirs has either been read from
+    ! the restart file or has been specified in the segments.  Initialize the tracer reservoir
+    ! values from the segments if they have not been set via the restart file.
+    call setup_OBC_tracer_reservoirs(G, GV, CS%OBC, restart_CSp)
+    call setup_OBC_thickness_reservoirs(G, GV, CS%OBC, restart_CSp)
+    call open_boundary_halo_update(G, CS%OBC)
   endif
 
   call register_obsolete_diagnostics(param_file, CS%diag)
@@ -3668,7 +3731,7 @@ subroutine initialize_MOM(Time, Time_init, param_file, dirs, CS, &
   call stochastics_init(CS%dt_therm, CS%G, CS%GV, CS%stoch_CS, param_file, diag, Time)
 
   call callTree_leave("initialize_MOM()")
-  call cpu_clock_end(id_clock_init)
+  call cpu_clock_end(id_clock_init) ; call cpu_clock_end(id_clock_ocean)
 
 end subroutine initialize_MOM
 
@@ -3750,11 +3813,11 @@ end subroutine register_diags
 subroutine MOM_timing_init(CS)
   type(MOM_control_struct), intent(in) :: CS  !< control structure set up by initialize_MOM.
 
-  id_clock_ocean    = cpu_clock_id('Ocean', grain=CLOCK_COMPONENT)
   id_clock_dynamics = cpu_clock_id('Ocean dynamics', grain=CLOCK_SUBCOMPONENT)
   id_clock_thermo   = cpu_clock_id('Ocean thermodynamics and tracers', grain=CLOCK_SUBCOMPONENT)
   id_clock_remap    = cpu_clock_id('Ocean grid generation and remapping', grain=CLOCK_SUBCOMPONENT)
   id_clock_other    = cpu_clock_id('Ocean Other', grain=CLOCK_SUBCOMPONENT)
+  id_clock_MOM_end  = cpu_clock_id('Ocean MOM_end', grain=CLOCK_SUBCOMPONENT)
   id_clock_tracer   = cpu_clock_id('(Ocean tracer advection)', grain=CLOCK_MODULE_DRIVER)
   if (.not.CS%adiabatic) then
     id_clock_diabatic = cpu_clock_id('(Ocean diabatic driver)', grain=CLOCK_MODULE_DRIVER)
@@ -3781,6 +3844,8 @@ subroutine MOM_timing_init(CS)
   endif
   id_clock_stoch = cpu_clock_id('(Stochastic EOS)', grain=CLOCK_MODULE)
   id_clock_varT = cpu_clock_id('(SGS Temperature Variance)', grain=CLOCK_MODULE)
+
+  id_clock_save_restart   = cpu_clock_id('(Ocean MOM save_restart)', grain=CLOCK_MODULE)
 
 end subroutine MOM_timing_init
 
@@ -3940,8 +4005,8 @@ subroutine extract_surface_state(CS, sfc_state_in)
   G => CS%G ; G_in => CS%G_in ; GV => CS%GV ; US => CS%US
   is  = G%isc ; ie  = G%iec ; js  = G%jsc ; je  = G%jec ; nz = GV%ke
   isd = G%isd ; ied = G%ied ; jsd = G%jsd ; jed = G%jed
-  iscB = G%iscB ; iecB = G%iecB; jscB = G%jscB ; jecB = G%jecB
-  isdB = G%isdB ; iedB = G%iedB; jsdB = G%jsdB ; jedB = G%jedB
+  iscB = G%iscB ; iecB = G%iecB ; jscB = G%jscB ; jecB = G%jecB
+  isdB = G%isdB ; iedB = G%iedB ; jsdB = G%jsdB ; jedB = G%jedB
   h => CS%h
 
   use_temperature = associated(CS%tv%T)
@@ -4077,7 +4142,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
       depth_ml = CS%Hmix_UV
       if (CS%answer_date < 20190101) depth_ml = GV%H_to_Z*CS%Hmix_UV
       !$OMP parallel do default(shared) private(depth,dh,hv)
-      do J=js-1,ie
+      do J=js-1,je
         do i=is,ie
           depth(i) = 0.0
           sfc_state%v(i,J) = 0.0
@@ -4244,8 +4309,8 @@ subroutine extract_surface_state(CS, sfc_state_in)
     do j=js,je ; do i=is,ie
       if (G%mask2dT(i,j)>0.) then
         localError = sfc_state%sea_lev(i,j) < -G%bathyT(i,j) - G%Z_ref &
-                .or. sfc_state%sea_lev(i,j) >=  CS%bad_val_ssh_max  &
-                .or. sfc_state%sea_lev(i,j) <= -CS%bad_val_ssh_max  &
+                .or. sfc_state%sea_lev(i,j) >=  CS%bad_val_ssh_max + (G%meanSL(i,j) - G%Z_ref) &
+                .or. sfc_state%sea_lev(i,j) <= -CS%bad_val_ssh_max + (G%meanSL(i,j) - G%Z_ref) &
                 .or. sfc_state%sea_lev(i,j) + G%bathyT(i,j) + G%Z_ref < CS%bad_val_col_thick
         if (use_temperature) localError = localError &
                 .or. sfc_state%SSS(i,j)<0.                        &
@@ -4258,7 +4323,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
             ig = i + G%HI%idg_offset ! Global i-index
             jg = j + G%HI%jdg_offset ! Global j-index
             if (use_temperature) then
-              write(msg(1:240),'(2(a,i4,1x),4(a,f8.3,1x),8(a,es11.4,1x))') &
+              write(msg(1:240),'(2(a,I0,1x),4(a,f8.3,1x),8(a,es11.4,1x))') &
                 'Extreme surface sfc_state detected: i=',ig,'j=',jg, &
                 'lon=',G%geoLonT(i,j), 'lat=',G%geoLatT(i,j), &
                 'x=',G%gridLonT(ig), 'y=',G%gridLatT(jg), &
@@ -4267,7 +4332,7 @@ subroutine extract_surface_state(CS, sfc_state_in)
                 'U-=',US%L_T_to_m_s*sfc_state%u(I-1,j), 'U+=',US%L_T_to_m_s*sfc_state%u(I,j), &
                 'V-=',US%L_T_to_m_s*sfc_state%v(i,J-1), 'V+=',US%L_T_to_m_s*sfc_state%v(i,J)
             else
-              write(msg(1:240),'(2(a,i4,1x),4(a,f8.3,1x),6(a,es11.4))') &
+              write(msg(1:240),'(2(a,I0,1x),4(a,f8.3,1x),6(a,es11.4))') &
                 'Extreme surface sfc_state detected: i=',ig,'j=',jg, &
                 'lon=',G%geoLonT(i,j), 'lat=',G%geoLatT(i,j), &
                 'x=',G%gridLonT(ig), 'y=',G%gridLatT(jg), &
@@ -4284,8 +4349,8 @@ subroutine extract_surface_state(CS, sfc_state_in)
     enddo ; enddo
     call sum_across_PEs(numberOfErrors)
     if (numberOfErrors>0) then
-      write(msg(1:240),'(3(a,i9,1x))') 'There were a total of ',numberOfErrors, &
-          'locations detected with extreme surface values!'
+      write(msg(1:240),'(a,i0,a)') 'There were a total of ',numberOfErrors, &
+          ' locations detected with extreme surface values!'
       call MOM_error(FATAL, trim(msg))
     endif
   endif
@@ -4409,6 +4474,7 @@ subroutine save_MOM_restart(CS, directory, time, G, time_stamped, filename, &
   logical :: showCallTree
   showCallTree = callTree_showQuery()
 
+  call cpu_clock_begin(id_clock_ocean) ; call cpu_clock_begin(id_clock_save_restart)
   if (showCallTree) call callTree_waypoint("About to call save_restart (step_MOM)")
   call save_restart(directory, time, G, CS%restart_CS, &
       time_stamped=time_stamped, filename=filename, GV=GV, &
@@ -4416,12 +4482,15 @@ subroutine save_MOM_restart(CS, directory, time, G, time_stamped, filename, &
   if (showCallTree) call callTree_waypoint("Done with call to save_restart (step_MOM)")
 
   if (CS%use_particles) call particles_save_restart(CS%particles, CS%h, directory, time, time_stamped)
+  call cpu_clock_end(id_clock_save_restart) ; call cpu_clock_end(id_clock_ocean)
 end subroutine save_MOM_restart
 
 
 !> End of ocean model, including memory deallocation
 subroutine MOM_end(CS)
   type(MOM_control_struct), intent(inout) :: CS   !< MOM control structure
+
+  call cpu_clock_begin(id_clock_ocean) ; call cpu_clock_begin(id_clock_MOM_end)
 
   call MOM_sum_output_end(CS%sum_output_CSp)
 
@@ -4491,6 +4560,7 @@ subroutine MOM_end(CS)
   DEALLOC_(CS%uh) ; DEALLOC_(CS%vh)
 
   if (associated(CS%update_OBC_CSp)) call OBC_register_end(CS%update_OBC_CSp)
+  if (associated(CS%OBC)) call open_boundary_end(CS%OBC)
 
   call verticalGridEnd(CS%GV)
   call MOM_grid_end(CS%G)
@@ -4506,6 +4576,9 @@ subroutine MOM_end(CS)
   call deallocate_MOM_domain(CS%G_in%domain, cursory=.true.)
 
   call unit_scaling_end(CS%US)
+
+  call cpu_clock_end(id_clock_MOM_end) ; call cpu_clock_end(id_clock_ocean)
+
 end subroutine MOM_end
 
 !> \namespace mom

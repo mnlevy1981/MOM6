@@ -1,8 +1,9 @@
-! This file is part of MOM6. See LICENSE.md for the license.
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Controls where open boundary conditions are applied
 module MOM_boundary_update
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_cpu_clock,             only : cpu_clock_id, cpu_clock_begin, cpu_clock_end, CLOCK_ROUTINE
 use MOM_diag_mediator,         only : time_type
@@ -10,7 +11,8 @@ use MOM_error_handler,         only : MOM_mesg, MOM_error, FATAL, WARNING
 use MOM_file_parser,           only : get_param, log_version, param_file_type, log_param
 use MOM_grid,                  only : ocean_grid_type
 use MOM_dyn_horgrid,           only : dyn_horgrid_type
-use MOM_open_boundary,         only : ocean_obc_type, update_OBC_segment_data
+use MOM_open_boundary,         only : ocean_obc_type, update_OBC_segment_data, chksum_OBC_segments
+use MOM_open_boundary,         only : read_OBC_segment_data
 use MOM_open_boundary,         only : OBC_registry_type, file_OBC_CS
 use MOM_open_boundary,         only : register_file_OBC, file_OBC_end
 use MOM_unit_scaling,          only : unit_scale_type
@@ -41,6 +43,11 @@ type, public :: update_OBC_CS ; private
   logical :: use_tidal_bay = .false.    !< If true, use the tidal_bay open boundary.
   logical :: use_shelfwave = .false.    !< If true, use the shelfwave open boundary.
   logical :: use_dyed_channel = .false. !< If true, use the dyed channel open boundary.
+  logical :: debug_OBCs = .false.       !< If true, write verbose OBC values for debugging purposes.
+  logical :: value_update_bug = .true.  !< If true, recover a bug that OBC segment data does not
+                                        !! update if all segments use 'value' and none uses 'file'.
+  integer :: nk_OBC_debug = 0           !< The number of layers of OBC segment data to write out
+                                        !! in full when DEBUG_OBCS is true.
   !>@{ Pointers to the control structures for named OBC specifications
   type(file_OBC_CS), pointer :: file_OBC_CSp => NULL()
   type(Kelvin_OBC_CS), pointer :: Kelvin_OBC_CSp => NULL()
@@ -69,6 +76,7 @@ subroutine call_OBC_register(G, GV, US, param_file, CS, OBC, tr_Reg)
   type(tracer_registry_type), pointer    :: tr_Reg     !< Tracer registry.
 
   ! Local variables
+  logical :: debug
   character(len=200) :: config
   character(len=40)  :: mdl = "MOM_boundary_update" ! This module's name.
   ! This include declares and sets the variable "version".
@@ -81,6 +89,9 @@ subroutine call_OBC_register(G, GV, US, param_file, CS, OBC, tr_Reg)
 
   call log_version(param_file, mdl, version, "")
 
+  call get_param(param_file, mdl, "OBC_VALUE_UPDATE_BUG", CS%value_update_bug, &
+                 "If true, recover a bug that OBC segment data does not update if all segments "//&
+                 "use 'value' and none uses 'file'.", default=.true.)
   call get_param(param_file, mdl, "USE_FILE_OBC", CS%use_files, &
                  "If true, use external files for the open boundary.", &
                  default=.false.)
@@ -106,6 +117,16 @@ subroutine call_OBC_register(G, GV, US, param_file, CS, OBC, tr_Reg)
                "   supercritical - now only needed here for the allocations\n"//&
                "   tidal_bay - Flather with tidal forcing on eastern boundary\n"//&
                "   USER - user specified", default="none", do_not_log=.true.)
+  call get_param(param_file, mdl, "DEBUG", debug, &
+                 "If true, write out verbose debugging data.", &
+                 default=.false., debuggingParam=.true.)
+  call get_param(param_file, mdl, "DEBUG_OBCS", CS%debug_OBCs, &
+                 "If true, write out verbose debugging data about OBCs.", &
+                 default=.false., debuggingParam=.true.)
+  call get_param(param_file, mdl, "NK_OBC_DEBUG", CS%nk_OBC_debug, &
+                 "The number of layers of OBC segment data to write out in full "//&
+                 "when DEBUG_OBCS is true.", &
+                 default=0, debuggingParam=.true., do_not_log=.not.CS%debug_OBCs)
 
   if (CS%use_files) CS%use_files = &
     register_file_OBC(param_file, CS%file_OBC_CSp, US, &
@@ -152,9 +173,15 @@ subroutine update_OBC_data(OBC, G, GV, US, tv, h, CS, Time)
   if (CS%use_shelfwave) &
       call shelfwave_set_OBC_data(OBC, CS%shelfwave_OBC_CSp, G, GV, US, h, Time)
   if (CS%use_dyed_channel) &
-      call dyed_channel_update_flow(OBC, CS%dyed_channel_OBC_CSp, G, GV, US, Time)
-  if (OBC%any_needs_IO_for_data .or. OBC%add_tide_constituents)  &
-      call update_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
+      call dyed_channel_update_flow(OBC, CS%dyed_channel_OBC_CSp, G, GV, US, h, Time)
+
+  if (.not. OBC%user_BCs_set_globally) then
+    if (OBC%any_needs_IO_for_data) call read_OBC_segment_data(G, GV, US, OBC, tv, h, Time)
+    if ((.not.CS%value_update_bug) .or. (OBC%any_needs_IO_for_data .or. OBC%add_tide_constituents)) &
+      call update_OBC_segment_data(G, GV, US, OBC, h, Time)
+  endif
+
+  if (CS%debug_OBCs) call chksum_OBC_segments(OBC, G, GV, US, CS%nk_OBC_debug)
 
 end subroutine update_OBC_data
 

@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> Routines to calculate checksums of various array and vector types
 module MOM_checksums
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_array_transform, only : rotate_array, rotate_array_pair, rotate_vector
 use MOM_array_transform, only : allocate_rotated_array
@@ -2191,17 +2193,18 @@ end subroutine chksum_v_3d
 ! into account.
 
 !> chksum1d does a checksum of a 1-dimensional array.
-subroutine chksum1d(array, mesg, start_i, end_i, compare_PEs)
-  real, dimension(:), intent(in) :: array   !< The array to be summed (index starts at 1) [abitrary].
+subroutine chksum1d(array, mesg, start_i, end_i, compare_PEs, logunit)
+  real, dimension(:), intent(in) :: array   !< The array to be summed (index starts at 1) in arbitrary units [A].
   character(len=*),   intent(in) :: mesg    !< An identifying message.
   integer, optional,  intent(in) :: start_i !< The starting index for the sum (default 1)
   integer, optional,  intent(in) :: end_i   !< The ending index for the sum (default all)
   logical, optional,  intent(in) :: compare_PEs !< If true, compare across PEs instead of summing
                                                 !! and list the root_PE value (default true)
+  integer, optional,  intent(in) :: logunit !< IO unit for checksum logging
 
-  integer :: is, ie, i, bc, sum1, sum_bc
-  real :: sum  ! The global sum of the array [arbitrary]
-  real, allocatable :: sum_here(:) ! The sum on each PE [arbitrary]
+  integer :: is, ie, i, bc, sum1, sum_bc, ioUnit
+  real :: sum  ! The global sum of the array [A]
+  real, allocatable :: sum_here(:) ! The sum on each PE [A]
   logical :: compare
   integer :: pe_num   ! pe number of the data
   integer :: nPEs     ! Total number of processsors
@@ -2210,6 +2213,7 @@ subroutine chksum1d(array, mesg, start_i, end_i, compare_PEs)
   if (present(start_i)) is = start_i
   if (present(end_i)) ie = end_i
   compare = .true. ; if (present(compare_PEs)) compare = compare_PEs
+  iounit = error_unit ; if (present(logunit)) iounit = logunit
 
   sum = 0.0 ; sum_bc = 0
   do i=is,ie
@@ -2231,17 +2235,17 @@ subroutine chksum1d(array, mesg, start_i, end_i, compare_PEs)
     sum_bc = sum1
   elseif (is_root_pe()) then
     if (sum1 /= nPEs*sum_bc) &
-      write(0, '(A40," bitcounts do not match across PEs: ",I12,1X,I12)') &
+      write(iounit, '(A40," bitcounts do not match across PEs: ",I12,1X,I12)') &
             mesg, sum1, nPEs*sum_bc
     do i=1,nPEs ; if (sum /= sum_here(i)) then
-      write(0, '(A40," PE ",i4," sum mismatches root_PE: ",3(ES22.13,1X))') &
+      write(iounit, '(A40," PE ",I0," sum mismatches root_PE: ",3(ES22.13,1X))') &
             mesg, i, sum_here(i), sum, sum_here(i)-sum
     endif ; enddo
   endif
   deallocate(sum_here)
 
   if (is_root_pe()) &
-    write(0,'(A50,1X,ES25.16,1X,I12)') mesg, sum, sum_bc
+    write(iounit,'(A50,1X,ES25.16,1X,I12)') mesg, sum, sum_bc
 
 end subroutine chksum1d
 
@@ -2249,13 +2253,16 @@ end subroutine chksum1d
 ! into account.
 
 !> chksum2d does a checksum of all data in a 2-d array.
-subroutine chksum2d(array, mesg)
+subroutine chksum2d(array, mesg, logunit)
 
-  real, dimension(:,:), intent(in) :: array !< The array to be checksummed [arbitrary]
+  real, dimension(:,:), intent(in) :: array !< The array to be checksummed in arbitrary units [A]
   character(len=*),     intent(in) :: mesg  !< An identifying message
+  integer,    optional, intent(in) :: logunit !< IO unit for checksum logging
 
-  integer :: xs,xe,ys,ye,i,j,sum1,bc
-  real :: sum  ! The global sum of the array [arbitrary]
+  integer :: xs, xe, ys, ye, i, j, sum1, bc, iounit
+  real :: sum  ! The global sum of the array [A]
+
+  iounit = error_unit ; if (present(logunit)) iounit = logunit
 
   xs = LBOUND(array,1) ; xe = UBOUND(array,1)
   ys = LBOUND(array,2) ; ye = UBOUND(array,2)
@@ -2270,20 +2277,23 @@ subroutine chksum2d(array, mesg)
   sum = reproducing_sum(array(:,:))
 
   if (is_root_pe()) &
-    write(0,'(A50,1X,ES25.16,1X,I12)') mesg, sum, sum1
-!    write(0,'(A40,1X,Z16.16,1X,Z16.16,1X,ES25.16,1X,I12)') &
+    write(iounit,'(A50,1X,ES25.16,1X,I12)') mesg, sum, sum1
+!    write(iounit,'(A40,1X,Z16.16,1X,Z16.16,1X,ES25.16,1X,I12)') &
 !      mesg, sum, sum1, sum, sum1
 
 end subroutine chksum2d
 
 !> chksum3d does a checksum of all data in a 2-d array.
-subroutine chksum3d(array, mesg)
+subroutine chksum3d(array, mesg, logunit)
 
-  real, dimension(:,:,:), intent(in) :: array !< The array to be checksummed [arbitrary]
+  real, dimension(:,:,:), intent(in) :: array !< The array to be checksummed in arbitrary units [A]
   character(len=*),       intent(in) :: mesg  !< An identifying message
+  integer,      optional, intent(in) :: logunit !< IO unit for checksum logging
 
-  integer :: xs,xe,ys,ye,zs,ze,i,j,k, bc,sum1
-  real :: sum  ! The global sum of the array [arbitrary]
+  integer :: xs, xe, ys, ye, zs, ze, i, j, k, bc, sum1, iounit
+  real :: sum  ! The global sum of the array [A]
+
+  iounit = error_unit ; if (present(logunit)) iounit = logunit
 
   xs = LBOUND(array,1) ; xe = UBOUND(array,1)
   ys = LBOUND(array,2) ; ye = UBOUND(array,2)
@@ -2299,15 +2309,15 @@ subroutine chksum3d(array, mesg)
   sum = reproducing_sum(array(:,:,:))
 
   if (is_root_pe()) &
-    write(0,'(A50,1X,ES25.16,1X,I12)') mesg, sum, sum1
-!    write(0,'(A40,1X,Z16.16,1X,Z16.16,1X,ES25.16,1X,I12)') &
+    write(iounit, '(A50,1X,ES25.16,1X,I12)') mesg, sum, sum1
+!    write(iounit, '(A40,1X,Z16.16,1X,Z16.16,1X,ES25.16,1X,I12)') &
 !      mesg, sum, sum1, sum, sum1
 
 end subroutine chksum3d
 
 !> This function returns .true. if x is a NaN, and .false. otherwise.
 function is_NaN_0d(x)
-  real, intent(in) :: x !< The value to be checked for NaNs [arbitrary]
+  real, intent(in) :: x !< The value to be checked for NaNs in arbitrary units [A]
   logical :: is_NaN_0d
 
  !is_NaN_0d = (((x < 0.0) .and. (x >= 0.0)) .or. &
@@ -2323,7 +2333,7 @@ end function is_NaN_0d
 
 !> Returns .true. if any element of x is a NaN, and .false. otherwise.
 function is_NaN_1d(x, skip_mpp)
-  real, dimension(:), intent(in) :: x !< The array to be checked for NaNs [arbitrary]
+  real, dimension(:), intent(in) :: x !< The array to be checked for NaNs in arbitrary units [A]
   logical,  optional, intent(in) :: skip_mpp  !< If true, only check this array only
                                               !! on the local PE (default false).
   logical :: is_NaN_1d
@@ -2346,7 +2356,7 @@ end function is_NaN_1d
 
 !> Returns .true. if any element of x is a NaN, and .false. otherwise.
 function is_NaN_2d(x)
-  real, dimension(:,:), intent(in) :: x !< The array to be checked for NaNs [arbitrary]
+  real, dimension(:,:), intent(in) :: x !< The array to be checked for NaNs in arbitrary units [A]
   logical :: is_NaN_2d
 
   integer :: i, j, n
@@ -2363,7 +2373,7 @@ end function is_NaN_2d
 
 !> Returns .true. if any element of x is a NaN, and .false. otherwise.
 function is_NaN_3d(x)
-  real, dimension(:,:,:), intent(in) :: x !< The array to be checked for NaNs [arbitrary]
+  real, dimension(:,:,:), intent(in) :: x !< The array to be checked for NaNs in arbitrary units [A]
   logical :: is_NaN_3d
 
   integer :: i, j, k, n
@@ -2446,7 +2456,7 @@ function field_checksum_real_2d(field, pelist, mask_val, turns, unscale) &
   integer(kind=int64) :: chksum                     !< checksum of array
 
   ! Local variables
-  real, allocatable :: field_rot(:,:)  ! A rotated version of field, with the same units [arbitrary]
+  real, allocatable :: field_rot(:,:)  ! A rotated version of field, with the same units [A ~> a]
   integer :: qturns ! The number of quarter turns through which to rotate field
   logical :: do_unscale ! If true, unscale the variable before it is checksummed
 
@@ -2486,7 +2496,7 @@ function field_checksum_real_3d(field, pelist, mask_val, turns, unscale) &
   integer(kind=int64) :: chksum                     !< checksum of array
 
   ! Local variables
-  real, allocatable :: field_rot(:,:,:)  ! A rotated version of field, with the same units [arbitrary]
+  real, allocatable :: field_rot(:,:,:)  ! A rotated version of field, with the same units [A ~> a]
   integer :: qturns ! The number of quarter turns through which to rotate field
   logical :: do_unscale ! If true, unscale the variable before it is checksummed
 
@@ -2526,7 +2536,7 @@ function field_checksum_real_4d(field, pelist, mask_val, turns, unscale) &
   integer(kind=int64) :: chksum                     !< checksum of array
 
   ! Local variables
-  real, allocatable :: field_rot(:,:,:,:)  ! A rotated version of field, with the same units [arbitrary]
+  real, allocatable :: field_rot(:,:,:,:)  ! A rotated version of field, with the same units [A ~> a]
   integer :: qturns ! The number of quarter turns through which to rotate field
   logical :: do_unscale ! If true, unscale the variable before it is checksummed
 
@@ -2633,9 +2643,9 @@ end subroutine chk_sum_msg2
 subroutine chk_sum_msg3(fmsg, aMean, aMin, aMax, mesg, iounit)
   character(len=*), intent(in) :: fmsg !< A checksum code-location specific preamble
   character(len=*), intent(in) :: mesg !< An identifying message supplied by top-level caller
-  real,             intent(in) :: aMean !< The mean value of the array [arbitrary]
-  real,             intent(in) :: aMin !< The minimum value of the array [arbitrary]
-  real,             intent(in) :: aMax !< The maximum value of the array [arbitrary]
+  real,             intent(in) :: aMean !< The mean value of the array in arbitrary units [A]
+  real,             intent(in) :: aMin !< The minimum value of the array [A]
+  real,             intent(in) :: aMax !< The maximum value of the array [A]
   integer,          intent(in) :: iounit !< Checksum logger IO unit
 
   ! NOTE: We add zero to aMin and aMax to remove any negative zeros.
@@ -2668,7 +2678,7 @@ end subroutine chksum_error
 !> Does a bitcount of a number by first casting to an integer and then using BTEST
 !! to check bit by bit
 integer function bitcount(x)
-  real, intent(in) :: x !< Number to be bitcount [arbitrary]
+  real, intent(in) :: x !< Number to be bitcount in arbitrary units [A]
 
   integer, parameter :: xk = kind(x)  !< Kind type of x
 

@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> A tracer package that is used as a diagnostic in the DOME experiments
 module DOME_tracer
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_coupler_types,   only : set_coupler_type_data, atmos_ocn_coupler_flux
 use MOM_diag_mediator,   only : diag_ctrl
@@ -127,8 +129,7 @@ function register_DOME_tracer(G, GV, US, param_file, CS, tr_Reg, restart_CS)
   allocate(CS%tr(isd:ied,jsd:jed,nz,NTR), source=0.0)
 
   do m=1,NTR
-    if (m < 10) then ; write(name,'("tr_D",I1.1)') m
-    else ; write(name,'("tr_D",I2.2)') m ; endif
+    write(name,'("tr_D",I0)') m
     write(longname,'("Concentration of DOME Tracer ",I2.2)') m
     CS%tr_desc(m) = var_desc(name, units="kg kg-1", longname=longname, caller=mdl)
     if (GV%Boussinesq) then ; flux_units = "kg kg-1 m3 s-1"

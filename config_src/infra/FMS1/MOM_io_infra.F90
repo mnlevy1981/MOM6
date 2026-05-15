@@ -1,7 +1,9 @@
+! This file is part of MOM6, the Modular Ocean Model version 6.
+! See the LICENSE file for licensing information.
+! SPDX-License-Identifier: Apache-2.0
+
 !> This module contains a thin inteface to mpp and fms I/O code
 module MOM_io_infra
-
-! This file is part of MOM6. See LICENSE.md for the license.
 
 use MOM_domain_infra,     only : MOM_domain_type, rescale_comp_data, AGRID, BGRID_NE, CGRID_NE
 use MOM_domain_infra,     only : domain2d, domain1d, CENTER, CORNER, NORTH_FACE, EAST_FACE
@@ -14,6 +16,7 @@ use mpp_io_mod,           only : mpp_open, mpp_close, mpp_flush
 use mpp_io_mod,           only : mpp_write_meta, mpp_write, mpp_read
 use mpp_io_mod,           only : mpp_get_atts, mpp_attribute_exist
 use mpp_io_mod,           only : mpp_get_axes, axistype, mpp_get_axis_data
+use mpp_io_mod,           only : mpp_get_axis_length
 use mpp_io_mod,           only : mpp_get_fields, fieldtype
 use mpp_io_mod,           only : mpp_get_info, mpp_get_times
 use mpp_io_mod,           only : mpp_io_init
