@@ -268,7 +268,7 @@ contains
         endif
       case (atm_co2_constant_iopt)
         do j=js,je ; do i=is,ie
-          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_co2_const
+          fluxes%atm_alt_co2(i,j) = G%mask2dT(i,j) * CS%atm_alt_co2_const
         enddo ; enddo
     end select
 
