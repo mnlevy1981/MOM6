@@ -2373,11 +2373,17 @@ subroutine State_SetScalar(value, scalar_id, State, mytask, scalar_name, scalar_
 
   ! local variables
   type(ESMF_Field)                :: field
+  type(ESMF_StateItem_Flag)       :: itemType
   real(ESMF_KIND_R8), pointer     :: farrayptr(:,:)
   character(len=*), parameter     :: subname='(MOM_cap:State_SetScalar)'
   !--------------------------------------------------------
 
   rc = ESMF_SUCCESS
+
+  call ESMF_StateGet(State, itemName=trim(scalar_name), itemType=itemType, rc=rc)
+  if (ChkErr(rc,__LINE__,u_FILE_u)) return
+
+  if (itemType == ESMF_STATEITEM_NOTFOUND) return
 
   call ESMF_StateGet(State, itemName=trim(scalar_name), field=field, rc=rc)
   if (ChkErr(rc,__LINE__,u_FILE_u)) return
