@@ -435,7 +435,7 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
         output_id=CS%flux_co2_ind, field_source=field_source)
     if (trim(field_source) == "surface_flux") then
       CS%sfo_cnt = CS%sfo_cnt + 1
-    else if (trim(field_source) == "interior_tendency") then
+    elseif (trim(field_source) == "interior_tendency") then
       CS%ito_cnt = CS%ito_cnt + 1
     end if
 
@@ -444,7 +444,7 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
         output_id=CS%total_Chl_ind, field_source=field_source)
     if (trim(field_source) == "surface_flux") then
       CS%sfo_cnt = CS%sfo_cnt + 1
-    else if (trim(field_source) == "interior_tendency") then
+    elseif (trim(field_source) == "interior_tendency") then
       CS%ito_cnt = CS%ito_cnt + 1
     end if
   end if
@@ -1229,6 +1229,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
                                                                    !! number and buffer space for collecting diags
                                                                    !! from all columns
 
+  character(len=200) :: log_message
   integer :: m, diag_size
 
   diag_size = size(MARBL_diags%diags)
@@ -1243,7 +1244,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
       if (id_diags(m)%id > 0) allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)), source=0.0)
-    else ! 3D field
+    elseif (trim(MARBL_diags%diags(m)%vertical_grid) == "layer_avg") then ! layer-averaged 3D field
       ! TODO: MARBL should provide v_extensive through MARBL_diags
       !       (for now, FESEDFLUX is the only one that should be true)
       !       Also, known issue where passing v_extensive=.false. isn't
@@ -1267,6 +1268,18 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
           trim(MARBL_diags%diags(m)%units))
       endif
       if (id_diags(m)%id > 0) allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)), source=0.0)
+    elseif (trim(MARBL_diags%diags(m)%vertical_grid) == "layer_iface") then ! layer-interface 3D field
+      id_diags(m)%id = register_diag_field("ocean_model", &
+        trim(MARBL_diags%diags(m)%short_name), &
+        diag%axesTi, & ! T=> tracer grid? i => layer interface
+        day, &
+        trim(MARBL_diags%diags(m)%long_name), &
+        trim(MARBL_diags%diags(m)%units))
+      if (id_diags(m)%id > 0) allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)+1), source=0.0)
+    else
+      write(log_message,"(3A)") "'", trim(MARBL_diags%diags(m)%vertical_grid), &
+                                "' is not a valid vertical grid"
+      call MOM_error(FATAL, log_message)
     endif
   enddo
 
