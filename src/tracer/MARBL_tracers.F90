@@ -433,18 +433,18 @@ subroutine configure_MARBL_tracers(GV, US, param_file, CS)
     ! CO2 Flux to the atmosphere
     call MARBL_instances%add_output_for_GCM(num_elements=1, field_name="flux_co2", &
         output_id=CS%flux_co2_ind, field_source=field_source)
-    if (trim(field_source) == "surface_flux") then
+    if (field_source == "surface_flux") then
       CS%sfo_cnt = CS%sfo_cnt + 1
-    elseif (trim(field_source) == "interior_tendency") then
+    elseif (field_source == "interior_tendency") then
       CS%ito_cnt = CS%ito_cnt + 1
     end if
 
     ! Total 3D Chlorophyll
     call MARBL_instances%add_output_for_GCM(num_elements=1, num_levels=nz, field_name="total_Chl", &
         output_id=CS%total_Chl_ind, field_source=field_source)
-    if (trim(field_source) == "surface_flux") then
+    if (field_source == "surface_flux") then
       CS%sfo_cnt = CS%sfo_cnt + 1
-    elseif (trim(field_source) == "interior_tendency") then
+    elseif (field_source == "interior_tendency") then
       CS%ito_cnt = CS%ito_cnt + 1
     end if
   end if
@@ -1236,7 +1236,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
   allocate(id_diags(diag_size))
   do m = 1, diag_size
     id_diags(m)%id = -1
-    if (trim(MARBL_diags%diags(m)%vertical_grid) == "none") then ! 2D field
+    if (MARBL_diags%diags(m)%vertical_grid == "none") then ! 2D field
       id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
         diag%axesT1, & ! T => tracer grid? 1 => no vertical grid
@@ -1244,14 +1244,14 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
         trim(MARBL_diags%diags(m)%long_name), &
         trim(MARBL_diags%diags(m)%units))
       if (id_diags(m)%id > 0) allocate(id_diags(m)%field_2d(SZI_(G),SZJ_(G)), source=0.0)
-    elseif (trim(MARBL_diags%diags(m)%vertical_grid) == "layer_avg") then ! layer-averaged 3D field
+    elseif (MARBL_diags%diags(m)%vertical_grid == "layer_avg") then ! layer-averaged 3D field
       ! TODO: MARBL should provide v_extensive through MARBL_diags
       !       (for now, FESEDFLUX is the only one that should be true)
       !       Also, known issue where passing v_extensive=.false. isn't
       !       treated the same as not passing v_extensive
-      if ((trim(MARBL_diags%diags(m)%short_name) == "FESEDFLUX") .or. &
-          (trim(MARBL_diags%diags(m)%short_name) == "FEREDSEDFLUX") .or. &
-          (trim(MARBL_diags%diags(m)%short_name) == "FEVENTFLUX")) then
+      if ((MARBL_diags%diags(m)%short_name == "FESEDFLUX") .or. &
+          (MARBL_diags%diags(m)%short_name == "FEREDSEDFLUX") .or. &
+          (MARBL_diags%diags(m)%short_name == "FEVENTFLUX")) then
         id_diags(m)%id = register_diag_field("ocean_model", &
           trim(MARBL_diags%diags(m)%short_name), &
           diag%axesTL, & ! T=> tracer grid? L => layer center
@@ -1268,7 +1268,7 @@ subroutine register_MARBL_diags(MARBL_diags, diag, day, G, id_diags)
           trim(MARBL_diags%diags(m)%units))
       endif
       if (id_diags(m)%id > 0) allocate(id_diags(m)%field_3d(SZI_(G),SZJ_(G), SZK_(G)), source=0.0)
-    elseif (trim(MARBL_diags%diags(m)%vertical_grid) == "layer_iface") then ! layer-interface 3D field
+    elseif (MARBL_diags%diags(m)%vertical_grid == "layer_iface") then ! layer-interface 3D field
       id_diags(m)%id = register_diag_field("ocean_model", &
         trim(MARBL_diags%diags(m)%short_name), &
         diag%axesTi, & ! T=> tracer grid? i => layer interface
@@ -1314,7 +1314,7 @@ subroutine setup_saved_state(MARBL_saved_state, HI, GV, restart_CS, tracers_may_
         call register_restart_field(local_saved_state(m)%field_2d, varname, &
             .not.tracers_may_reinit, restart_CS)
       case (3)
-        if (trim(MARBL_saved_state%state(m)%vertical_grid).eq."layer_avg") then
+        if (MARBL_saved_state%state(m)%vertical_grid == "layer_avg") then
           allocate(local_saved_state(m)%field_3d(SZI_(HI),SZJ_(HI), SZK_(GV)), source=0.0)
           call register_restart_field(local_saved_state(m)%field_3d, varname, &
               .not.tracers_may_reinit, restart_CS)
@@ -2280,37 +2280,37 @@ subroutine set_riv_flux_tracer_inds(CS)
   CS%tracer_inds%abio_di14c_ind = 0
   do m=1,CS%ntr
     name = MARBL_instances%tracer_metadata(m)%short_name
-    if (trim(name) == "NO3") then
+    if (name == "NO3") then
       CS%tracer_inds%no3_ind = m
-    elseif (trim(name) == "PO4") then
+    elseif (name == "PO4") then
        CS%tracer_inds%po4_ind = m
-    elseif (trim(name) == "DON") then
+    elseif (name == "DON") then
        CS%tracer_inds%don_ind = m
-    elseif (trim(name) == "DONr") then
+    elseif (name == "DONr") then
        CS%tracer_inds%donr_ind = m
-    elseif (trim(name) == "DOP") then
+    elseif (name == "DOP") then
        CS%tracer_inds%dop_ind = m
-    elseif (trim(name) == "DOPr") then
+    elseif (name == "DOPr") then
        CS%tracer_inds%dopr_ind = m
-    elseif (trim(name) == "SiO3") then
+    elseif (name == "SiO3") then
        CS%tracer_inds%sio3_ind = m
-    elseif (trim(name) == "Fe") then
+    elseif (name == "Fe") then
        CS%tracer_inds%fe_ind = m
-    elseif (trim(name) == "DOC") then
+    elseif (name == "DOC") then
        CS%tracer_inds%doc_ind = m
-    elseif (trim(name) == "DOCr") then
+    elseif (name == "DOCr") then
        CS%tracer_inds%docr_ind = m
-    elseif (trim(name) == "ALK") then
+    elseif (name == "ALK") then
        CS%tracer_inds%alk_ind = m
-    elseif (trim(name) == "ALK_ALT_CO2") then
+    elseif (name == "ALK_ALT_CO2") then
        CS%tracer_inds%alk_alt_co2_ind = m
-    elseif (trim(name) == "DIC") then
+    elseif (name == "DIC") then
        CS%tracer_inds%dic_ind = m
-    elseif (trim(name) == "DIC_ALT_CO2") then
+    elseif (name == "DIC_ALT_CO2") then
        CS%tracer_inds%dic_alt_co2_ind = m
-    elseif (trim(name) == "ABIO_DIC") then
+    elseif (name == "ABIO_DIC") then
        CS%tracer_inds%abio_dic_ind = m
-    elseif (trim(name) == "ABIO_DI14C") then
+    elseif (name == "ABIO_DI14C") then
        CS%tracer_inds%abio_di14c_ind = m
     endif
   enddo
