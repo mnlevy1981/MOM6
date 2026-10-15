@@ -1,6 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
+!!SKILLS: 0.3.2
 
 #include "do_concurrent_compat.h"
 
@@ -688,7 +689,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
   if (CS%direct_stress) then
-    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(i,j) > 0.0)
+    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(i,j) > 0.0) &
+        DO_LOCALITY(local(k, zDS, stress, h_a, hfr))
       surface_stress(I,j) = 0.0
       zDS = 0.0
       stress = dt_Rho0 * forces%taux(I,j)
@@ -917,7 +919,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
   if (CS%direct_stress) then
-    do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.0)
+    do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.0) &
+        DO_LOCALITY(local(k, zDS, stress, h_a, hfr))
       surface_stress(i,J) = 0.0
       zDS = 0.0
       stress = dt_Rho0 * forces%tauy(i,J)
@@ -1444,7 +1447,8 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   !$omp   private(z_i, z_i_gl90, dz_harm, hvel, dz_vel, a_cpl, a_cpl_gl90, &
   !$omp&     I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, &
   !$omp&     zcol_p1, h_harm, h_arith, h_delta, dz_arith, z2, botfn, z_clear, &
-  !$omp&     z2_wt, h_ml)
+  !$omp&     z2_wt, h_ml, hvel_shelf, dz_vel_shelf, a_shelf, I_HTbl, Ztop_min, &
+  !$omp&     topfn, do_any_shelf)
   do j=js,je ; do I=Isq,Ieq ; if (G%mask2dCu(I,j) > 0.) then
     I_Hbbl = 1. / (CS%Hbbl + dz_neglect)
     if (CS%use_GL90_in_SSW) then
@@ -1753,7 +1757,8 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   !$omp   private(z_i, z_i_gl90, dz_harm, hvel, dz_vel, a_cpl, a_cpl_gl90, &
   !$omp     I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, &
   !$omp     zcol_p1, h_harm, h_arith, h_delta, dz_arith, z2, botfn, z_clear, &
-  !$omp     z2_wt, h_ml)
+  !$omp     z2_wt, h_ml, hvel_shelf, dz_vel_shelf, a_shelf, I_HTbl, Ztop_min, &
+  !$omp     topfn, do_any_shelf)
   do J=Jsq,Jeq ; do i=is,ie ; if (G%mask2dCv(i,J) > 0.) then
     I_Hbbl = 1. / (CS%Hbbl + dz_neglect)
     if (CS%use_GL90_in_SSW) then
@@ -3164,20 +3169,22 @@ subroutine vertvisc_limit_vel(u, v, h, ADp, CDp, forces, visc, dt, G, GV, US, CS
       vel_report(I,j) = 3.0e8 * US%m_s_to_L_T
     enddo
 
-    do concurrent (k=1:nz, j=js:je, I=Isq:Ieq) &
-        DO_LOCALITY(reduce(.or.: trunc_any, do_any_write))
-      if (abs(u(I,j,k)) < CS%vel_underflow) u(I,j,k) = 0.0
-      if (u(I,j,k) < 0.0) then
-        CFL = (-u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
-      else
-        CFL = (u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
-      endif
-      if (CFL > CS%CFL_trunc) trunc_any = .true.
-      if (CFL > CS%CFL_report) then
-        dowrite(I,j) = .true.
-        do_any_write = .true.
-        vel_report(I,j) = min(vel_report(I,j), abs(u(I,j,k)))
-      endif
+    do concurrent (j=js:je, I=Isq:Ieq) &
+        DO_LOCALITY(local(k, CFL) reduce(.or.: trunc_any, do_any_write))
+      do k=1,nz
+        if (abs(u(I,j,k)) < CS%vel_underflow) u(I,j,k) = 0.0
+        if (u(I,j,k) < 0.0) then
+          CFL = (-u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i+1,j))
+        else
+          CFL = (u(I,j,k) * dt) * (G%dy_Cu(I,j) * G%IareaT(i,j))
+        endif
+        if (CFL > CS%CFL_trunc) trunc_any = .true.
+        if (CFL > CS%CFL_report) then
+          dowrite(I,j) = .true.
+          do_any_write = .true.
+          vel_report(I,j) = min(vel_report(I,j), abs(u(I,j,k)))
+        endif
+      enddo
     enddo
 
     do concurrent (j=js:je, I=Isq:Ieq, dowrite(I,j))
@@ -3234,20 +3241,22 @@ subroutine vertvisc_limit_vel(u, v, h, ADp, CDp, forces, visc, dt, G, GV, US, CS
       vel_report(i,J) = 3.0e8 * US%m_s_to_L_T
     enddo
 
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie) &
-        DO_LOCALITY(reduce(.or.: trunc_any, do_any_write))
-      if (abs(v(i,J,k)) < CS%vel_underflow) v(i,J,k) = 0.0
-      if (v(i,J,k) < 0.0) then
-        CFL = (-v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
-      else
-        CFL = (v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
-      endif
-      if (CFL > CS%CFL_trunc) trunc_any = .true.
-      if (CFL > CS%CFL_report) then
-        dowrite(i,J) = .true.
-        do_any_write = .true.
-        vel_report(i,J) = min(vel_report(i,J), abs(v(i,J,k)))
-      endif
+    do concurrent (J=Jsq:Jeq, i=is:ie) &
+        DO_LOCALITY(local(k, CFL) reduce(.or.: trunc_any, do_any_write))
+      do k=1,nz
+        if (abs(v(i,J,k)) < CS%vel_underflow) v(i,J,k) = 0.0
+        if (v(i,J,k) < 0.0) then
+          CFL = (-v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j+1))
+        else
+          CFL = (v(i,J,k) * dt) * (G%dx_Cv(i,J) * G%IareaT(i,j))
+        endif
+        if (CFL > CS%CFL_trunc) trunc_any = .true.
+        if (CFL > CS%CFL_report) then
+          dowrite(i,J) = .true.
+          do_any_write = .true.
+          vel_report(i,J) = min(vel_report(i,J), abs(v(i,J,k)))
+        endif
+      enddo
     enddo
 
     do concurrent (J=Jsq:Jeq, i=is:ie, dowrite(i,J))
