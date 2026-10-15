@@ -772,7 +772,7 @@ subroutine vertvisc_TR(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, 
   !$omp target enter data map(alloc: c1)
 
   do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(I,j) > 0.) &
-      DO_LOCALITY(local(k, b1, c1, d1, Ray, b_denom_1))
+      DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (allocated(visc%Ray_u)) Ray = visc%Ray_u(I,j,1)
 
@@ -827,7 +827,7 @@ subroutine vertvisc_TR(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, 
   if ((CS%id_du_dt_visc_gl90 > 0) .or. (CS%id_GLwork > 0)) then
     if (associated(ADp%du_dt_visc_gl90)) then
       do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(I,j) > 0.) &
-          DO_LOCALITY(local(k, b1, c1, d1, b_denom_1))
+          DO_LOCALITY(local(k, b1, d1, b_denom_1))
         b_denom_1 = CS%h_u(I,j,1)  ! CS%a_u_gl90(I,j,1) is zero
         b1 = 1.0 / (b_denom_1 + dt * CS%a_u_gl90(I,j,2))
         d1 = b_denom_1 * b1
@@ -974,7 +974,7 @@ subroutine vertvisc_TR(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, 
   endif
 
   do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.) &
-      DO_LOCALITY(local(k, b1, c1, d1, Ray, b_denom_1))
+      DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (allocated(visc%Ray_v)) Ray = visc%Ray_v(i,J,1)
 
@@ -1029,7 +1029,7 @@ subroutine vertvisc_TR(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, 
   if ((CS%id_dv_dt_visc_gl90 > 0) .or. (CS%id_GLwork > 0)) then
     if (associated(ADp%dv_dt_visc_gl90)) then
       do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.) &
-          DO_LOCALITY(local(k, b1, c1, d1, b_denom_1))
+          DO_LOCALITY(local(k, b1, d1, b_denom_1))
         b_denom_1 = CS%h_v(i,J,1)  ! CS%a_v_gl90(i,J,1) is zero
         b1 = 1.0 / (b_denom_1 + dt*CS%a_v_gl90(i,J,2))
         d1 = b_denom_1 * b1
@@ -1274,7 +1274,7 @@ subroutine vertvisc_remnant_TR(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
   ! Find the zonal viscous remnant using a modification of a standard tridagonal solver.
 
   do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(I,j) > 0.) &
-      DO_LOCALITY(local(k, b1, c1, d1, Ray, b_denom_1))
+      DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (allocated(visc%Ray_u)) Ray = visc%Ray_u(I,j,1)
 
@@ -1305,7 +1305,7 @@ subroutine vertvisc_remnant_TR(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
   ! Now find the meridional viscous remnant using the robust tridiagonal solver.
 
   do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.) &
-      DO_LOCALITY(local(k, b1, c1, d1, Ray, b_denom_1))
+      DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (allocated(visc%Ray_v)) Ray = visc%Ray_v(i,J,1)
 
@@ -1518,9 +1518,8 @@ subroutine vertvisc_coef_TR(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OB
   !$omp target update to(visc%Kv_shear_Bu) if (associated(visc%Kv_shear_Bu))
 
   do concurrent (j=js:je, I=Isq:Ieq, G%mask2dCu(I,j) > 0.) &
-      DO_LOCALITY(local(k, z_i, z_i_gl90, dz_harm, hvel, dz_vel, a_cpl, a_cpl_gl90, I_Hbbl, I_Hbbl_gl90)) &
-      DO_LOCALITY(local(kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, zcol_p1, h_harm, h_arith, h_delta, dz_arith)) &
-      DO_LOCALITY(local(z2, botfn, z_clear, z2_wt, h_ml, hvel_shelf, dz_vel_shelf, a_shelf, I_HTbl, Ztop_min)) &
+      DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, zcol_p1, h_harm)) &
+      DO_LOCALITY(local(h_arith, h_delta, dz_arith, z2, botfn, z_clear, z2_wt, h_ml, I_HTbl, Ztop_min)) &
       DO_LOCALITY(local(topfn, do_any_shelf))
     I_Hbbl = 1. / (CS%Hbbl + dz_neglect)
     if (CS%use_GL90_in_SSW) then
@@ -1826,9 +1825,8 @@ subroutine vertvisc_coef_TR(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OB
   ! Now work on v-points.
 
   do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.) &
-      DO_LOCALITY(local(k, z_i, z_i_gl90, dz_harm, hvel, dz_vel, a_cpl, a_cpl_gl90, I_Hbbl, I_Hbbl_gl90)) &
-      DO_LOCALITY(local(kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, zcol_p1, h_harm, h_arith, h_delta, dz_arith)) &
-      DO_LOCALITY(local(z2, botfn, z_clear, z2_wt, h_ml, hvel_shelf, dz_vel_shelf, a_shelf, I_HTbl, Ztop_min)) &
+      DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, zcol_p1, h_harm)) &
+      DO_LOCALITY(local(h_arith, h_delta, dz_arith, z2, botfn, z_clear, z2_wt, h_ml, I_HTbl, Ztop_min)) &
       DO_LOCALITY(local(topfn, do_any_shelf))
     I_Hbbl = 1. / (CS%Hbbl + dz_neglect)
     if (CS%use_GL90_in_SSW) then
