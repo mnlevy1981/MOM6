@@ -860,21 +860,35 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 
   type(vertvisc_container_type)     :: visc_a   ! Copies of the viscosities and bottom drag in visc
   type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
+  type(RealArray_t) :: taux_bot_a  ! Zonal bottom stress from ocean to rock [R L Z T-2 ~> Pa]
+  type(RealArray_t) :: tauy_bot_a  ! Meridional bottom stress from ocean to rock [R L Z T-2 ~> Pa]
 
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
+  if (present(taux_bot)) &
+    call taux_bot_a%alloc(lb=LBOUND(taux_bot), ub=UBOUND(taux_bot), source=taux_bot)
+  if (present(tauy_bot)) &
+    call tauy_bot_a%alloc(lb=LBOUND(tauy_bot), ub=UBOUND(tauy_bot), source=tauy_bot)
 
   call vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, CS, &
-                   taux_bot, tauy_bot, fpmix, Waves)
+                   taux_bot_a, tauy_bot_a, fpmix, Waves)
 
   call visc_a%copy_back(visc)
   call forces_a%free()
+  if (present(taux_bot)) then
+    call taux_bot_a%copy2F(taux_bot)
+    call taux_bot_a%free()
+  endif
+  if (present(tauy_bot)) then
+    call tauy_bot_a%copy2F(tauy_bot)
+    call tauy_bot_a%free()
+  endif
 
 end subroutine vertvisc
 
 !> The implementation of vertvisc (the root of its call tree).
 subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, CS, &
-                       taux_bot, tauy_bot, fpmix, Waves)
+                       taux_bot_a, tauy_bot_a, fpmix, Waves)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
@@ -894,12 +908,10 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
                                                    !! equations for diagnostics
   type(cont_diag_ptrs),  intent(inout)   :: CDp    !< Continuity equation terms
   type(vertvisc_CS)                      :: CS     !< Vertical viscosity control structure
-  real, dimension(SZIB_(G),SZJ_(G)), &
-                   optional, intent(out) :: taux_bot !< Zonal bottom stress from ocean to
-                                                     !! rock [R L Z T-2 ~> Pa]
-  real, dimension(SZI_(G),SZJB_(G)), &
-                   optional, intent(out) :: tauy_bot !< Meridional bottom stress from ocean to
-                                                     !! rock [R L Z T-2 ~> Pa]
+  type(RealArray_t),       intent(inout) :: taux_bot_a !< Zonal bottom stress from ocean to
+                                                       !! rock [R L Z T-2 ~> Pa]
+  type(RealArray_t),       intent(inout) :: tauy_bot_a !< Meridional bottom stress from ocean to
+                                                       !! rock [R L Z T-2 ~> Pa]
   logical,         optional, intent(in)  :: fpmix !< fpmix along Eulerian shear
   type(wave_parameters_CS), &
                    optional, pointer     :: Waves !< Container for wave/Stokes information
@@ -956,6 +968,9 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
   real, dimension(:,:,:), contiguous, pointer :: Ray_u, Ray_v ! The Rayleigh drag velocities at
                                                          ! u- and v-points
                                                          ! [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:), contiguous, pointer :: taux_bot, tauy_bot ! The zonal and meridional
+                                                         ! bottom stresses from ocean to rock
+                                                         ! [R L Z T-2 ~> Pa]
 
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -969,6 +984,9 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
   if (visc_a%tauy_shelf_a%associated()) call visc_a%tauy_shelf_a%view(tauy_shelf)
   if (visc_a%Ray_u_a%associated()) call visc_a%Ray_u_a%view(Ray_u)
   if (visc_a%Ray_v_a%associated()) call visc_a%Ray_v_a%view(Ray_v)
+  nullify(taux_bot, tauy_bot)
+  if (taux_bot_a%associated()) call taux_bot_a%view(taux_bot)
+  if (tauy_bot_a%associated()) call tauy_bot_a%view(tauy_bot)
 
   if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(visc): "// &
          "Module must be initialized before it is used.")
@@ -1212,7 +1230,7 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
     enddo
   endif
 
-  if (present(taux_bot)) then
+  if (taux_bot_a%associated()) then
     do concurrent (j=G%jsc:G%jec, I=Isq:Ieq)
       taux_bot(I,j) = GV%H_to_RZ * (u(I,j,nz) * CS%a_u(I,j,nz+1))
     enddo
@@ -1409,7 +1427,7 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
   endif
 
   ! JORGE TODO: this has to be malloced
-  if (present(tauy_bot)) then
+  if (tauy_bot_a%associated()) then
     do concurrent (J=Jsq:Jeq, i=is:ie)
       tauy_bot(i,J) = GV%H_to_RZ * (v(i,J,nz) * CS%a_v(i,J,nz+1))
     enddo
@@ -1488,9 +1506,9 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
       call post_data(CS%id_dv_dt_visc, ADp%dv_dt_visc, CS%diag)
     if (CS%id_dv_dt_visc_gl90 > 0) &
       call post_data(CS%id_dv_dt_visc_gl90, ADp%dv_dt_visc_gl90, CS%diag)
-    if (present(taux_bot) .and. (CS%id_taux_bot > 0)) &
+    if (taux_bot_a%associated() .and. (CS%id_taux_bot > 0)) &
       call post_data(CS%id_taux_bot, taux_bot, CS%diag)
-    if (present(tauy_bot) .and. (CS%id_tauy_bot > 0)) &
+    if (tauy_bot_a%associated() .and. (CS%id_tauy_bot > 0)) &
       call post_data(CS%id_tauy_bot, tauy_bot, CS%diag)
     if (CS%id_du_dt_str > 0) &
       call post_data(CS%id_du_dt_str, ADp%du_dt_str, CS%diag)
