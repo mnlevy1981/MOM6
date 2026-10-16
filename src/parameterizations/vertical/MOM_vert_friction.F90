@@ -860,21 +860,32 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 
   type(vertvisc_container_type)     :: visc_a   ! Copies of the viscosities and bottom drag in visc
   type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
+  type(RealArray_t) :: u_a  ! Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t) :: v_a  ! Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
   type(RealArray_t) :: taux_bot_a  ! Zonal bottom stress from ocean to rock [R L Z T-2 ~> Pa]
   type(RealArray_t) :: tauy_bot_a  ! Meridional bottom stress from ocean to rock [R L Z T-2 ~> Pa]
 
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
+  call u_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=u)
+  call v_a%alloc(lb=LBOUND(v), ub=UBOUND(v), source=v)
+  call h_a%alloc(lb=LBOUND(h), ub=UBOUND(h), source=h)
   if (present(taux_bot)) &
     call taux_bot_a%alloc(lb=LBOUND(taux_bot), ub=UBOUND(taux_bot), source=taux_bot)
   if (present(tauy_bot)) &
     call tauy_bot_a%alloc(lb=LBOUND(tauy_bot), ub=UBOUND(tauy_bot), source=tauy_bot)
 
-  call vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, CS, &
+  call vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, CS, &
                    taux_bot_a, tauy_bot_a, fpmix, Waves)
 
   call visc_a%copy_back(visc)
   call forces_a%free()
+  call u_a%copy2F(u)
+  call v_a%copy2F(v)
+  call u_a%free()
+  call v_a%free()
+  call h_a%free()
   if (present(taux_bot)) then
     call taux_bot_a%copy2F(taux_bot)
     call taux_bot_a%free()
@@ -887,17 +898,14 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 end subroutine vertvisc
 
 !> The implementation of vertvisc (the root of its call tree).
-subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, CS, &
+subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, CS, &
                        taux_bot_a, tauy_bot_a, fpmix, Waves)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(inout) :: u      !< Zonal velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(inout) :: v      !< Meridional velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in)    :: h      !< Layer thickness [H ~> m or kg m-2]
+  type(RealArray_t),       intent(inout) :: u_a    !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(inout) :: v_a    !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: h_a    !< Layer thickness [H ~> m or kg m-2]
   type(mech_forcing_container_type), &
                          intent(in)      :: forces_a !< Copies of the driving mechanical forces
   type(vertvisc_container_type), &
@@ -945,7 +953,8 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
                            ! by the density [H L T-1 ~> m2 s-1 or kg m-1 s-1].
   real :: accel_underflow  ! An acceleration magnitude that is so small that values that are less
                            ! than this are diagnosed as 0 [L T-2 ~> m s-2].
-  real :: zDS, h_a         ! Temporary thickness variables used with direct_stress [H ~> m or kg m-2]
+  real :: zDS, h_avg       ! Temporary thickness variables used with direct_stress
+                           ! [H ~> m or kg m-2]
   real :: hfr              ! Temporary ratio of thicknesses used with direct_stress [nondim]
   real :: surface_stress(SZIB_(G), SZJB_(G))
     ! The same as stress, unless the wind stress is applied as a body force
@@ -972,9 +981,17 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
                                                          ! bottom stresses from ocean to rock
                                                          ! [R L Z T-2 ~> Pa]
 
+  real, dimension(:,:,:), contiguous, pointer :: u, v ! The zonal and meridional velocities
+                                                    ! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: h    ! Layer thickness [H ~> m or kg m-2]
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  call u_a%view(u)
+  call v_a%view(v)
+  call h_a%view(h)
 
   nullify(taux, tauy)
   if (forces_a%taux_a%associated()) call forces_a%taux_a%view(taux)
@@ -1065,16 +1082,16 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
   ! the wind stress is applied as a stress boundary condition.
   if (CS%direct_stress) then
     do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(i,j) > 0.0) &
-        DO_LOCALITY(local(k, zDS, stress, h_a, hfr))
+        DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
       surface_stress(I,j) = 0.0
       zDS = 0.0
       stress = dt_Rho0 * taux(I,j)
       do k=1,nz
-        h_a = 0.5 * (h(i,j,k) + h(i+1,j,k)) + h_neglect
-        hfr = 1.0 ; if ((zDS+h_a) > Hmix) hfr = (Hmix - zDS) / h_a
+        h_avg = 0.5 * (h(i,j,k) + h(i+1,j,k)) + h_neglect
+        hfr = 1.0 ; if ((zDS+h_avg) > Hmix) hfr = (Hmix - zDS) / h_avg
         u(I,j,k) = u(I,j,k) + I_Hmix * hfr * stress
         if (associated(ADp%du_dt_str)) ADp%du_dt_str(I,j,k) = (I_Hmix * hfr * stress) * Idt
-        zDS = zDS + h_a ; if (zDS >= Hmix) exit
+        zDS = zDS + h_avg ; if (zDS >= Hmix) exit
       enddo
     enddo
   else
@@ -1295,16 +1312,16 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
   ! the wind stress is applied as a stress boundary condition.
   if (CS%direct_stress) then
     do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.0) &
-        DO_LOCALITY(local(k, zDS, stress, h_a, hfr))
+        DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
       surface_stress(i,J) = 0.0
       zDS = 0.0
       stress = dt_Rho0 * tauy(i,J)
       do k=1,nz
-        h_a = 0.5 * (h(i,J,k) + h(i,J+1,k)) + h_neglect
-        hfr = 1.0 ; if ((zDS+h_a) > Hmix) hfr = (Hmix - zDS) / h_a
+        h_avg = 0.5 * (h(i,J,k) + h(i,J+1,k)) + h_neglect
+        hfr = 1.0 ; if ((zDS+h_avg) > Hmix) hfr = (Hmix - zDS) / h_avg
         v(i,J,k) = v(i,J,k) + I_Hmix * hfr * stress
         if (associated(ADp%dv_dt_str)) ADp%dv_dt_str(i,J,k) = (I_Hmix * hfr * stress) * Idt
-        zDS = zDS + h_a ; if (zDS >= Hmix) exit
+        zDS = zDS + h_avg ; if (zDS >= Hmix) exit
       enddo
     enddo
   else
@@ -1469,7 +1486,7 @@ subroutine vertvisc_TR(u, v, h, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV, US, 
     call post_data(CS%id_GLwork, KE_term, CS%diag)
   endif
 
-  call vertvisc_limit_vel(u, v, h, ADp, CDp, forces_a, dt, G, GV, US, CS)
+  call vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, CS)
 
   !$omp target exit data map(delete: c1)
 
@@ -1571,29 +1588,41 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
   type(vertvisc_CS)                    :: CS  !< Vertical viscosity control structure
 
   type(vertvisc_container_type) :: visc_a ! Copies of the viscosities and bottom drag in visc
+  type(RealArray_t) :: visc_rem_u_a ! Fraction of a time-step's worth of a barotropic
+                                 ! acceleration that a layer experiences after viscosity
+                                 ! is applied in the zonal direction [nondim]
+  type(RealArray_t) :: visc_rem_v_a ! Fraction of a time-step's worth of a barotropic
+                                 ! acceleration that a layer experiences after viscosity
+                                 ! is applied in the meridional direction [nondim]
 
   call visc_a%build_from(visc)
+  call visc_rem_u_a%alloc(lb=LBOUND(visc_rem_u), ub=UBOUND(visc_rem_u), source=visc_rem_u)
+  call visc_rem_v_a%alloc(lb=LBOUND(visc_rem_v), ub=UBOUND(visc_rem_v), source=visc_rem_v)
 
-  call vertvisc_remnant_TR(visc_a, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
+  call vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, GV, US, CS)
 
   call visc_a%free()
+  call visc_rem_u_a%copy2F(visc_rem_u)
+  call visc_rem_v_a%copy2F(visc_rem_v)
+  call visc_rem_u_a%free()
+  call visc_rem_v_a%free()
 
 end subroutine vertvisc_remnant
 
 !> The implementation of vertvisc_remnant (the root of its call tree).
-subroutine vertvisc_remnant_TR(visc_a, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
+subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, GV, US, CS)
   type(ocean_grid_type), intent(in)   :: G    !< Ocean grid structure
   type(verticalGrid_type), intent(in) :: GV   !< Ocean vertical grid structure
   type(vertvisc_container_type), &
                          intent(in)   :: visc_a !< Copies of the viscosities and bottom drag
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                         intent(inout) :: visc_rem_u !< Fraction of a time-step's worth of a
-                                              !! barotropic acceleration that a layer experiences after
-                                              !! viscosity is applied in the zonal direction [nondim]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                         intent(inout) :: visc_rem_v !< Fraction of a time-step's worth of a
-                                              !! barotropic acceleration that a layer experiences after
-                                              !! viscosity is applied in the meridional direction [nondim]
+  type(RealArray_t),     intent(inout) :: visc_rem_u_a !< Fraction of a time-step's worth of a
+                                                       !! barotropic acceleration that a layer
+                                                       !! experiences after viscosity is applied in
+                                                       !! the zonal direction [nondim]
+  type(RealArray_t),     intent(inout) :: visc_rem_v_a !< Fraction of a time-step's worth of a
+                                                       !! barotropic acceleration that a layer
+                                                       !! experiences after viscosity is applied in
+                                                       !! the meridional direction [nondim]
   real,                  intent(in)    :: dt  !< Time increment [T ~> s]
   type(unit_scale_type), intent(in)    :: US  !< A dimensional unit scaling type
   type(vertvisc_CS)                    :: CS  !< Vertical viscosity control structure
@@ -1615,9 +1644,17 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u, visc_rem_v, dt, G, GV, US, CS
                                                          ! u- and v-points
                                                          ! [H T-1 ~> m s-1 or Pa s m-1]
 
+  real, dimension(:,:,:), contiguous, pointer :: visc_rem_u, visc_rem_v ! Fraction of a
+                                     ! time-step's worth of a barotropic acceleration that a
+                                     ! layer experiences after viscosity is applied in the
+                                     ! zonal and meridional directions [nondim]
+
   integer :: i, j, k, is, ie, Isq, Ieq, Jsq, Jeq, nz
   is = G%isc ; ie = G%iec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  call visc_rem_u_a%view(visc_rem_u)
+  call visc_rem_v_a%view(visc_rem_v)
 
   nullify(Ray_u, Ray_v)
   if (visc_a%Ray_u_a%associated()) call visc_a%Ray_u_a%view(Ray_u)
@@ -1725,43 +1762,53 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
                 ! the time-evolving surface density in non-Boussinesq mode [Z T-1 ~> m s-1]
   type(vertvisc_container_type)     :: visc_a   ! Copies of the viscosities and bottom drag in visc
   type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
+  type(RealArray_t) :: u_a  ! Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t) :: v_a  ! Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
+  type(RealArray_t) :: dz_a ! Vertical distance across layers [Z ~> m]
+  type(RealArray_t) :: Ustar_2d_a ! The wind friction velocity [Z T-1 ~> m s-1]
 
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
+  call u_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=u)
+  call v_a%alloc(lb=LBOUND(v), ub=UBOUND(v), source=v)
+  call h_a%alloc(lb=LBOUND(h), ub=UBOUND(h), source=h)
+  call dz_a%alloc(lb=LBOUND(dz), ub=UBOUND(dz), source=dz)
 
   !$omp target enter data map(alloc: Ustar_2d)
   call find_ustar(forces, tv, Ustar_2d, G, GV, US, halo=1)
+  call Ustar_2d_a%alloc(lb=LBOUND(Ustar_2d), ub=UBOUND(Ustar_2d), source=Ustar_2d)
 
-  call vertvisc_coef_TR(u, v, h, dz, forces_a, Ustar_2d, visc_a, tv, dt, G, GV, US, CS, OBC, &
-                        VarMix)
+  call vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
+                        tv, dt, G, GV, US, CS, OBC, VarMix)
   !$omp target exit data map(delete: Ustar_2d)
 
   call visc_a%free()
   call forces_a%free()
+  call u_a%free()
+  call v_a%free()
+  call h_a%free()
+  call dz_a%free()
+  call Ustar_2d_a%free()
 
 end subroutine vertvisc_coef
 
 !> The implementation of vertvisc_coef (the root of its call tree).
-subroutine vertvisc_coef_TR(u, v, h, dz, forces_a, Ustar_2d, visc_a, tv, dt, G, GV, US, CS, &
-                            OBC, VarMix)
+subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
+                            tv, dt, G, GV, US, CS, OBC, VarMix)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in)    :: u      !< Zonal velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(in)    :: v      !< Meridional velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in)    :: h      !< Layer thickness [H ~> m or kg m-2]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in)    :: dz     !< Vertical distance across layers [Z ~> m]
+  type(RealArray_t),       intent(in)    :: u_a    !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: v_a    !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: h_a    !< Layer thickness [H ~> m or kg m-2]
+  type(RealArray_t),       intent(in)    :: dz_a   !< Vertical distance across layers [Z ~> m]
   type(mech_forcing_container_type), &
                            intent(in)    :: forces_a !< Copies of the driving mechanical forces
-  real, dimension(SZI_(G),SZJ_(G)), &
-                           intent(in)    :: Ustar_2d !< The wind friction velocity, calculated using
-                                                     !! the Boussinesq reference density or the
-                                                     !! time-evolving surface density in
-                                                     !! non-Boussinesq mode [Z T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: Ustar_2d_a !< The wind friction velocity, calculated
+                                                       !! using the Boussinesq reference density or
+                                                       !! the time-evolving surface density in
+                                                       !! non-Boussinesq mode [Z T-1 ~> m s-1]
   type(vertvisc_container_type), &
                            intent(in)    :: visc_a !< Copies of the viscosities and bottom drag
   type(thermo_var_ptrs),   intent(in)    :: tv     !< A structure containing pointers to any available
@@ -1873,10 +1920,23 @@ subroutine vertvisc_coef_TR(u, v, h, dz, forces_a, Ustar_2d, visc_a, tv, dt, G, 
                                                          ! component due to "slow" processes
                                                          ! [H Z T-1 ~> m2 s-1 or Pa s]
 
+  real, dimension(:,:,:), contiguous, pointer :: u, v ! The zonal and meridional velocities
+                                                    ! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: h    ! Layer thickness [H ~> m or kg m-2]
+  real, dimension(:,:,:), contiguous, pointer :: dz   ! Vertical distance across layers [Z ~> m]
+  real, dimension(:,:), contiguous, pointer :: Ustar_2d ! The wind friction velocity
+                                                       ! [Z T-1 ~> m s-1]
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  call u_a%view(u)
+  call v_a%view(v)
+  call h_a%view(h)
+  call dz_a%view(dz)
+  call Ustar_2d_a%view(Ustar_2d)
 
   nullify(frac_shelf_u, frac_shelf_v)
   if (forces_a%frac_shelf_u_a%associated()) call forces_a%frac_shelf_u_a%view(frac_shelf_u)
@@ -3698,16 +3758,13 @@ end subroutine find_coupling_coef
 !! and the running sum of the number of trunctionas within the non-symmetric memory computational
 !! domain is incremented.  Optionally, any column with excessive velocities may be sent
 !! to a diagnostic reporting subroutine.
-subroutine vertvisc_limit_vel(u, v, h, ADp, CDp, forces_a, dt, G, GV, US, CS)
+subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, CS)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(inout) :: u      !< Zonal velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(inout) :: v      !< Meridional velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
-                           intent(in)    :: h      !< Layer thickness [H ~> m or kg m-2]
+  type(RealArray_t),       intent(inout) :: u_a    !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(inout) :: v_a    !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: h_a    !< Layer thickness [H ~> m or kg m-2]
   type(accel_diag_ptrs),   intent(in)    :: ADp    !< Acceleration diagnostic pointers
   type(cont_diag_ptrs),    intent(in)    :: CDp    !< Continuity diagnostic pointers
   type(mech_forcing_container_type), &
@@ -3727,9 +3784,16 @@ subroutine vertvisc_limit_vel(u, v, h, ADp, CDp, forces_a, dt, G, GV, US, CS)
   integer :: ntrunc         ! Thread-safe truncation counter
   real, dimension(:,:), contiguous, pointer :: taux, tauy ! The zonal and meridional wind stresses
                                                          ! [R L Z T-2 ~> Pa]
+  real, dimension(:,:,:), contiguous, pointer :: u, v ! The zonal and meridional velocities
+                                                    ! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: h    ! Layer thickness [H ~> m or kg m-2]
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  call u_a%view(u)
+  call v_a%view(v)
+  call h_a%view(h)
 
   nullify(taux, tauy)
   if (forces_a%taux_a%associated()) call forces_a%taux_a%view(taux)
