@@ -897,10 +897,10 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, GV, US, CS, &
                    taux_bot_a, tauy_bot_a, lfpmix, Waves)
 
-  call visc_a%copy_back(visc)
-  call forces_a%free()
   call u_a%copy2F(u)
   call v_a%copy2F(v)
+  call visc_a%copy_back(visc)
+  call forces_a%free()
   call u_a%free()
   call v_a%free()
   call h_a%free()
@@ -1655,9 +1655,9 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
 
   call vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore, GV%ke, CS)
 
-  call visc_a%free()
   call visc_rem_u_a%copy2F(visc_rem_u)
   call visc_rem_v_a%copy2F(visc_rem_v)
+  call visc_a%free()
   call visc_rem_u_a%free()
   call visc_rem_v_a%free()
 
@@ -1885,8 +1885,8 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
                                                        !! non-Boussinesq mode [Z T-1 ~> m s-1]
   type(vertvisc_container_type), &
                            intent(in)    :: visc_a !< Copies of the viscosities and bottom drag
-  type(thermo_var_ptrs),   intent(in)    :: tv     !< A structure containing pointers to any available
-                                                   !! thermodynamic fields.
+  type(thermo_var_ptrs),   intent(in)    :: tv     !< A structure containing pointers to any
+                                                   !! available thermodynamic fields.
   real,                    intent(in)    :: dt     !< Time increment [T ~> s]
   type(vertvisc_CS),       intent(inout) :: CS     !< Vertical viscosity control structure
   type(ocean_OBC_type),    pointer       :: OBC    !< Open boundary condition structure
@@ -2114,9 +2114,9 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   !$omp target update to(Kv_shear_Bu) if (associated(Kv_shear_Bu))
 
   do concurrent (j=js:je, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
-      DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, zcol_p1, h_harm)) &
-      DO_LOCALITY(local(h_arith, h_delta, dz_arith, z2, botfn, z_clear, z2_wt, h_ml, I_HTbl, Ztop_min)) &
-      DO_LOCALITY(local(topfn, do_any_shelf))
+      DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh)) &
+      DO_LOCALITY(local(zcol, zcol_p1, h_harm, h_arith, h_delta, dz_arith, z2, botfn)) &
+      DO_LOCALITY(local(z_clear, z2_wt, h_ml, I_HTbl, Ztop_min, topfn, do_any_shelf))
     I_Hbbl = 1. / (CS%Hbbl + dz_neglect)
     if (CS%use_GL90_in_SSW) then
       I_Hbbl_gl90 = 1. / (CS%Hbbl_gl90 + dz_neglect)
@@ -2428,9 +2428,9 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   ! Now work on v-points.
 
   do concurrent (J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.) &
-      DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh, zcol, zcol_p1, h_harm)) &
-      DO_LOCALITY(local(h_arith, h_delta, dz_arith, z2, botfn, z_clear, z2_wt, h_ml, I_HTbl, Ztop_min)) &
-      DO_LOCALITY(local(topfn, do_any_shelf))
+      DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh)) &
+      DO_LOCALITY(local(zcol, zcol_p1, h_harm, h_arith, h_delta, dz_arith, z2, botfn)) &
+      DO_LOCALITY(local(z_clear, z2_wt, h_ml, I_HTbl, Ztop_min, topfn, do_any_shelf))
     I_Hbbl = 1. / (CS%Hbbl + dz_neglect)
     if (CS%use_GL90_in_SSW) then
       I_Hbbl_gl90 = 1. / (CS%Hbbl_gl90 + dz_neglect)
