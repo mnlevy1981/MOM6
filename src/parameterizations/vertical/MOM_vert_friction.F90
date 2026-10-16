@@ -880,7 +880,9 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
   type(RealArray_t) :: taux_bot_a  ! Zonal bottom stress from ocean to rock [R L Z T-2 ~> Pa]
   type(RealArray_t) :: tauy_bot_a  ! Meridional bottom stress from ocean to rock [R L Z T-2 ~> Pa]
+  logical :: lfpmix                ! fpmix along Eulerian shear, false if fpmix is absent
 
+  lfpmix = .false. ; if (present(fpmix)) lfpmix = fpmix
   Gcore => grid_core(G)
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
@@ -893,7 +895,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
     call tauy_bot_a%alloc(lb=LBOUND(tauy_bot), ub=UBOUND(tauy_bot), source=tauy_bot)
 
   call vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, GV, US, CS, &
-                   taux_bot_a, tauy_bot_a, fpmix, Waves)
+                   taux_bot_a, tauy_bot_a, lfpmix, Waves)
 
   call visc_a%copy_back(visc)
   call forces_a%free()
@@ -937,7 +939,7 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
                                                        !! rock [R L Z T-2 ~> Pa]
   type(RealArray_t),       intent(inout) :: tauy_bot_a !< Meridional bottom stress from ocean to
                                                        !! rock [R L Z T-2 ~> Pa]
-  logical,         optional, intent(in)  :: fpmix !< fpmix along Eulerian shear
+  logical,                   intent(in)  :: fpmix !< fpmix along Eulerian shear
   type(wave_parameters_CS), &
                    optional, pointer     :: Waves !< Container for wave/Stokes information
 
@@ -1082,8 +1084,7 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
     if (.not. DoStokesMixing) &
       call MOM_error(FATAL, "Stokes Mixing called without associated Waves Control Structure")
   endif
-  lfpmix = .false.
-  if ( present(fpmix) ) lfpmix = fpmix
+  lfpmix = fpmix
 
   !   Update the zonal velocity component using a modification of a standard
   ! tridiagonal solver.
