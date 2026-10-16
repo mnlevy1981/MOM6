@@ -197,22 +197,22 @@ type, public :: vertvisc_CS ; private
   logical :: CFLrampingIsActivated = .false. !< True if the ramping has been initialized
   type(time_type) :: rampStartTime !< The time at which the ramping of CFL_trunc starts
 
-  real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_,NK_INTERFACE_) :: &
-    a_u                !< The u-drag coefficient across an interface [H T-1 ~> m s-1 or Pa s m-1]
-  real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_,NK_INTERFACE_) :: &
-    a_u_gl90           !< The u-drag coefficient associated with GL90 across an interface [H T-1 ~> m s-1 or Pa s m-1]
-  real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_,NKMEM_) :: &
-    h_u                !< The effective layer thickness at u-points [H ~> m or kg m-2].
-  real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_,NK_INTERFACE_) :: &
-    a_v                !< The v-drag coefficient across an interface [H T-1 ~> m s-1 or Pa s m-1]
-  real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_,NK_INTERFACE_) :: &
-    a_v_gl90           !< The v-drag coefficient associated with GL90 across an interface [H T-1 ~> m s-1 or Pa s m-1]
-  real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_,NKMEM_) :: &
-    h_v                !< The effective layer thickness at v-points [H ~> m or kg m-2].
-  real, pointer, dimension(:,:) :: a1_shelf_u => NULL() !< The u-momentum coupling coefficient under
-                           !! ice shelves [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress under shelves.
-  real, pointer, dimension(:,:) :: a1_shelf_v => NULL() !< The v-momentum coupling coefficient under
-                           !! ice shelves [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress under shelves.
+  type(RealArray_t) :: a_u !< The u-drag coefficient across an interface
+                           !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: a_u_gl90 !< The u-drag coefficient associated with GL90 across an interface
+                                !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: h_u !< The effective layer thickness at u-points [H ~> m or kg m-2].
+  type(RealArray_t) :: a_v !< The v-drag coefficient across an interface
+                           !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: a_v_gl90 !< The v-drag coefficient associated with GL90 across an interface
+                                !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: h_v !< The effective layer thickness at v-points [H ~> m or kg m-2].
+  type(RealArray_t) :: a1_shelf_u !< The u-momentum coupling coefficient under ice shelves
+                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
+                                  !! under shelves.
+  type(RealArray_t) :: a1_shelf_v !< The v-momentum coupling coefficient under ice shelves
+                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
+                                  !! under shelves.
 
   logical :: split          !< If true, use the split time stepping scheme.
   logical :: harmonic_visc  !< If true, the harmonic mean thicknesses are used
@@ -240,7 +240,7 @@ type, public :: vertvisc_CS ; private
 
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !! timing of diagnostic output.
-  real, allocatable, dimension(:,:) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
+  type(RealArray_t) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
 
   !>@{ Diagnostic identifiers
   integer :: id_du_dt_visc = -1, id_dv_dt_visc = -1, id_du_dt_visc_gl90 = -1, id_dv_dt_visc_gl90 = -1
@@ -392,11 +392,16 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
   real :: Gat1, Gsig, dGdsig !< Shape parameters [nondim]
   real :: du, dv       !< Intermediate velocity differences [L T-1 ~> m s-1]
   real :: depth        !< Cumulative of thicknesses [H ~> m]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
   integer :: b, kp1, k, nz !< band and vertical indices
   integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq !< horizontal indices
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  call CS%h_u%view(h_u)
+  call CS%h_v%view(h_v)
 
   pi = 4. * atan2(1.,1.)
   Irho0 = 1.0 / GV%Rho0
@@ -415,12 +420,12 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
         Gat1  = 0.
         do k=1, nz
           ! cell center
-          depth = depth + 0.5*CS%h_u(I,j,k)
+          depth = depth + 0.5*h_u(I,j,k)
           uE_u(I,j,k) = ui(I,j,k) - waves%Us_x(I,j,k)
           if ( depth < hbl_u(I,j) )     then
             sigma = depth / hbl_u(i,j)
             ! cell bottom
-            depth = depth + 0.5*CS%h_u(I,j,k)
+            depth = depth + 0.5*h_u(I,j,k)
             call cvmix_kpp_composite_Gshape(sigma,Gat1,Gsig,dGdsig)
             ! nonlocal boundary-layer increment
             uInc_u(I,j,k)  = dt * Cemp_NL * taux_u(I,j) * dGdsig / hbl_u(I,j)
@@ -449,12 +454,12 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
         Gat1  = 0.
         do k=1, nz
           ! cell center
-          depth = depth + 0.5* CS%h_v(i,J,k)
+          depth = depth + 0.5* h_v(i,J,k)
           vE_v(i,J,k) = vi(i,J,k) - waves%Us_y(i,J,k)
           if ( depth < hbl_v(i,J) )    then
             sigma = depth / hbl_v(i,J)
             ! cell bottom
-            depth = depth + 0.5* CS%h_v(i,J,k)
+            depth = depth + 0.5* h_v(i,J,k)
             call cvmix_kpp_composite_Gshape(sigma,Gat1,Gsig,dGdsig)
             ! nonlocal boundary-layer increment
             vInc_v(i,J,k) = dt * Cemp_NL * tauy_v(i,J) * dGdsig / hbl_v(i,J)
@@ -591,7 +596,7 @@ pure subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, i, j, z_i, G, GV, CS, 
                                                 !! with GL90 across interfaces; is not
                                                 !! included in a_cpl [H T-1 ~> m s-1 or Pa s m-1].
   type(GL90_CS),     intent(in) :: CS           !< Vertical viscosity control structure
-  real, allocatable, dimension(:,:), &
+  real, dimension(:,:), pointer, &
                     intent(in) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points
                                                 !! [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
   type(VarMix_CS), intent(in) :: VarMix         !< Variable mixing coefficients
@@ -985,6 +990,17 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
                                                     ! [L T-1 ~> m s-1]
   real, dimension(:,:,:), contiguous, pointer :: h    ! Layer thickness [H ~> m or kg m-2]
 
+  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
+                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
+  real, dimension(:,:,:), contiguous, pointer :: a_u_gl90, a_v_gl90 ! The u- and v-drag
+                                                    ! coefficients associated with GL90 across
+                                                    ! interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:), contiguous, pointer :: a1_shelf_u, a1_shelf_v ! The u- and v-momentum
+                                                    ! coupling coefficients under ice shelves
+                                                    ! [H T-1 ~> m s-1 or Pa s m-1]
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
@@ -992,6 +1008,15 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
   call u_a%view(u)
   call v_a%view(v)
   call h_a%view(h)
+  call CS%a_u%view(a_u)
+  call CS%a_v%view(a_v)
+  call CS%h_u%view(h_u)
+  call CS%h_v%view(h_v)
+  call CS%a_u_gl90%view(a_u_gl90)
+  call CS%a_v_gl90%view(a_v_gl90)
+  nullify(a1_shelf_u, a1_shelf_v)
+  if (CS%a1_shelf_u%associated()) call CS%a1_shelf_u%view(a1_shelf_u)
+  if (CS%a1_shelf_v%associated()) call CS%a1_shelf_v%view(a1_shelf_v)
 
   nullify(taux, tauy)
   if (forces_a%taux_a%associated()) call forces_a%taux_a%view(taux)
@@ -1133,27 +1158,27 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
     Ray = 0.
     if (associated(Ray_u)) Ray = Ray_u(I,j,1)
 
-    b_denom_1 = CS%h_u(I,j,1) + dt * (Ray + CS%a_u(I,j,1))
-    b1 = 1. / (b_denom_1 + dt * CS%a_u(I,j,2))
+    b_denom_1 = h_u(I,j,1) + dt * (Ray + a_u(I,j,1))
+    b1 = 1. / (b_denom_1 + dt * a_u(I,j,2))
     d1 = b_denom_1 * b1
-    u(I,j,1) = b1 * (CS%h_u(I,j,1) * u(I,j,1) + surface_stress(I,j))
+    u(I,j,1) = b1 * (h_u(I,j,1) * u(I,j,1) + surface_stress(I,j))
 
     if (associated(ADp%du_dt_str)) then
-      ADp%du_dt_str(I,j,1) = b1 * (CS%h_u(I,j,1) * ADp%du_dt_str(I,j,1) + surface_stress(I,j) * Idt)
+      ADp%du_dt_str(I,j,1) = b1 * (h_u(I,j,1) * ADp%du_dt_str(I,j,1) + surface_stress(I,j) * Idt)
     endif
 
     do k=2,nz
       if (associated(Ray_u)) Ray = Ray_u(I,j,k)
 
-      c1(k) = dt * CS%a_u(I,j,K) * b1
-      b_denom_1 = CS%h_u(I,j,k) + dt * (Ray + CS%a_u(I,j,K) * d1)
-      b1 = 1. / (b_denom_1 + dt * CS%a_u(I,j,K+1))
+      c1(k) = dt * a_u(I,j,K) * b1
+      b_denom_1 = h_u(I,j,k) + dt * (Ray + a_u(I,j,K) * d1)
+      b1 = 1. / (b_denom_1 + dt * a_u(I,j,K+1))
       d1 = b_denom_1 * b1
-      u(I,j,k) = (CS%h_u(I,j,k) * u(I,j,k) + dt * CS%a_u(I,j,K) * u(I,j,k-1)) * b1
+      u(I,j,k) = (h_u(I,j,k) * u(I,j,k) + dt * a_u(I,j,K) * u(I,j,k-1)) * b1
 
       if (associated(ADp%du_dt_str)) then
-        ADp%du_dt_str(I,j,k) = (CS%h_u(I,j,k) * ADp%du_dt_str(I,j,k) &
-            + dt * CS%a_u(I,j,K) * ADp%du_dt_str(I,j,k-1)) * b1
+        ADp%du_dt_str(I,j,k) = (h_u(I,j,k) * ADp%du_dt_str(I,j,k) &
+            + dt * a_u(I,j,K) * ADp%du_dt_str(I,j,k-1)) * b1
       endif
 
       !### Force FMA evaluation of b1 by blocking lookahead with an impossible branch.
@@ -1185,20 +1210,20 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
     if (associated(ADp%du_dt_visc_gl90)) then
       do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, G%mask2dCu(I,j) > 0.) &
           DO_LOCALITY(local(k, b1, d1, b_denom_1))
-        b_denom_1 = CS%h_u(I,j,1)  ! CS%a_u_gl90(I,j,1) is zero
-        b1 = 1.0 / (b_denom_1 + dt * CS%a_u_gl90(I,j,2))
+        b_denom_1 = h_u(I,j,1)  ! CS%a_u_gl90(I,j,1) is zero
+        b1 = 1.0 / (b_denom_1 + dt * a_u_gl90(I,j,2))
         d1 = b_denom_1 * b1
 
-        ADp%du_dt_visc_gl90(I,j,1) = b1 * (CS%h_u(I,j,1) * ADp%du_dt_visc_gl90(I,j,1))
+        ADp%du_dt_visc_gl90(I,j,1) = b1 * (h_u(I,j,1) * ADp%du_dt_visc_gl90(I,j,1))
 
         do k=2,nz
-          c1(k) = dt * CS%a_u_gl90(I,j,K) * b1
-          b_denom_1 = CS%h_u(I,j,k) + dt * (CS%a_u_gl90(I,j,K)*d1)
-          b1 = 1.0 / (b_denom_1 + dt * CS%a_u_gl90(I,j,K+1))
+          c1(k) = dt * a_u_gl90(I,j,K) * b1
+          b_denom_1 = h_u(I,j,k) + dt * (a_u_gl90(I,j,K)*d1)
+          b1 = 1.0 / (b_denom_1 + dt * a_u_gl90(I,j,K+1))
           d1 = b_denom_1 * b1
 
-          ADp%du_dt_visc_gl90(I,j,k) = (CS%h_u(I,j,k) * ADp%du_dt_visc_gl90(I,j,k) &
-              + dt * CS%a_u_gl90(I,j,K) * ADp%du_dt_visc_gl90(I,j,k-1)) * b1
+          ADp%du_dt_visc_gl90(I,j,k) = (h_u(I,j,k) * ADp%du_dt_visc_gl90(I,j,k) &
+              + dt * a_u_gl90(I,j,K) * ADp%du_dt_visc_gl90(I,j,k-1)) * b1
         enddo
 
         ! back substitute to solve for new velocities, held by ADp%du_dt_visc_gl90
@@ -1223,7 +1248,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
         ! velocity update; note that ADp%du_dt_visc(I,j,k) holds the original velocity value u(I,j,k)
         if (CS%id_GLwork > 0) then
           do k=1,nz
-            KE_u(I,j,k) = ADp%du_dt_visc(I,j,k) * CS%h_u(I,j,k) * G%areaCu(I,j) * ADp%du_dt_visc_gl90(I,j,k)
+            KE_u(I,j,k) = ADp%du_dt_visc(I,j,k) * h_u(I,j,k) * G%areaCu(I,j) * &
+                          ADp%du_dt_visc_gl90(I,j,k)
           enddo
         endif
       enddo
@@ -1243,13 +1269,13 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
 
   if (associated(taux_shelf)) then
     do concurrent (j=G%jsc:G%jec, I=Isq:Ieq)
-      taux_shelf(I,j) = -GV%H_to_RZ * CS%a1_shelf_u(I,j) * u(I,j,1) ! - u_shelf?
+      taux_shelf(I,j) = -GV%H_to_RZ * a1_shelf_u(I,j) * u(I,j,1) ! - u_shelf?
     enddo
   endif
 
   if (taux_bot_a%associated()) then
     do concurrent (j=G%jsc:G%jec, I=Isq:Ieq)
-      taux_bot(I,j) = GV%H_to_RZ * (u(I,j,nz) * CS%a_u(I,j,nz+1))
+      taux_bot(I,j) = GV%H_to_RZ * (u(I,j,nz) * a_u(I,j,nz+1))
     enddo
 
     if (associated(Ray_u)) then
@@ -1335,27 +1361,27 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
     Ray = 0.
     if (associated(Ray_v)) Ray = Ray_v(i,J,1)
 
-    b_denom_1 = CS%h_v(i,J,1) + dt * (Ray + CS%a_v(i,J,1))
-    b1 = 1.0 / (b_denom_1 + dt*CS%a_v(i,J,2))
+    b_denom_1 = h_v(i,J,1) + dt * (Ray + a_v(i,J,1))
+    b1 = 1.0 / (b_denom_1 + dt*a_v(i,J,2))
     d1 = b_denom_1 * b1
-    v(i,J,1) = b1 * (CS%h_v(i,J,1) * v(i,J,1) + surface_stress(i,J))
+    v(i,J,1) = b1 * (h_v(i,J,1) * v(i,J,1) + surface_stress(i,J))
 
     if (associated(ADp%dv_dt_str)) then
-      ADp%dv_dt_str(i,J,1) = b1 * (CS%h_v(i,J,1) * ADp%dv_dt_str(i,J,1) + surface_stress(i,J) * Idt)
+      ADp%dv_dt_str(i,J,1) = b1 * (h_v(i,J,1) * ADp%dv_dt_str(i,J,1) + surface_stress(i,J) * Idt)
     endif
 
     do k=2,nz
       if (associated(Ray_v)) Ray = Ray_v(i,J,k)
 
-      c1(k) = dt * CS%a_v(i,J,K) * b1
-      b_denom_1 = CS%h_v(i,J,k) + dt * (Ray + CS%a_v(i,J,K) * d1)
-      b1 = 1. / (b_denom_1 + dt * CS%a_v(i,J,K+1))
+      c1(k) = dt * a_v(i,J,K) * b1
+      b_denom_1 = h_v(i,J,k) + dt * (Ray + a_v(i,J,K) * d1)
+      b1 = 1. / (b_denom_1 + dt * a_v(i,J,K+1))
       d1 = b_denom_1 * b1
-      v(i,J,k) = (CS%h_v(i,J,k) * v(i,J,k) + dt * CS%a_v(i,J,K) * v(i,J,k-1)) * b1
+      v(i,J,k) = (h_v(i,J,k) * v(i,J,k) + dt * a_v(i,J,K) * v(i,J,k-1)) * b1
 
       if (associated(ADp%dv_dt_str)) then
-        ADp%dv_dt_str(i,J,k) = (CS%h_v(i,J,k) * ADp%dv_dt_str(i,J,k) &
-            + dt * CS%a_v(i,J,K) * ADp%dv_dt_str(i,J,k-1)) * b1
+        ADp%dv_dt_str(i,J,k) = (h_v(i,J,k) * ADp%dv_dt_str(i,J,k) &
+            + dt * a_v(i,J,K) * ADp%dv_dt_str(i,J,k-1)) * b1
       endif
 
       !### Force FMA evaluation of b1 by blocking lookahead with an impossible branch.
@@ -1387,18 +1413,18 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
     if (associated(ADp%dv_dt_visc_gl90)) then
       do concurrent (J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.) &
           DO_LOCALITY(local(k, b1, d1, b_denom_1))
-        b_denom_1 = CS%h_v(i,J,1)  ! CS%a_v_gl90(i,J,1) is zero
-        b1 = 1.0 / (b_denom_1 + dt*CS%a_v_gl90(i,J,2))
+        b_denom_1 = h_v(i,J,1)  ! CS%a_v_gl90(i,J,1) is zero
+        b1 = 1.0 / (b_denom_1 + dt*a_v_gl90(i,J,2))
         d1 = b_denom_1 * b1
-        ADp%dv_dt_visc_gl90(I,J,1) = b1 * (CS%h_v(i,J,1) * ADp%dv_dt_visc_gl90(i,J,1))
+        ADp%dv_dt_visc_gl90(I,J,1) = b1 * (h_v(i,J,1) * ADp%dv_dt_visc_gl90(i,J,1))
 
         do k=2,nz
-          c1(k) = dt * CS%a_v_gl90(i,J,K) * b1
-          b_denom_1 = CS%h_v(i,J,k) + dt * (CS%a_v_gl90(i,J,K) * d1)
-          b1 = 1.0 / (b_denom_1 + dt * CS%a_v_gl90(i,J,K+1))
+          c1(k) = dt * a_v_gl90(i,J,K) * b1
+          b_denom_1 = h_v(i,J,k) + dt * (a_v_gl90(i,J,K) * d1)
+          b1 = 1.0 / (b_denom_1 + dt * a_v_gl90(i,J,K+1))
           d1 = b_denom_1 * b1
-          ADp%dv_dt_visc_gl90(i,J,k) = (CS%h_v(i,J,k) * ADp%dv_dt_visc_gl90(i,J,k) &
-              + dt * CS%a_v_gl90(i,J,K) * ADp%dv_dt_visc_gl90(i,J,k-1)) * b1
+          ADp%dv_dt_visc_gl90(i,J,k) = (h_v(i,J,k) * ADp%dv_dt_visc_gl90(i,J,k) &
+              + dt * a_v_gl90(i,J,K) * ADp%dv_dt_visc_gl90(i,J,k-1)) * b1
         enddo
 
         ! back substitute to solve for new velocities, held by ADp%dv_dt_visc_gl90
@@ -1422,7 +1448,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
       if (CS%id_GLwork > 0) then
         do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, G%mask2dCv(i,J) > 0.)
           ! note that on RHS: ADp%dv_dt_visc(I,j,k) holds the original velocity value v(I,j,k)
-          KE_v(I,j,k) = ADp%dv_dt_visc(i,J,k) * CS%h_v(i,J,k) * G%areaCv(i,J) * ADp%dv_dt_visc_gl90(i,J,k)
+          KE_v(I,j,k) = ADp%dv_dt_visc(i,J,k) * h_v(i,J,k) * G%areaCv(i,J) * &
+                        ADp%dv_dt_visc_gl90(i,J,k)
         enddo
       endif
     endif
@@ -1439,14 +1466,14 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, GV
 
   if (associated(tauy_shelf)) then
     do concurrent (J=Jsq:Jeq, i=is:ie)
-      tauy_shelf(i,J) = -GV%H_to_RZ * CS%a1_shelf_v(i,J) * v(i,J,1) ! - v_shelf?
+      tauy_shelf(i,J) = -GV%H_to_RZ * a1_shelf_v(i,J) * v(i,J,1) ! - v_shelf?
     enddo
   endif
 
   ! JORGE TODO: this has to be malloced
   if (tauy_bot_a%associated()) then
     do concurrent (J=Jsq:Jeq, i=is:ie)
-      tauy_bot(i,J) = GV%H_to_RZ * (v(i,J,nz) * CS%a_v(i,J,nz+1))
+      tauy_bot(i,J) = GV%H_to_RZ * (v(i,J,nz) * a_v(i,J,nz+1))
     enddo
 
     if (associated(Ray_v)) then
@@ -1649,12 +1676,21 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, GV, US
                                      ! layer experiences after viscosity is applied in the
                                      ! zonal and meridional directions [nondim]
 
+  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
+                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
+
   integer :: i, j, k, is, ie, Isq, Ieq, Jsq, Jeq, nz
   is = G%isc ; ie = G%iec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
 
   call visc_rem_u_a%view(visc_rem_u)
   call visc_rem_v_a%view(visc_rem_v)
+  call CS%a_u%view(a_u)
+  call CS%a_v%view(a_v)
+  call CS%h_u%view(h_u)
+  call CS%h_v%view(h_v)
 
   nullify(Ray_u, Ray_v)
   if (visc_a%Ray_u_a%associated()) call visc_a%Ray_u_a%view(Ray_u)
@@ -1670,19 +1706,19 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, GV, US
     Ray = 0.
     if (associated(Ray_u)) Ray = Ray_u(I,j,1)
 
-    b_denom_1 = CS%h_u(I,j,1) + dt * (Ray + CS%a_u(I,j,1))
-    b1 = 1.0 / (b_denom_1 + dt * CS%a_u(I,j,2))
+    b_denom_1 = h_u(I,j,1) + dt * (Ray + a_u(I,j,1))
+    b1 = 1.0 / (b_denom_1 + dt * a_u(I,j,2))
     d1 = b_denom_1 * b1
-    visc_rem_u(I,j,1) = b1 * CS%h_u(I,j,1)
+    visc_rem_u(I,j,1) = b1 * h_u(I,j,1)
 
     do k=2,nz
       if (associated(Ray_u)) Ray = Ray_u(I,j,k)
 
-      c1(k) = dt * CS%a_u(I,j,K) * b1
-      b_denom_1 = CS%h_u(I,j,k) + dt * (Ray + CS%a_u(I,j,K) * d1)
-      b1 = 1.0 / (b_denom_1 + dt * CS%a_u(I,j,K+1))
+      c1(k) = dt * a_u(I,j,K) * b1
+      b_denom_1 = h_u(I,j,k) + dt * (Ray + a_u(I,j,K) * d1)
+      b1 = 1.0 / (b_denom_1 + dt * a_u(I,j,K+1))
       d1 = b_denom_1 * b1
-      visc_rem_u(I,j,k) = (CS%h_u(I,j,k) + dt * CS%a_u(I,j,K) * visc_rem_u(I,j,k-1)) * b1
+      visc_rem_u(I,j,k) = (h_u(I,j,k) + dt * a_u(I,j,K) * visc_rem_u(I,j,k-1)) * b1
 
       !### Force FMA evaluation of b1 by blocking lookahead with an impossible branch.
       ! XXX: Check GPU behavior
@@ -1701,19 +1737,19 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, GV, US
     Ray = 0.
     if (associated(Ray_v)) Ray = Ray_v(i,J,1)
 
-    b_denom_1 = CS%h_v(i,J,1) + dt * (Ray + CS%a_v(i,J,1))
-    b1 = 1.0 / (b_denom_1 + dt*CS%a_v(i,J,2))
+    b_denom_1 = h_v(i,J,1) + dt * (Ray + a_v(i,J,1))
+    b1 = 1.0 / (b_denom_1 + dt*a_v(i,J,2))
     d1 = b_denom_1 * b1
-    visc_rem_v(i,J,1) = b1 * CS%h_v(i,J,1)
+    visc_rem_v(i,J,1) = b1 * h_v(i,J,1)
 
     do k=2,nz
       if (associated(Ray_v)) Ray = Ray_v(i,J,k)
 
-      c1(k) = dt * CS%a_v(i,J,K) * b1
-      b_denom_1 = CS%h_v(i,J,k) + dt * (Ray + CS%a_v(i,J,K) * d1)
-      b1 = 1.0 / (b_denom_1 + dt * CS%a_v(i,J,K+1))
+      c1(k) = dt * a_v(i,J,K) * b1
+      b_denom_1 = h_v(i,J,k) + dt * (Ray + a_v(i,J,K) * d1)
+      b1 = 1.0 / (b_denom_1 + dt * a_v(i,J,K+1))
       d1 = b_denom_1 * b1
-      visc_rem_v(i,J,k) = (CS%h_v(i,J,k) + dt * CS%a_v(i,J,K) * visc_rem_v(i,J,k-1)) * b1
+      visc_rem_v(i,J,k) = (h_v(i,J,k) + dt * a_v(i,J,K) * visc_rem_v(i,J,k-1)) * b1
 
       !### Force FMA evaluation of b1 by blocking lookahead with an impossible branch.
       ! XXX: Check GPU behavior
@@ -1927,6 +1963,19 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   real, dimension(:,:), contiguous, pointer :: Ustar_2d ! The wind friction velocity
                                                        ! [Z T-1 ~> m s-1]
 
+  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
+                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
+  real, dimension(:,:,:), contiguous, pointer :: a_u_gl90, a_v_gl90 ! The u- and v-drag
+                                                    ! coefficients associated with GL90 across
+                                                    ! interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:), contiguous, pointer :: a1_shelf_u, a1_shelf_v ! The u- and v-momentum
+                                                    ! coupling coefficients under ice shelves
+                                                    ! [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:), contiguous, pointer :: kappa_gl90_2d ! 2D kappa_gl90 at h-points
+                                                    ! [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
+
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -1937,6 +1986,14 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   call h_a%view(h)
   call dz_a%view(dz)
   call Ustar_2d_a%view(Ustar_2d)
+  call CS%a_u%view(a_u)
+  call CS%a_v%view(a_v)
+  call CS%h_u%view(h_u)
+  call CS%h_v%view(h_v)
+  call CS%a_u_gl90%view(a_u_gl90)
+  call CS%a_v_gl90%view(a_v_gl90)
+  nullify(kappa_gl90_2d)
+  if (CS%kappa_gl90_2d%associated()) call CS%kappa_gl90_2d%view(kappa_gl90_2d)
 
   nullify(frac_shelf_u, frac_shelf_v)
   if (forces_a%frac_shelf_u_a%associated()) call forces_a%frac_shelf_u_a%view(frac_shelf_u)
@@ -1982,13 +2039,16 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   if (CS%debug .or. (CS%id_hML_v > 0)) allocate(hML_v(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
 
   if ((associated(taux_shelf) .or. associated(frac_shelf_u)) .and. &
-      .not.associated(CS%a1_shelf_u)) then
-    allocate(CS%a1_shelf_u(G%IsdB:G%IedB,G%jsd:G%jed), source=0.0)
+      .not.CS%a1_shelf_u%associated()) then
+    call CS%a1_shelf_u%alloc(lb=[G%IsdB,G%jsd], ub=[G%IedB,G%jed], source=0.0)
   endif
   if ((associated(tauy_shelf) .or. associated(frac_shelf_v)) .and. &
-      .not.associated(CS%a1_shelf_v)) then
-    allocate(CS%a1_shelf_v(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
+      .not.CS%a1_shelf_v%associated()) then
+    call CS%a1_shelf_v%alloc(lb=[G%isd,G%JsdB], ub=[G%ied,G%JedB], source=0.0)
   endif
+  nullify(a1_shelf_u, a1_shelf_v)
+  if (CS%a1_shelf_u%associated()) call CS%a1_shelf_u%view(a1_shelf_u)
+  if (CS%a1_shelf_v%associated()) call CS%a1_shelf_v%view(a1_shelf_v)
 
   ! First do u-points
 
@@ -2161,12 +2221,12 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
 
     if (CS%use_GL90_in_SSW) then
       call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, i, j, z_i_gl90, G, GV, &
-          CS%GL90_CS, CS%kappa_gl90_2d, VarMix, work_on_u=.true.)
+          CS%GL90_CS, kappa_gl90_2d, VarMix, work_on_u=.true.)
     endif
 
     do_any_shelf = .false.
     if (associated(frac_shelf_u)) then
-      CS%a1_shelf_u(I,j) = 0.
+      a1_shelf_u(I,j) = 0.
       do_any_shelf = frac_shelf_u(I,j) > 0.
 
       if (do_any_shelf) then
@@ -2245,25 +2305,25 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
             nkml_visc_v, Ustar_2d, &
             tv, work_on_u=.true., OBC=OBC, shelf=.true.)
 
-        CS%a1_shelf_u(I,j) = a_shelf(1)
+        a1_shelf_u(I,j) = a_shelf(1)
       endif
     endif
 
     if (do_any_shelf) then
       if (CS%use_GL90_in_SSW) then
         do K=1,nz+1
-          CS%a_u(I,j,K) = min(a_cpl_max, (frac_shelf_u(I,j) * a_shelf(K) + &
+          a_u(I,j,K) = min(a_cpl_max, (frac_shelf_u(I,j) * a_shelf(K) + &
                                          (1. - frac_shelf_u(I,j)) * a_cpl(K)) + a_cpl_gl90(K))
 
           ! This is Alistair's suggestion, but it destabilizes the model. I do not know why. RWH
           ! CS%a_u(I,j,K) = min(a_cpl_max, forces%frac_shelf_u(I,j) * max(a_shelf(K), a_cpl(K)) + &
           !                                (1. - forces%frac_shelf_u(I,j)) * a_cpl(K))
 
-          CS%a_u_gl90(I,j,K) = min(a_cpl_max, a_cpl_gl90(K))
+          a_u_gl90(I,j,K) = min(a_cpl_max, a_cpl_gl90(K))
         enddo
       else
         do K=1,nz+1
-          CS%a_u(I,j,K) = min(a_cpl_max, (frac_shelf_u(I,j) * a_shelf(K) + &
+          a_u(I,j,K) = min(a_cpl_max, (frac_shelf_u(I,j) * a_shelf(K) + &
                                          (1. - frac_shelf_u(I,j)) * a_cpl(K)))
 
           ! This is Alistair's suggestion, but it destabilizes the model. I do not know why. RWH
@@ -2274,7 +2334,7 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
 
       do k=1,nz
         ! Should we instead take the inverse of the average of the inverses?
-        CS%h_u(I,j,k) = frac_shelf_u(I,j) * hvel_shelf(k) &
+        h_u(I,j,k) = frac_shelf_u(I,j) * hvel_shelf(k) &
             + (1. - frac_shelf_u(I,j)) * hvel(k) + h_neglect
       enddo
     else
@@ -2284,30 +2344,30 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
         enddo
 
         do K=1,nz+1
-          CS%a_u_gl90(I,j,K) = min(a_cpl_max, a_cpl_gl90(K))
+          a_u_gl90(I,j,K) = min(a_cpl_max, a_cpl_gl90(K))
         enddo
       endif
 
       do K=1,nz+1
-        CS%a_u(I,j,K) = min(a_cpl_max, a_cpl(K))
+        a_u(I,j,K) = min(a_cpl_max, a_cpl(K))
       enddo
 
       do k=1,nz
-        CS%h_u(I,j,k) = hvel(k) + h_neglect
+        h_u(I,j,k) = hvel(k) + h_neglect
       enddo
     endif
 
     ! Diagnose total Kv at u-points
     if (CS%id_Kv_u > 0) then
       do k=1,nz
-        Kv_u(I,j,k) = 0.5 * (CS%a_u(I,j,K) + CS%a_u(I,j,K+1)) * CS%h_u(I,j,k)
+        Kv_u(I,j,k) = 0.5 * (a_u(I,j,K) + a_u(I,j,K+1)) * h_u(I,j,k)
       enddo
     endif
 
     ! Diagnose GL90 Kv at u-points
     if (CS%id_Kv_gl90_u > 0) then
       do k=1,nz
-        Kv_gl90_u(I,j,k) = 0.5 * (CS%a_u_gl90(I,j,K) + CS%a_u_gl90(I,j,K+1)) * CS%h_u(I,j,k)
+        Kv_gl90_u(I,j,k) = 0.5 * (a_u_gl90(I,j,K) + a_u_gl90(I,j,K+1)) * h_u(I,j,k)
       enddo
     endif
   enddo
@@ -2467,12 +2527,12 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
 
     if (CS%use_GL90_in_SSW) then
       call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, i, j, z_i_gl90, G, GV, &
-          CS%GL90_CS, CS%kappa_gl90_2d, VarMix, work_on_u=.false.)
+          CS%GL90_CS, kappa_gl90_2d, VarMix, work_on_u=.false.)
     endif
 
     do_any_shelf = .false.
     if (associated(frac_shelf_v)) then
-      CS%a1_shelf_v(i,J) = 0.
+      a1_shelf_v(i,J) = 0.
       do_any_shelf = frac_shelf_v(i,J) > 0.
 
       if (do_any_shelf) then
@@ -2551,25 +2611,25 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
             nkml_visc_v, Ustar_2d, &
             tv, work_on_u=.false., OBC=OBC, shelf=.true.)
 
-        CS%a1_shelf_v(i,J) = a_shelf(1)
+        a1_shelf_v(i,J) = a_shelf(1)
       endif
     endif
 
     if (do_any_shelf) then
       if (CS%use_GL90_in_SSW) then
         do K=1,nz+1
-          CS%a_v(I,j,K) = min(a_cpl_max, (frac_shelf_v(I,j) * a_shelf(K) + &
+          a_v(I,j,K) = min(a_cpl_max, (frac_shelf_v(I,j) * a_shelf(K) + &
                                          (1. - frac_shelf_v(I,j)) * a_cpl(K)) + a_cpl_gl90(K))
 
           ! This is Alistair's suggestion, but it destabilizes the model. I do not know why. RWH
           ! CS%a_v(I,j,K) = min(a_cpl_max, forces%frac_shelf_v(I,j) * max(a_shelf(K), a_cpl(K)) + &
           !                                (1. - forces%frac_shelf_v(I,j)) * a_cpl(K))
 
-          CS%a_v_gl90(I,j,K) = min(a_cpl_max, a_cpl_gl90(K))
+          a_v_gl90(I,j,K) = min(a_cpl_max, a_cpl_gl90(K))
         enddo
       else
         do K=1,nz+1
-          CS%a_v(I,j,K) = min(a_cpl_max, (frac_shelf_v(I,j) * a_shelf(K) + &
+          a_v(I,j,K) = min(a_cpl_max, (frac_shelf_v(I,j) * a_shelf(K) + &
                                            (1. - frac_shelf_v(I,j)) * a_cpl(K)))
           ! This is Alistair's suggestion, but it destabilizes the model. I do not know why. RWH
           ! CS%a_v(I,j,K) = min(a_cpl_max, forces%frac_shelf_v(I,j) * max(a_shelf(K), a_cpl(K)) + &
@@ -2579,7 +2639,7 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
 
       do k=1,nz
         ! Should we instead take the inverse of the average of the inverses?
-        CS%h_v(I,j,k) = frac_shelf_v(I,j) * hvel_shelf(k) &
+        h_v(I,j,k) = frac_shelf_v(I,j) * hvel_shelf(k) &
             + (1. - frac_shelf_v(I,j)) * hvel(k) + h_neglect
       enddo
     else
@@ -2589,30 +2649,30 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
         enddo
 
         do K=1,nz+1
-          CS%a_v_gl90(i,J,K) = min(a_cpl_max, a_cpl_gl90(K))
+          a_v_gl90(i,J,K) = min(a_cpl_max, a_cpl_gl90(K))
         enddo
       endif
 
       do K=1,nz+1
-        CS%a_v(i,J,K) = min(a_cpl_max, a_cpl(K))
+        a_v(i,J,K) = min(a_cpl_max, a_cpl(K))
       enddo
 
       do k=1,nz
-        CS%h_v(i,J,k) = hvel(k) + h_neglect
+        h_v(i,J,k) = hvel(k) + h_neglect
       enddo
     endif
 
     ! Diagnose total Kv at v-points
     if (CS%id_Kv_v > 0) then
       do k=1,nz
-        Kv_v(i,J,k) = 0.5 * (CS%a_v(i,J,K) + CS%a_v(i,J,K+1)) * CS%h_v(i,J,k)
+        Kv_v(i,J,k) = 0.5 * (a_v(i,J,K) + a_v(i,J,K+1)) * h_v(i,J,k)
       enddo
     endif
 
     ! Diagnose GL90 Kv at v-points
     if (CS%id_Kv_gl90_v > 0) then
       do k=1,nz
-        Kv_gl90_v(i,J,k) = 0.5 * (CS%a_v_gl90(i,J,K) + CS%a_v_gl90(i,J,K+1)) * CS%h_v(i,J,k)
+        Kv_gl90_v(i,J,k) = 0.5 * (a_v_gl90(i,J,K) + a_v_gl90(i,J,K+1)) * h_v(i,J,k)
       enddo
     endif
   enddo
@@ -2625,10 +2685,10 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   !$omp target exit data map(from: hML_v, kv_v, kv_gl90_v)
 
   if (CS%debug) then
-    !$omp target update from(CS%h_u, CS%h_v, CS%a_u, CS%a_v)
-    call uvchksum("loop vertvisc_coef h_[uv]", CS%h_u, CS%h_v, G%HI, haloshift=0, &
+    !$omp target update from(h_u, h_v, a_u, a_v)
+    call uvchksum("loop vertvisc_coef h_[uv]", h_u, h_v, G%HI, haloshift=0, &
                   unscale=GV%H_to_m, scalar_pair=.true.)
-    call uvchksum("vertvisc_coef a_[uv]", CS%a_u, CS%a_v, G%HI, haloshift=0, &
+    call uvchksum("vertvisc_coef a_[uv]", a_u, a_v, G%HI, haloshift=0, &
                   unscale=GV%H_to_m*US%s_to_T, scalar_pair=.true.)
     if (allocated(hML_u) .and. allocated(hML_v)) &
       call uvchksum("vertvisc_coef hML_[uv]", hML_u, hML_v, G%HI, &
@@ -2643,12 +2703,12 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
     if (CS%id_Kv_v > 0) call post_data(CS%id_Kv_v, Kv_v, CS%diag)
     if (CS%id_Kv_gl90_u > 0) call post_data(CS%id_Kv_gl90_u, Kv_gl90_u, CS%diag)
     if (CS%id_Kv_gl90_v > 0) call post_data(CS%id_Kv_gl90_v, Kv_gl90_v, CS%diag)
-    if (CS%id_au_vv > 0) call post_data(CS%id_au_vv, CS%a_u, CS%diag)
-    if (CS%id_av_vv > 0) call post_data(CS%id_av_vv, CS%a_v, CS%diag)
-    if (CS%id_au_gl90_vv > 0) call post_data(CS%id_au_gl90_vv, CS%a_u_gl90, CS%diag)
-    if (CS%id_av_gl90_vv > 0) call post_data(CS%id_av_gl90_vv, CS%a_v_gl90, CS%diag)
-    if (CS%id_h_u > 0) call post_data(CS%id_h_u, CS%h_u, CS%diag)
-    if (CS%id_h_v > 0) call post_data(CS%id_h_v, CS%h_v, CS%diag)
+    if (CS%id_au_vv > 0) call post_data(CS%id_au_vv, a_u, CS%diag)
+    if (CS%id_av_vv > 0) call post_data(CS%id_av_vv, a_v, CS%diag)
+    if (CS%id_au_gl90_vv > 0) call post_data(CS%id_au_gl90_vv, a_u_gl90, CS%diag)
+    if (CS%id_av_gl90_vv > 0) call post_data(CS%id_av_gl90_vv, a_v_gl90, CS%diag)
+    if (CS%id_h_u > 0) call post_data(CS%id_h_u, h_u, CS%diag)
+    if (CS%id_h_v > 0) call post_data(CS%id_h_v, h_v, CS%diag)
     if (CS%id_hML_u > 0) call post_data(CS%id_hML_u, hML_u, CS%diag)
     if (CS%id_hML_v > 0) call post_data(CS%id_hML_v, hML_v, CS%diag)
   endif
@@ -3787,6 +3847,10 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
   real, dimension(:,:,:), contiguous, pointer :: u, v ! The zonal and meridional velocities
                                                     ! [L T-1 ~> m s-1]
   real, dimension(:,:,:), contiguous, pointer :: h    ! Layer thickness [H ~> m or kg m-2]
+  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
+                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -3794,6 +3858,10 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
   call u_a%view(u)
   call v_a%view(v)
   call h_a%view(h)
+  call CS%a_u%view(a_u)
+  call CS%a_v%view(a_v)
+  call CS%h_u%view(h_u)
+  call CS%h_v%view(h_v)
 
   nullify(taux, tauy)
   if (forces_a%taux_a%associated()) call forces_a%taux_a%view(taux)
@@ -3841,11 +3909,11 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
         if ((u(I,j,k) * (dt * G%dy_Cu(I,j))) * G%IareaT(i+1,j) < -CS%CFL_trunc) then
           u(I,j,k) = (-0.9*CS%CFL_trunc) * (G%areaT(i+1,j) / (dt * G%dy_Cu(I,j)))
           if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
-              (CS%h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
+              (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
         elseif ((u(I,j,k) * (dt * G%dy_Cu(I,j))) * G%IareaT(i,j) > CS%CFL_trunc) then
           u(I,j,k) = (0.9*CS%CFL_trunc) * (G%areaT(i,j) / (dt * G%dy_Cu(I,j)))
           if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
-              (CS%h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
+              (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
         endif
       enddo
       CS%ntrunc = CS%ntrunc + ntrunc
@@ -3856,7 +3924,7 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
       do j=js,je ; do I=Isq,Ieq ; if (dowrite(I,j)) then
         ! Call a diagnostic reporting subroutines are called if unphysically large values are found.
         call write_u_accel(I, j, u_old, h, ADp, CDp, dt, G, GV, US, CS%PointAccel_CSp, &
-                           vel_report(I,j), taux(I,j), a=CS%a_u, hv=CS%h_u)
+                           vel_report(I,j), taux(I,j), a=a_u, hv=h_u)
       endif ; enddo ; enddo
     endif
   else  ! Do not report accelerations leading to large velocities.
@@ -3866,11 +3934,11 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
       elseif ((u(I,j,k) * (dt * G%dy_Cu(I,j))) * G%IareaT(i+1,j) < -CS%CFL_trunc) then
         u(I,j,k) = (-0.9*CS%CFL_trunc) * (G%areaT(i+1,j) / (dt * G%dy_Cu(I,j)))
         if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
-            (CS%h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
+            (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
       elseif ((u(I,j,k) * (dt * G%dy_Cu(I,j))) * G%IareaT(i,j) > CS%CFL_trunc) then
         u(I,j,k) = (0.9*CS%CFL_trunc) * (G%areaT(i,j) / (dt * G%dy_Cu(I,j)))
         if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
-            (CS%h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
+            (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
       endif
     enddo
     CS%ntrunc = CS%ntrunc + ntrunc
@@ -3913,11 +3981,11 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
         if ((v(i,J,k) * (dt * G%dx_Cv(i,J))) * G%IareaT(i,j+1) < -CS%CFL_trunc) then
           v(i,J,k) = (-0.9*CS%CFL_trunc) * (G%areaT(i,j+1) / (dt * G%dx_Cv(i,J)))
           if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
-              (CS%h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
+              (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
         elseif ((v(i,J,k) * (dt * G%dx_Cv(i,J))) * G%IareaT(i,j) > CS%CFL_trunc) then
           v(i,J,k) = (0.9*CS%CFL_trunc) * (G%areaT(i,j) / (dt * G%dx_Cv(i,J)))
           if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
-              (CS%h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
+              (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
         endif
       enddo
       CS%ntrunc = CS%ntrunc + ntrunc
@@ -3928,7 +3996,7 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
       do J=Jsq,Jeq ; do i=is,ie ; if (dowrite(i,J)) then
         ! Call a diagnostic reporting subroutines are called if unphysically large values are found.
         call write_v_accel(i, J, v_old, h, ADp, CDp, dt, G, GV, US, CS%PointAccel_CSp, &
-                           vel_report(i,J), tauy(i,J), a=CS%a_v, hv=CS%h_v)
+                           vel_report(i,J), tauy(i,J), a=a_v, hv=h_v)
       endif ; enddo ; enddo
     endif
   else  ! Do not report accelerations leading to large velocities.
@@ -3938,11 +4006,11 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, GV, US, 
       elseif ((v(i,J,k) * (dt * G%dx_Cv(i,J))) * G%IareaT(i,j+1) < -CS%CFL_trunc) then
         v(i,J,k) = (-0.9*CS%CFL_trunc) * (G%areaT(i,j+1) / (dt * G%dx_Cv(i,J)))
         if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
-            (CS%h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
+            (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
       elseif ((v(i,J,k) * (dt * G%dx_Cv(i,J))) * G%IareaT(i,j) > CS%CFL_trunc) then
         v(i,J,k) = (0.9*CS%CFL_trunc) * (G%areaT(i,j) / (dt * G%dx_Cv(i,J)))
         if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
-            (CS%h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
+            (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
       endif
     enddo
     CS%ntrunc = CS%ntrunc + ntrunc
@@ -3974,6 +4042,8 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
   ! Local variables
 
   real :: Kv_BBL  ! A viscosity in the bottom boundary layer with a simple scheme [H Z T-1 ~> m2 s-1 or Pa s]
+  real, dimension(:,:), contiguous, pointer :: kappa_gl90_2d ! 2D kappa_gl90 at h-points
+                                                    ! [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
   real :: Kv_back_z  ! A background kinematic viscosity [Z2 T-1 ~> m2 s-1]
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
   integer :: isd, ied, jsd, jed, IsdB, IedB, JsdB, JedB, nz
@@ -4118,10 +4188,11 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "from KD_GL90_FILE.", default="kd_gl90", do_not_log=.not.CS%use_GL90_in_SSW)
     kappa_gl90_file = trim(inputdir) // trim(kappa_gl90_file)
 
-    allocate(CS%kappa_gl90_2d(G%isd:G%ied, G%jsd:G%jed), source=0.0)
-    call MOM_read_data(kappa_gl90_file, kdgl90_varname, CS%kappa_gl90_2d(:,:), G%domain, &
+    call CS%kappa_gl90_2d%alloc(lb=[G%isd,G%jsd], ub=[G%ied,G%jed], source=0.0)
+    call CS%kappa_gl90_2d%view(kappa_gl90_2d)
+    call MOM_read_data(kappa_gl90_file, kdgl90_varname, kappa_gl90_2d(:,:), G%domain, &
                        scale=US%m_to_L*US%Z_to_L*GV%m_to_H*US%T_to_s)
-    call pass_var(CS%kappa_gl90_2d, G%domain)
+    call pass_var(kappa_gl90_2d, G%domain)
   endif
   call get_param(param_file, mdl, "USE_GL90_N2", CS%GL90_CS%use_GL90_N2, &
                  "If true, use GL90 vertical viscosity coefficient that is depth-independent; "// &
@@ -4244,12 +4315,12 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
 
   !$omp target update to(CS)
 
-  ALLOC_(CS%a_u(IsdB:IedB,jsd:jed,nz+1)) ; CS%a_u(:,:,:) = 0.0
-  ALLOC_(CS%a_u_gl90(IsdB:IedB,jsd:jed,nz+1)) ; CS%a_u_gl90(:,:,:) = 0.0
-  ALLOC_(CS%h_u(IsdB:IedB,jsd:jed,nz))   ; CS%h_u(:,:,:) = 0.0
-  ALLOC_(CS%a_v(isd:ied,JsdB:JedB,nz+1)) ; CS%a_v(:,:,:) = 0.0
-  ALLOC_(CS%a_v_gl90(isd:ied,JsdB:JedB,nz+1)) ; CS%a_v_gl90(:,:,:) = 0.0
-  ALLOC_(CS%h_v(isd:ied,JsdB:JedB,nz))   ; CS%h_v(:,:,:) = 0.0
+  call CS%a_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
+  call CS%a_u_gl90%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
+  call CS%h_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz], source=0.0)
+  call CS%a_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
+  call CS%a_v_gl90%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
+  call CS%h_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz], source=0.0)
 
   !$omp target enter data map(to: CS%a_u, CS%a_v)
   !$omp target enter data map(to: CS%h_u, CS%h_v)
@@ -4494,11 +4565,11 @@ subroutine vertvisc_end(CS)
   if ((len_trim(CS%u_trunc_file) > 0) .or. (len_trim(CS%v_trunc_file) > 0)) &
     deallocate(CS%PointAccel_CSp)
 
-  DEALLOC_(CS%a_u) ; DEALLOC_(CS%h_u)
-  DEALLOC_(CS%a_v) ; DEALLOC_(CS%h_v)
-  if (associated(CS%a1_shelf_u)) deallocate(CS%a1_shelf_u)
-  if (associated(CS%a1_shelf_v)) deallocate(CS%a1_shelf_v)
-  if (allocated(CS%kappa_gl90_2d)) deallocate(CS%kappa_gl90_2d)
+  call CS%a_u%free() ; call CS%h_u%free()
+  call CS%a_v%free() ; call CS%h_v%free()
+  call CS%a1_shelf_u%free()
+  call CS%a1_shelf_v%free()
+  call CS%kappa_gl90_2d%free()
 end subroutine vertvisc_end
 
 !> \namespace mom_vert_friction
