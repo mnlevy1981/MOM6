@@ -1825,9 +1825,11 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   type(ocean_OBC_type),    pointer       :: OBC    !< Open boundary condition structure
   type(VarMix_CS),         intent(in) :: VarMix !< Variable mixing coefficients
 
-  real, dimension(SZI_(G),SZJ_(G)) :: &
-    Ustar_2d    ! The wind friction velocity, calculated using the Boussinesq reference density or
+  type(RealArray_t) :: &
+    Ustar_2d_a  ! The wind friction velocity, calculated using the Boussinesq reference density or
                 ! the time-evolving surface density in non-Boussinesq mode [Z T-1 ~> m s-1]
+  real, dimension(:,:), contiguous, pointer :: Ustar_2d ! The wind friction velocity
+                                                        ! [Z T-1 ~> m s-1]
   type(vertvisc_container_type)     :: visc_a   ! Copies of the viscosities and bottom drag in visc
   type(grid_core_type), pointer :: Gcore ! Persistent copies of the core ocean grid fields
   type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
@@ -1835,7 +1837,6 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   type(RealArray_t) :: v_a  ! Meridional velocity [L T-1 ~> m s-1]
   type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
   type(RealArray_t) :: dz_a ! Vertical distance across layers [Z ~> m]
-  type(RealArray_t) :: Ustar_2d_a ! The wind friction velocity [Z T-1 ~> m s-1]
 
   Gcore => grid_core(G)
   call visc_a%build_from(visc)
@@ -1844,10 +1845,11 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call v_a%alloc(lb=LBOUND(v), ub=UBOUND(v), source=v)
   call h_a%alloc(lb=LBOUND(h), ub=UBOUND(h), source=h)
   call dz_a%alloc(lb=LBOUND(dz), ub=UBOUND(dz), source=dz)
+  call Ustar_2d_a%alloc(lb=[G%isd,G%jsd], ub=[G%ied,G%jed])
+  call Ustar_2d_a%view(Ustar_2d)
 
   !$omp target enter data map(alloc: Ustar_2d)
   call find_ustar(forces, tv, Ustar_2d, G, GV, US, halo=1)
-  call Ustar_2d_a%alloc(lb=LBOUND(Ustar_2d), ub=UBOUND(Ustar_2d), source=Ustar_2d)
 
   call vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
                         tv, dt, G, Gcore, GV, US, CS, OBC, VarMix)
