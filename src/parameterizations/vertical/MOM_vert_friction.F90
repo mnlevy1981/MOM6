@@ -37,7 +37,7 @@ use MOM_verticalGrid,  only : verticalGrid_type
 use MOM_wave_interface, only : wave_parameters_CS
 use MOM_set_visc,      only : set_v_at_u, set_u_at_v
 use MOM_lateral_mixing_coeffs, only : VarMix_CS
-use array_mod,         only : RealArray_t
+use array_mod,         only : RealArray_t, RealArray_C
 use box_mod,           only : Box_t
 use iso_c_binding,     only : c_int, c_bool, c_double
 
@@ -152,6 +152,8 @@ type :: GL90_CS
                              !! viscosity via Kv_gl90 = alpha_gl90 * f^2. Note that the implied
                              !! Kv_gl90 corresponds to a kappa_gl90 that scales as N^2 with depth.
                              !! [H Z T ~> m2 s or kg s m-1]
+  type(RealArray_t) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points
+                                     !! [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
 end type GL90_CS
 
 !> bind(C) mirror of GL90_CS, field-for-field, same order.
@@ -167,7 +169,30 @@ type, bind(C) :: GL90_CS_C
                                !! viscosity via Kv_gl90 = alpha_gl90 * f^2. Note that the implied
                                !! Kv_gl90 corresponds to a kappa_gl90 that scales as N^2 with depth.
                                !! [H Z T ~> m2 s or kg s m-1]
+  type(RealArray_C) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points
+                                     !! [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
 end type GL90_CS_C
+
+!> The viscous coupling coefficients and effective layer thicknesses at velocity points that
+!! the coupling coefficient calculations store for the vertical viscosity solvers.
+type :: coupling_state_type
+  type(RealArray_t) :: a_u !< The u-drag coefficient across an interface
+                           !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: a_u_gl90 !< The u-drag coefficient associated with GL90 across an interface
+                                !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: h_u !< The effective layer thickness at u-points [H ~> m or kg m-2].
+  type(RealArray_t) :: a_v !< The v-drag coefficient across an interface
+                           !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: a_v_gl90 !< The v-drag coefficient associated with GL90 across an interface
+                                !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t) :: h_v !< The effective layer thickness at v-points [H ~> m or kg m-2].
+  type(RealArray_t) :: a1_shelf_u !< The u-momentum coupling coefficient under ice shelves
+                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
+                                  !! under shelves.
+  type(RealArray_t) :: a1_shelf_v !< The v-momentum coupling coefficient under ice shelves
+                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
+                                  !! under shelves.
+end type coupling_state_type
 
 !> The control structure with parameters and memory for the MOM_vert_friction module
 type, public :: vertvisc_CS ; private
@@ -199,22 +224,8 @@ type, public :: vertvisc_CS ; private
   logical :: CFLrampingIsActivated = .false. !< True if the ramping has been initialized
   type(time_type) :: rampStartTime !< The time at which the ramping of CFL_trunc starts
 
-  type(RealArray_t) :: a_u !< The u-drag coefficient across an interface
-                           !! [H T-1 ~> m s-1 or Pa s m-1]
-  type(RealArray_t) :: a_u_gl90 !< The u-drag coefficient associated with GL90 across an interface
-                                !! [H T-1 ~> m s-1 or Pa s m-1]
-  type(RealArray_t) :: h_u !< The effective layer thickness at u-points [H ~> m or kg m-2].
-  type(RealArray_t) :: a_v !< The v-drag coefficient across an interface
-                           !! [H T-1 ~> m s-1 or Pa s m-1]
-  type(RealArray_t) :: a_v_gl90 !< The v-drag coefficient associated with GL90 across an interface
-                                !! [H T-1 ~> m s-1 or Pa s m-1]
-  type(RealArray_t) :: h_v !< The effective layer thickness at v-points [H ~> m or kg m-2].
-  type(RealArray_t) :: a1_shelf_u !< The u-momentum coupling coefficient under ice shelves
-                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
-                                  !! under shelves.
-  type(RealArray_t) :: a1_shelf_v !< The v-momentum coupling coefficient under ice shelves
-                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
-                                  !! under shelves.
+  type(coupling_state_type) :: coupling_state !< The viscous coupling coefficients and
+                                              !! effective layer thicknesses at velocity points
 
   logical :: split          !< If true, use the split time stepping scheme.
   logical :: harmonic_visc  !< If true, the harmonic mean thicknesses are used
@@ -242,7 +253,6 @@ type, public :: vertvisc_CS ; private
 
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !! timing of diagnostic output.
-  type(RealArray_t) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
 
   !>@{ Diagnostic identifiers
   integer :: id_du_dt_visc = -1, id_dv_dt_visc = -1, id_du_dt_visc_gl90 = -1, id_dv_dt_visc_gl90 = -1
@@ -417,8 +427,8 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
 
-  call CS%h_u%view(h_u)
-  call CS%h_v%view(h_v)
+  call CS%coupling_state%h_u%view(h_u)
+  call CS%coupling_state%h_v%view(h_v)
 
   pi = 4. * atan2(1.,1.)
   Irho0 = 1.0 / GV%Rho0
@@ -835,15 +845,18 @@ function coupling_CS_to_c(opts) result(cdesc)
   cdesc%answer_date = opts%answer_date
 end function coupling_CS_to_c
 
+#ifdef _TIM
 !> Converts a GL90_CS to its bind(C) mirror.
 function GL90_CS_to_c(opts) result(cdesc)
-  type(GL90_CS), intent(in) :: opts !< Options to convert
+  type(GL90_CS), target, intent(in) :: opts !< Options to convert
   type(GL90_CS_C) :: cdesc          !< bind(C) mirror of opts
   cdesc%use_GL90_N2 = opts%use_GL90_N2
   cdesc%kappa_gl90 = opts%kappa_gl90
   cdesc%read_kappa_gl90 = opts%read_kappa_gl90
   cdesc%alpha_gl90 = opts%alpha_gl90
+  cdesc%kappa_gl90_2d = opts%kappa_gl90_2d%to_c()
 end function GL90_CS_to_c
+#endif
 
 
 !> Perform a fully implicit vertical diffusion
@@ -1058,15 +1071,15 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   call u_a%view(u)
   call v_a%view(v)
   call h_a%view(h)
-  call CS%a_u%view(a_u)
-  call CS%a_v%view(a_v)
-  call CS%h_u%view(h_u)
-  call CS%h_v%view(h_v)
-  call CS%a_u_gl90%view(a_u_gl90)
-  call CS%a_v_gl90%view(a_v_gl90)
+  call CS%coupling_state%a_u%view(a_u)
+  call CS%coupling_state%a_v%view(a_v)
+  call CS%coupling_state%h_u%view(h_u)
+  call CS%coupling_state%h_v%view(h_v)
+  call CS%coupling_state%a_u_gl90%view(a_u_gl90)
+  call CS%coupling_state%a_v_gl90%view(a_v_gl90)
   nullify(a1_shelf_u, a1_shelf_v)
-  if (CS%a1_shelf_u%associated()) call CS%a1_shelf_u%view(a1_shelf_u)
-  if (CS%a1_shelf_v%associated()) call CS%a1_shelf_v%view(a1_shelf_v)
+  if (CS%coupling_state%a1_shelf_u%associated()) call CS%coupling_state%a1_shelf_u%view(a1_shelf_u)
+  if (CS%coupling_state%a1_shelf_v%associated()) call CS%coupling_state%a1_shelf_v%view(a1_shelf_v)
   call Gcore%mask2dCu%view(mask2dCu)
   call Gcore%mask2dCv%view(mask2dCv)
   call Gcore%areaCu%view(areaCu)
@@ -1669,14 +1682,18 @@ subroutine vertvisc_diagnostics(KE_u_a, KE_v_a, taux_bot_a, tauy_bot_a, ADp, G, 
         call post_product_sum_v(CS%id_hf_dv_dt_visc_2d, ADp%dv_dt_visc, ADp%diag_hfrac_v, G, nz, CS%diag)
 
       ! Diagnostics for thickness x viscous accelerations
-      if (CS%id_h_du_dt_visc > 0) call post_product_u(CS%id_h_du_dt_visc, ADp%du_dt_visc, ADp%diag_hu, G, nz, CS%diag)
-      if (CS%id_h_dv_dt_visc > 0) call post_product_v(CS%id_h_dv_dt_visc, ADp%dv_dt_visc, ADp%diag_hv, G, nz, CS%diag)
+      if (CS%id_h_du_dt_visc > 0) &
+        call post_product_u(CS%id_h_du_dt_visc, ADp%du_dt_visc, ADp%diag_hu, G, nz, CS%diag)
+      if (CS%id_h_dv_dt_visc > 0) &
+        call post_product_v(CS%id_h_dv_dt_visc, ADp%dv_dt_visc, ADp%diag_hv, G, nz, CS%diag)
     endif
 
     if (associated(ADp%du_dt_str) .and.  associated(ADp%dv_dt_str)) then
       ! Diagnostics for thickness x wind stress accelerations
-      if (CS%id_h_du_dt_str > 0) call post_product_u(CS%id_h_du_dt_str, ADp%du_dt_str, ADp%diag_hu, G, nz, CS%diag)
-      if (CS%id_h_dv_dt_str > 0) call post_product_v(CS%id_h_dv_dt_str, ADp%dv_dt_str, ADp%diag_hv, G, nz, CS%diag)
+      if (CS%id_h_du_dt_str > 0) &
+        call post_product_u(CS%id_h_du_dt_str, ADp%du_dt_str, ADp%diag_hu, G, nz, CS%diag)
+      if (CS%id_h_dv_dt_str > 0) &
+        call post_product_v(CS%id_h_dv_dt_str, ADp%dv_dt_str, ADp%diag_hv, G, nz, CS%diag)
 
       ! Diagnostics for wind stress accelerations multiplied by visc_rem_[uv],
       if (CS%id_du_dt_str_visc_rem > 0) &
@@ -1731,7 +1748,7 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
   call visc_rem_v_a%alloc(lb=LBOUND(visc_rem_v), ub=UBOUND(visc_rem_v), source=visc_rem_v)
 
   call vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, dt, Gcore, GV%ke, &
-                           CS%a_u, CS%a_v, CS%h_u, CS%h_v)
+                           CS%coupling_state)
 
   call visc_rem_u_a%copy2F(visc_rem_u)
   call visc_rem_v_a%copy2F(visc_rem_v)
@@ -1745,7 +1762,7 @@ end subroutine vertvisc_remnant
 
 !> The implementation of vertvisc_remnant (the root of its call tree).
 subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, dt, Gcore, ke, &
-                               a_u_a, a_v_a, h_u_a, h_v_a)
+                               coupling_state)
   type(Box_t),           intent(in)   :: bxU0 !< The u-point box of the whole column,
                                              !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),           intent(in)   :: bxV0 !< The v-point box of the whole column,
@@ -1763,14 +1780,10 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
                                                        !! experiences after viscosity is applied in
                                                        !! the meridional direction [nondim]
   real,                  intent(in)    :: dt  !< Time increment [T ~> s]
-  type(RealArray_t),     intent(in)    :: a_u_a !< The u-drag coefficient across an interface
-                                              !! [H T-1 ~> m s-1 or Pa s m-1]
-  type(RealArray_t),     intent(in)    :: a_v_a !< The v-drag coefficient across an interface
-                                              !! [H T-1 ~> m s-1 or Pa s m-1]
-  type(RealArray_t),     intent(in)    :: h_u_a !< The effective layer thickness at u-points
-                                              !! [H ~> m or kg m-2].
-  type(RealArray_t),     intent(in)    :: h_v_a !< The effective layer thickness at v-points
-                                              !! [H ~> m or kg m-2].
+  type(coupling_state_type), &
+                         intent(in)    :: coupling_state !< The viscous coupling coefficients
+                                                         !! and effective layer thicknesses at
+                                                         !! velocity points
 
   ! Local variables
 
@@ -1809,10 +1822,10 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
 
   call visc_rem_u_a%view(visc_rem_u)
   call visc_rem_v_a%view(visc_rem_v)
-  call a_u_a%view(a_u)
-  call a_v_a%view(a_v)
-  call h_u_a%view(h_u)
-  call h_v_a%view(h_v)
+  call coupling_state%a_u%view(a_u)
+  call coupling_state%a_v%view(a_v)
+  call coupling_state%h_u%view(h_u)
+  call coupling_state%h_v%view(h_v)
   call Gcore%mask2dCu%view(mask2dCu)
   call Gcore%mask2dCv%view(mask2dCv)
 
@@ -2166,14 +2179,14 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   call h_a%view(h)
   call dz_a%view(dz)
   call Ustar_2d_a%view(Ustar_2d)
-  call CS%a_u%view(a_u)
-  call CS%a_v%view(a_v)
-  call CS%h_u%view(h_u)
-  call CS%h_v%view(h_v)
-  call CS%a_u_gl90%view(a_u_gl90)
-  call CS%a_v_gl90%view(a_v_gl90)
+  call CS%coupling_state%a_u%view(a_u)
+  call CS%coupling_state%a_v%view(a_v)
+  call CS%coupling_state%h_u%view(h_u)
+  call CS%coupling_state%h_v%view(h_v)
+  call CS%coupling_state%a_u_gl90%view(a_u_gl90)
+  call CS%coupling_state%a_v_gl90%view(a_v_gl90)
   nullify(kappa_gl90_2d)
-  if (CS%kappa_gl90_2d%associated()) call CS%kappa_gl90_2d%view(kappa_gl90_2d)
+  if (CS%GL90_CS%kappa_gl90_2d%associated()) call CS%GL90_CS%kappa_gl90_2d%view(kappa_gl90_2d)
   call Gcore%mask2dCu%view(mask2dCu)
   call Gcore%mask2dCv%view(mask2dCv)
   call Gcore%bathyT%view(bathyT)
@@ -2218,16 +2231,16 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   I_valBL = 0.0 ; if (CS%harm_BL_val > 0.0) I_valBL = 1.0 / CS%harm_BL_val
 
   if ((associated(taux_shelf) .or. associated(frac_shelf_u)) .and. &
-      .not.CS%a1_shelf_u%associated()) then
-    call CS%a1_shelf_u%alloc(lb=[G%IsdB,G%jsd], ub=[G%IedB,G%jed], source=0.0)
+      .not.CS%coupling_state%a1_shelf_u%associated()) then
+    call CS%coupling_state%a1_shelf_u%alloc(lb=[G%IsdB,G%jsd], ub=[G%IedB,G%jed], source=0.0)
   endif
   if ((associated(tauy_shelf) .or. associated(frac_shelf_v)) .and. &
-      .not.CS%a1_shelf_v%associated()) then
-    call CS%a1_shelf_v%alloc(lb=[G%isd,G%JsdB], ub=[G%ied,G%JedB], source=0.0)
+      .not.CS%coupling_state%a1_shelf_v%associated()) then
+    call CS%coupling_state%a1_shelf_v%alloc(lb=[G%isd,G%JsdB], ub=[G%ied,G%JedB], source=0.0)
   endif
   nullify(a1_shelf_u, a1_shelf_v)
-  if (CS%a1_shelf_u%associated()) call CS%a1_shelf_u%view(a1_shelf_u)
-  if (CS%a1_shelf_v%associated()) call CS%a1_shelf_v%view(a1_shelf_v)
+  if (CS%coupling_state%a1_shelf_u%associated()) call CS%coupling_state%a1_shelf_u%view(a1_shelf_u)
+  if (CS%coupling_state%a1_shelf_v%associated()) call CS%coupling_state%a1_shelf_v%view(a1_shelf_v)
 
   ! First do u-points
 
@@ -2910,12 +2923,12 @@ subroutine vertvisc_coef_diagnostics(coef_diag_a, Kv_slow, G, GV, US, CS)
                                                            ! thickness-based units
                                                            ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
 
-  call CS%a_u%view(a_u)
-  call CS%a_v%view(a_v)
-  call CS%h_u%view(h_u)
-  call CS%h_v%view(h_v)
-  call CS%a_u_gl90%view(a_u_gl90)
-  call CS%a_v_gl90%view(a_v_gl90)
+  call CS%coupling_state%a_u%view(a_u)
+  call CS%coupling_state%a_v%view(a_v)
+  call CS%coupling_state%h_u%view(h_u)
+  call CS%coupling_state%h_v%view(h_v)
+  call CS%coupling_state%a_u_gl90%view(a_u_gl90)
+  call CS%coupling_state%a_v_gl90%view(a_v_gl90)
   nullify(hML_u, hML_v, Kv_u, Kv_v, Kv_gl90_u, Kv_gl90_v)
   if (coef_diag_a%hML_u_a%associated()) call coef_diag_a%hML_u_a%view(hML_u)
   if (coef_diag_a%hML_v_a%associated()) call coef_diag_a%hML_v_a%view(hML_v)
@@ -4143,10 +4156,10 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
   call u_a%view(u)
   call v_a%view(v)
   call h_a%view(h)
-  call CS%a_u%view(a_u)
-  call CS%a_v%view(a_v)
-  call CS%h_u%view(h_u)
-  call CS%h_v%view(h_v)
+  call CS%coupling_state%a_u%view(a_u)
+  call CS%coupling_state%a_v%view(a_v)
+  call CS%coupling_state%h_u%view(h_u)
+  call CS%coupling_state%h_v%view(h_v)
   call Gcore%areaT%view(areaT)
   call Gcore%IareaT%view(IareaT)
   call Gcore%dx_Cv%view(dx_Cv)
@@ -4477,8 +4490,8 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "from KD_GL90_FILE.", default="kd_gl90", do_not_log=.not.CS%use_GL90_in_SSW)
     kappa_gl90_file = trim(inputdir) // trim(kappa_gl90_file)
 
-    call CS%kappa_gl90_2d%alloc(lb=[G%isd,G%jsd], ub=[G%ied,G%jed], source=0.0)
-    call CS%kappa_gl90_2d%view(kappa_gl90_2d)
+    call CS%GL90_CS%kappa_gl90_2d%alloc(lb=[G%isd,G%jsd], ub=[G%ied,G%jed], source=0.0)
+    call CS%GL90_CS%kappa_gl90_2d%view(kappa_gl90_2d)
     call MOM_read_data(kappa_gl90_file, kdgl90_varname, kappa_gl90_2d(:,:), G%domain, &
                        scale=US%m_to_L*US%Z_to_L*GV%m_to_H*US%T_to_s)
     call pass_var(kappa_gl90_2d, G%domain)
@@ -4604,17 +4617,17 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
 
   !$omp target update to(CS)
 
-  call CS%a_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
-  call CS%a_u_gl90%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
-  call CS%h_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz], source=0.0)
-  call CS%a_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
-  call CS%a_v_gl90%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
-  call CS%h_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz], source=0.0)
+  call CS%coupling_state%a_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
+  call CS%coupling_state%a_u_gl90%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
+  call CS%coupling_state%h_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz], source=0.0)
+  call CS%coupling_state%a_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
+  call CS%coupling_state%a_v_gl90%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
+  call CS%coupling_state%h_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz], source=0.0)
 
-  !$omp target enter data map(to: CS%a_u, CS%a_v)
-  !$omp target enter data map(to: CS%h_u, CS%h_v)
+  !$omp target enter data map(to: CS%coupling_state%a_u, CS%coupling_state%a_v)
+  !$omp target enter data map(to: CS%coupling_state%h_u, CS%coupling_state%h_v)
   ! TODO: Conditional?
-  !$omp target enter data map(to: CS%a_u_gl90, CS%a_v_gl90)
+  !$omp target enter data map(to: CS%coupling_state%a_u_gl90, CS%coupling_state%a_v_gl90)
 
   CS%id_Kv_slow = register_diag_field('ocean_model', 'Kv_slow', diag%axesTi, Time, &
       'Slow varying vertical viscosity', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
@@ -4854,11 +4867,11 @@ subroutine vertvisc_end(CS)
   if ((len_trim(CS%u_trunc_file) > 0) .or. (len_trim(CS%v_trunc_file) > 0)) &
     deallocate(CS%PointAccel_CSp)
 
-  call CS%a_u%free() ; call CS%h_u%free()
-  call CS%a_v%free() ; call CS%h_v%free()
-  call CS%a1_shelf_u%free()
-  call CS%a1_shelf_v%free()
-  call CS%kappa_gl90_2d%free()
+  call CS%coupling_state%a_u%free() ; call CS%coupling_state%h_u%free()
+  call CS%coupling_state%a_v%free() ; call CS%coupling_state%h_v%free()
+  call CS%coupling_state%a1_shelf_u%free()
+  call CS%coupling_state%a1_shelf_v%free()
+  call CS%GL90_CS%kappa_gl90_2d%free()
 end subroutine vertvisc_end
 
 !> \namespace mom_vert_friction
