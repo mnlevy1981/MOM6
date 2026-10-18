@@ -338,6 +338,21 @@ contains
   procedure :: free       => mech_forcing_container_free !< Free every allocated field
 end type mech_forcing_container_type
 
+!> The diagnostic arrays that the vertical viscosity coupling coefficient calculations fill,
+!! each allocated only if it is needed for a diagnostic or for debugging checksums.
+type :: vertvisc_coef_diag_type
+  type(RealArray_t) :: hML_u_a     !< Diagnostic of the mixed layer depth at u points [Z ~> m].
+  type(RealArray_t) :: hML_v_a     !< Diagnostic of the mixed layer depth at v points [Z ~> m].
+  type(RealArray_t) :: Kv_u_a      !< Total vertical viscosity at u-points in
+                                   !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  type(RealArray_t) :: Kv_v_a      !< Total vertical viscosity at v-points in
+                                   !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  type(RealArray_t) :: Kv_gl90_u_a !< GL90 vertical viscosity at u-points in
+                                   !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  type(RealArray_t) :: Kv_gl90_v_a !< GL90 vertical viscosity at v-points in
+                                   !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+end type vertvisc_coef_diag_type
+
 contains
 
 !> Add nonlocal stress increments to ui^n and vi^n.
@@ -1657,6 +1672,7 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
 
   call visc_rem_u_a%copy2F(visc_rem_u)
   call visc_rem_v_a%copy2F(visc_rem_v)
+  call vertvisc_remnant_diagnostics(visc_rem_u, visc_rem_v, G, GV, CS)
   call visc_a%free()
   call visc_rem_u_a%free()
   call visc_rem_v_a%free()
@@ -1794,12 +1810,31 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore,
     enddo
   enddo
 
+end subroutine vertvisc_remnant_TR
+
+!> Writes the debugging checksums of the fractions of a time-step's worth of a barotropic
+!! acceleration that a layer experiences after viscosity is applied.
+subroutine vertvisc_remnant_diagnostics(visc_rem_u, visc_rem_v, G, GV, CS)
+  type(ocean_grid_type), intent(in)   :: G    !< Ocean grid structure
+  type(verticalGrid_type), intent(in) :: GV   !< Ocean vertical grid structure
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                         intent(in)  :: visc_rem_u !< Fraction of a time-step's worth of a
+                                                   !! barotropic acceleration that a layer
+                                                   !! experiences after viscosity is applied in the
+                                                   !! zonal direction [nondim]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                         intent(in)  :: visc_rem_v !< Fraction of a time-step's worth of a
+                                                   !! barotropic acceleration that a layer
+                                                   !! experiences after viscosity is applied in the
+                                                   !! meridional direction [nondim]
+  type(vertvisc_CS),     intent(in)  :: CS  !< Vertical viscosity control structure
+
   if (CS%debug) then
     !$omp target update from(visc_rem_u, visc_rem_v)
     call uvchksum("visc_rem_[uv]", visc_rem_u, visc_rem_v, G%HI, haloshift=0, &
                   scalar_pair=.true.)
   endif
-end subroutine vertvisc_remnant_TR
+end subroutine vertvisc_remnant_diagnostics
 
 
 !> Calculate the coupling coefficients (CS%a_u, CS%a_v, CS%a_u_gl90, CS%a_v_gl90)
@@ -1838,6 +1873,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   type(RealArray_t) :: v_a  ! Meridional velocity [L T-1 ~> m s-1]
   type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
   type(RealArray_t) :: dz_a ! Vertical distance across layers [Z ~> m]
+  type(vertvisc_coef_diag_type) :: coef_diag_a ! The diagnostic arrays filled by vertvisc_coef_TR
 
   Gcore => grid_core(G)
   call visc_a%build_from(visc)
@@ -1848,13 +1884,27 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call dz_a%alloc(lb=LBOUND(dz), ub=UBOUND(dz), source=dz)
   call Ustar_2d_a%alloc(lb=[G%isd,G%jsd], ub=[G%ied,G%jed])
   call Ustar_2d_a%view(Ustar_2d)
+  if (CS%id_Kv_u > 0) call coef_diag_a%Kv_u_a%alloc(lb=[G%IsdB,G%jsd,1], &
+                                               ub=[G%IedB,G%jed,GV%ke], source=0.0)
+  if (CS%id_Kv_v > 0) call coef_diag_a%Kv_v_a%alloc(lb=[G%isd,G%JsdB,1], &
+                                               ub=[G%ied,G%JedB,GV%ke], source=0.0)
+  if (CS%id_Kv_gl90_u > 0) call coef_diag_a%Kv_gl90_u_a%alloc(lb=[G%IsdB,G%jsd,1], &
+                                                         ub=[G%IedB,G%jed,GV%ke], source=0.0)
+  if (CS%id_Kv_gl90_v > 0) call coef_diag_a%Kv_gl90_v_a%alloc(lb=[G%isd,G%JsdB,1], &
+                                                         ub=[G%ied,G%JedB,GV%ke], source=0.0)
+  if (CS%debug .or. (CS%id_hML_u > 0)) &
+    call coef_diag_a%hML_u_a%alloc(lb=[G%IsdB,G%jsd], ub=[G%IedB,G%jed], source=0.0)
+  if (CS%debug .or. (CS%id_hML_v > 0)) &
+    call coef_diag_a%hML_v_a%alloc(lb=[G%isd,G%JsdB], ub=[G%ied,G%JedB], source=0.0)
 
   !$omp target enter data map(alloc: Ustar_2d)
   call find_ustar(forces, tv, Ustar_2d, G, GV, US, halo=1)
 
   call vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
-                        tv, dt, G, Gcore, GV, US, CS, OBC, VarMix)
+                        tv, dt, G, Gcore, GV, US, CS, OBC, VarMix, coef_diag_a)
   !$omp target exit data map(delete: Ustar_2d)
+
+  call vertvisc_coef_diagnostics(coef_diag_a, visc%Kv_slow, G, GV, US, CS)
 
   call visc_a%free()
   call forces_a%free()
@@ -1863,12 +1913,18 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call h_a%free()
   call dz_a%free()
   call Ustar_2d_a%free()
+  call coef_diag_a%hML_u_a%free()
+  call coef_diag_a%hML_v_a%free()
+  call coef_diag_a%Kv_u_a%free()
+  call coef_diag_a%Kv_v_a%free()
+  call coef_diag_a%Kv_gl90_u_a%free()
+  call coef_diag_a%Kv_gl90_v_a%free()
 
 end subroutine vertvisc_coef
 
 !> The implementation of vertvisc_coef (the root of its call tree).
 subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
-                            tv, dt, G, Gcore, GV, US, CS, OBC, VarMix)
+                            tv, dt, G, Gcore, GV, US, CS, OBC, VarMix, coef_diag_a)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
@@ -1891,6 +1947,9 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   type(vertvisc_CS),       intent(inout) :: CS     !< Vertical viscosity control structure
   type(ocean_OBC_type),    pointer       :: OBC    !< Open boundary condition structure
   type(VarMix_CS),         intent(in) :: VarMix !< Variable mixing coefficients
+  type(vertvisc_coef_diag_type), &
+                           intent(inout) :: coef_diag_a !< The diagnostic arrays filled here, each
+                                                        !! allocated only if it is needed
   ! Field from forces used in this subroutine:
   !   ustar: the friction velocity [Z T-1 ~> m s-1], used here as the mixing
   !     velocity in the mixed layer if NKML > 1 in a bulk mixed layer.
@@ -1934,16 +1993,22 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
     zh, &         ! An estimate of the interface's distance from the bottom
                   ! based on harmonic mean thicknesses [Z ~> m].
     h_ml          ! The mixed layer depth [Z ~> m].
-  real, allocatable, dimension(:,:) :: hML_u ! Diagnostic of the mixed layer depth at u points [Z ~> m].
-  real, allocatable, dimension(:,:) :: hML_v ! Diagnostic of the mixed layer depth at v points [Z ~> m].
-  real, allocatable, dimension(:,:,:) :: Kv_u ! Total vertical viscosity at u-points in
-                                              ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
-  real, allocatable, dimension(:,:,:) :: Kv_v ! Total vertical viscosity at v-points in
-                                              ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
-  real, allocatable, dimension(:,:,:) :: Kv_gl90_u ! GL90 vertical viscosity at u-points in
-                                              ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
-  real, allocatable, dimension(:,:,:) :: Kv_gl90_v ! GL90 vertical viscosity at v-points in
-                                              ! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:), contiguous, pointer :: hML_u ! Diagnostic of the mixed layer depth at u
+                                                     ! points [Z ~> m].
+  real, dimension(:,:), contiguous, pointer :: hML_v ! Diagnostic of the mixed layer depth at v
+                                                     ! points [Z ~> m].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_u ! Total vertical viscosity at u-points in
+                                                      ! thickness-based units
+                                                      ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_v ! Total vertical viscosity at v-points in
+                                                      ! thickness-based units
+                                                      ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_gl90_u ! GL90 vertical viscosity at u-points in
+                                                           ! thickness-based units
+                                                           ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_gl90_v ! GL90 vertical viscosity at v-points in
+                                                           ! thickness-based units
+                                                           ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
   real :: zcol    ! The height of an interface at h-points [Z ~> m].
   real :: zcol_p1 ! An adjacent east/north h-point interface height [Z ~> m].
   real :: botfn   ! A function which goes from 1 at the bottom to 0 much more
@@ -1989,9 +2054,6 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   real, dimension(:,:,:), contiguous, pointer :: Kv_shear, Kv_shear_Bu ! The shear-driven turbulent
                                                          ! vertical viscosity at the interfaces in
                                                          ! tracer and corner columns
-                                                         ! [H Z T-1 ~> m2 s-1 or Pa s]
-  real, dimension(:,:,:), contiguous, pointer :: Kv_slow ! The turbulent vertical viscosity
-                                                         ! component due to "slow" processes
                                                          ! [H Z T-1 ~> m2 s-1 or Pa s]
 
   real, dimension(:,:,:), contiguous, pointer :: u, v ! The zonal and meridional velocities
@@ -2050,7 +2112,7 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   if (forces_a%frac_shelf_v_a%associated()) call forces_a%frac_shelf_v_a%view(frac_shelf_v)
   nullify(taux_shelf, tauy_shelf, Kv_bbl_u, Kv_bbl_v, bbl_thick_u, bbl_thick_v, tbl_thick_shelf_u, &
           tbl_thick_shelf_v, Kv_tbl_shelf_u, Kv_tbl_shelf_v, nkml_visc_u, nkml_visc_v, Kv_shear, &
-          Kv_shear_Bu, Kv_slow)
+          Kv_shear_Bu)
   if (visc_a%taux_shelf_a%associated()) call visc_a%taux_shelf_a%view(taux_shelf)
   if (visc_a%tauy_shelf_a%associated()) call visc_a%tauy_shelf_a%view(tauy_shelf)
   if (visc_a%Kv_bbl_u_a%associated()) call visc_a%Kv_bbl_u_a%view(Kv_bbl_u)
@@ -2067,7 +2129,13 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   if (visc_a%nkml_visc_v_a%associated()) call visc_a%nkml_visc_v_a%view(nkml_visc_v)
   if (visc_a%Kv_shear_a%associated()) call visc_a%Kv_shear_a%view(Kv_shear)
   if (visc_a%Kv_shear_Bu_a%associated()) call visc_a%Kv_shear_Bu_a%view(Kv_shear_Bu)
-  if (visc_a%Kv_slow_a%associated()) call visc_a%Kv_slow_a%view(Kv_slow)
+  nullify(hML_u, hML_v, Kv_u, Kv_v, Kv_gl90_u, Kv_gl90_v)
+  if (coef_diag_a%hML_u_a%associated()) call coef_diag_a%hML_u_a%view(hML_u)
+  if (coef_diag_a%hML_v_a%associated()) call coef_diag_a%hML_v_a%view(hML_v)
+  if (coef_diag_a%Kv_u_a%associated()) call coef_diag_a%Kv_u_a%view(Kv_u)
+  if (coef_diag_a%Kv_v_a%associated()) call coef_diag_a%Kv_v_a%view(Kv_v)
+  if (coef_diag_a%Kv_gl90_u_a%associated()) call coef_diag_a%Kv_gl90_u_a%view(Kv_gl90_u)
+  if (coef_diag_a%Kv_gl90_v_a%associated()) call coef_diag_a%Kv_gl90_v_a%view(Kv_gl90_v)
 
   if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(coef): "// &
          "Module must be initialized before it is used.")
@@ -2076,17 +2144,6 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   dz_neglect = GV%dZ_subroundoff
   a_cpl_max = 1.0e37 * GV%m_to_H * US%T_to_s
   I_valBL = 0.0 ; if (CS%harm_BL_val > 0.0) I_valBL = 1.0 / CS%harm_BL_val
-
-  if (CS%id_Kv_u > 0) allocate(Kv_u(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
-
-  if (CS%id_Kv_v > 0) allocate(Kv_v(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
-
-  if (CS%id_Kv_gl90_u > 0) allocate(Kv_gl90_u(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
-
-  if (CS%id_Kv_gl90_v > 0) allocate(Kv_gl90_v(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
-
-  if (CS%debug .or. (CS%id_hML_u > 0)) allocate(hML_u(G%IsdB:G%IedB,G%jsd:G%jed), source=0.0)
-  if (CS%debug .or. (CS%id_hML_v > 0)) allocate(hML_v(G%isd:G%ied,G%JsdB:G%JedB), source=0.0)
 
   if ((associated(taux_shelf) .or. associated(frac_shelf_u)) .and. &
       .not.CS%a1_shelf_u%associated()) then
@@ -2268,7 +2325,7 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
         Kv_tbl_shelf_u, Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, nkml_visc_u, &
         nkml_visc_v, Ustar_2d, tv, work_on_u=.true., OBC=OBC)
 
-    if (allocated(hML_u)) hML_u(I,j) = h_ml
+    if (associated(hML_u)) hML_u(I,j) = h_ml
 
     if (CS%use_GL90_in_SSW) then
       call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, i, j, z_i_gl90, GV%ke, GV%dZ_subroundoff, &
@@ -2577,7 +2634,7 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
         Kv_tbl_shelf_u, Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, nkml_visc_u, &
         nkml_visc_v, Ustar_2d, tv, work_on_u=.false., OBC=OBC)
 
-    if (allocated(hML_v)) hML_v(i,J) = h_ml
+    if (associated(hML_v)) hML_v(i,J) = h_ml
 
     if (CS%use_GL90_in_SSW) then
       call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, i, j, z_i_gl90, GV%ke, GV%dZ_subroundoff, &
@@ -2740,13 +2797,68 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
   !$omp target exit data map(from: hML_u, kv_u, kv_gl90_u )
   !$omp target exit data map(from: hML_v, kv_v, kv_gl90_v)
 
+end subroutine vertvisc_coef_TR
+
+!> Writes the debugging checksums and offers the diagnostics of the vertical viscosity coupling
+!! coefficients and effective layer thicknesses.
+subroutine vertvisc_coef_diagnostics(coef_diag_a, Kv_slow, G, GV, US, CS)
+  type(ocean_grid_type),   intent(in) :: G  !< Ocean grid structure
+  type(verticalGrid_type), intent(in) :: GV !< Ocean vertical grid structure
+  type(unit_scale_type),   intent(in) :: US !< A dimensional unit scaling type
+  type(vertvisc_coef_diag_type), &
+                           intent(in) :: coef_diag_a !< The diagnostic arrays filled by the
+                                                     !! coupling coefficient calculations
+  real, dimension(:,:,:), &
+                  pointer, intent(in) :: Kv_slow !< The turbulent vertical viscosity component due
+                                                 !! to "slow" processes (e.g., tidal, background,
+                                                 !! convection etc) [H Z T-1 ~> m2 s-1 or Pa s]
+  type(vertvisc_CS),       intent(in) :: CS !< Vertical viscosity control structure
+
+  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
+                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
+  real, dimension(:,:,:), contiguous, pointer :: a_u_gl90, a_v_gl90 ! The u- and v-drag
+                                                    ! coefficients associated with GL90 across
+                                                    ! interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:), contiguous, pointer :: hML_u ! Diagnostic of the mixed layer depth at u
+                                                     ! points [Z ~> m].
+  real, dimension(:,:), contiguous, pointer :: hML_v ! Diagnostic of the mixed layer depth at v
+                                                     ! points [Z ~> m].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_u ! Total vertical viscosity at u-points in
+                                                      ! thickness-based units
+                                                      ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_v ! Total vertical viscosity at v-points in
+                                                      ! thickness-based units
+                                                      ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_gl90_u ! GL90 vertical viscosity at u-points in
+                                                           ! thickness-based units
+                                                           ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  real, dimension(:,:,:), contiguous, pointer :: Kv_gl90_v ! GL90 vertical viscosity at v-points in
+                                                           ! thickness-based units
+                                                           ! [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+
+  call CS%a_u%view(a_u)
+  call CS%a_v%view(a_v)
+  call CS%h_u%view(h_u)
+  call CS%h_v%view(h_v)
+  call CS%a_u_gl90%view(a_u_gl90)
+  call CS%a_v_gl90%view(a_v_gl90)
+  nullify(hML_u, hML_v, Kv_u, Kv_v, Kv_gl90_u, Kv_gl90_v)
+  if (coef_diag_a%hML_u_a%associated()) call coef_diag_a%hML_u_a%view(hML_u)
+  if (coef_diag_a%hML_v_a%associated()) call coef_diag_a%hML_v_a%view(hML_v)
+  if (coef_diag_a%Kv_u_a%associated()) call coef_diag_a%Kv_u_a%view(Kv_u)
+  if (coef_diag_a%Kv_v_a%associated()) call coef_diag_a%Kv_v_a%view(Kv_v)
+  if (coef_diag_a%Kv_gl90_u_a%associated()) call coef_diag_a%Kv_gl90_u_a%view(Kv_gl90_u)
+  if (coef_diag_a%Kv_gl90_v_a%associated()) call coef_diag_a%Kv_gl90_v_a%view(Kv_gl90_v)
+
   if (CS%debug) then
     !$omp target update from(h_u, h_v, a_u, a_v)
     call uvchksum("loop vertvisc_coef h_[uv]", h_u, h_v, G%HI, haloshift=0, &
                   unscale=GV%H_to_m, scalar_pair=.true.)
     call uvchksum("vertvisc_coef a_[uv]", a_u, a_v, G%HI, haloshift=0, &
                   unscale=GV%H_to_m*US%s_to_T, scalar_pair=.true.)
-    if (allocated(hML_u) .and. allocated(hML_v)) &
+    if (associated(hML_u) .and. associated(hML_v)) &
       call uvchksum("vertvisc_coef hML_[uv]", hML_u, hML_v, G%HI, &
                     haloshift=0, unscale=US%Z_to_m, scalar_pair=.true.)
   endif
@@ -2769,10 +2881,7 @@ subroutine vertvisc_coef_TR(u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
     if (CS%id_hML_v > 0) call post_data(CS%id_hML_v, hML_v, CS%diag)
   endif
 
-  if (allocated(hML_u)) deallocate(hML_u)
-  if (allocated(hML_v)) deallocate(hML_v)
-
-end subroutine vertvisc_coef_TR
+end subroutine vertvisc_coef_diagnostics
 
 !> Calculate the 'coupling coefficient' (a_cpl) at the interfaces.
 !! If BOTTOMDRAGLAW is defined, the minimum of Hbbl and half the adjacent
