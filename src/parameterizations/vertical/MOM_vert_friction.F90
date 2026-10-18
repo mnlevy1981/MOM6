@@ -38,6 +38,7 @@ use MOM_wave_interface, only : wave_parameters_CS
 use MOM_set_visc,      only : set_v_at_u, set_u_at_v
 use MOM_lateral_mixing_coeffs, only : VarMix_CS
 use array_mod,         only : RealArray_t
+use box_mod,           only : Box_t
 use iso_c_binding,     only : c_int, c_bool, c_double
 
 use CVMix_kpp,         only : cvmix_kpp_composite_Gshape
@@ -1709,6 +1710,8 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
 
   type(vertvisc_container_type) :: visc_a ! Copies of the viscosities and bottom drag in visc
   type(grid_core_type), pointer :: Gcore ! Persistent copies of the core ocean grid fields
+  type(Box_t) :: bxU0 ! The u-point box of the whole column, [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t) :: bxV0 ! The v-point box of the whole column, [isc:iec, JscB:JecB, 1:nz]
   type(RealArray_t) :: visc_rem_u_a ! Fraction of a time-step's worth of a barotropic
                                  ! acceleration that a layer experiences after viscosity
                                  ! is applied in the zonal direction [nondim]
@@ -1716,12 +1719,19 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
                                  ! acceleration that a layer experiences after viscosity
                                  ! is applied in the meridional direction [nondim]
 
+  if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(remnant): "// &
+         "Module must be initialized before it is used.")
+
   Gcore => grid_core(G)
+  call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
+  call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
+  call bxV0%set(idxS=[G%isc,G%JscB,1], idxE=[G%iec,G%JecB,GV%ke])
   call visc_a%build_from(visc)
   call visc_rem_u_a%alloc(lb=LBOUND(visc_rem_u), ub=UBOUND(visc_rem_u), source=visc_rem_u)
   call visc_rem_v_a%alloc(lb=LBOUND(visc_rem_v), ub=UBOUND(visc_rem_v), source=visc_rem_v)
 
-  call vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore, GV%ke, CS)
+  call vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, dt, Gcore, GV%ke, &
+                           CS%a_u, CS%a_v, CS%h_u, CS%h_v)
 
   call visc_rem_u_a%copy2F(visc_rem_u)
   call visc_rem_v_a%copy2F(visc_rem_v)
@@ -1729,12 +1739,17 @@ subroutine vertvisc_remnant(visc, visc_rem_u, visc_rem_v, dt, G, GV, US, CS)
   call visc_a%free()
   call visc_rem_u_a%free()
   call visc_rem_v_a%free()
+  call bxU0%free() ; call bxV0%free()
 
 end subroutine vertvisc_remnant
 
 !> The implementation of vertvisc_remnant (the root of its call tree).
-subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore, ke, CS)
-  type(ocean_grid_type), intent(in)   :: G    !< Ocean grid structure
+subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, dt, Gcore, ke, &
+                               a_u_a, a_v_a, h_u_a, h_v_a)
+  type(Box_t),           intent(in)   :: bxU0 !< The u-point box of the whole column,
+                                             !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),           intent(in)   :: bxV0 !< The v-point box of the whole column,
+                                             !! [isc:iec, JscB:JecB, 1:nz]
   type(grid_core_type), intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   integer,               intent(in)   :: ke   !< The number of layers/levels in the vertical
   type(vertvisc_container_type), &
@@ -1748,7 +1763,14 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore,
                                                        !! experiences after viscosity is applied in
                                                        !! the meridional direction [nondim]
   real,                  intent(in)    :: dt  !< Time increment [T ~> s]
-  type(vertvisc_CS)                    :: CS  !< Vertical viscosity control structure
+  type(RealArray_t),     intent(in)    :: a_u_a !< The u-drag coefficient across an interface
+                                              !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t),     intent(in)    :: a_v_a !< The v-drag coefficient across an interface
+                                              !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_t),     intent(in)    :: h_u_a !< The effective layer thickness at u-points
+                                              !! [H ~> m or kg m-2].
+  type(RealArray_t),     intent(in)    :: h_v_a !< The effective layer thickness at v-points
+                                              !! [H ~> m or kg m-2].
 
   ! Local variables
 
@@ -1781,16 +1803,16 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore,
                                                         ! points on the u grid [nondim]
   real, dimension(:,:), contiguous, pointer :: mask2dCv ! 0 for boundary points and 1 for ocean
                                                         ! points on the v grid [nondim]
-  integer :: i, j, k, is, ie, Isq, Ieq, Jsq, Jeq, nz
-  is = G%isc ; ie = G%iec
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = ke
+  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  is = bxV0%idxS(1) ; ie = bxV0%idxE(1) ; js = bxU0%idxS(2) ; je = bxU0%idxE(2)
+  Isq = bxU0%idxS(1) ; Ieq = bxU0%idxE(1) ; Jsq = bxV0%idxS(2) ; Jeq = bxV0%idxE(2) ; nz = ke
 
   call visc_rem_u_a%view(visc_rem_u)
   call visc_rem_v_a%view(visc_rem_v)
-  call CS%a_u%view(a_u)
-  call CS%a_v%view(a_v)
-  call CS%h_u%view(h_u)
-  call CS%h_v%view(h_v)
+  call a_u_a%view(a_u)
+  call a_v_a%view(a_v)
+  call h_u_a%view(h_u)
+  call h_v_a%view(h_v)
   call Gcore%mask2dCu%view(mask2dCu)
   call Gcore%mask2dCv%view(mask2dCv)
 
@@ -1798,12 +1820,9 @@ subroutine vertvisc_remnant_TR(visc_a, visc_rem_u_a, visc_rem_v_a, dt, G, Gcore,
   if (visc_a%Ray_u_a%associated()) call visc_a%Ray_u_a%view(Ray_u)
   if (visc_a%Ray_v_a%associated()) call visc_a%Ray_v_a%view(Ray_v)
 
-  if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(remnant): "// &
-         "Module must be initialized before it is used.")
-
   ! Find the zonal viscous remnant using a modification of a standard tridagonal solver.
 
-  do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
+  do concurrent (j=js:je, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
       DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (associated(Ray_u)) Ray = Ray_u(I,j,1)
