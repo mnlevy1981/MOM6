@@ -895,6 +895,10 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
   type(RealArray_t) :: taux_bot_a  ! Zonal bottom stress from ocean to rock [R L Z T-2 ~> Pa]
   type(RealArray_t) :: tauy_bot_a  ! Meridional bottom stress from ocean to rock [R L Z T-2 ~> Pa]
+  type(RealArray_t) :: KE_u_a ! The area integral of a KE term in a layer at u-points
+                              ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  type(RealArray_t) :: KE_v_a ! The area integral of a KE term in a layer at v-points
+                              ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
   logical :: lfpmix                ! fpmix along Eulerian shear, false if fpmix is absent
 
   lfpmix = .false. ; if (present(fpmix)) lfpmix = fpmix
@@ -908,9 +912,15 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
     call taux_bot_a%alloc(lb=LBOUND(taux_bot), ub=UBOUND(taux_bot), source=taux_bot)
   if (present(tauy_bot)) &
     call tauy_bot_a%alloc(lb=LBOUND(tauy_bot), ub=UBOUND(tauy_bot), source=tauy_bot)
+  if (CS%id_GLwork > 0) then
+    call KE_u_a%alloc(lb=[G%IsdB,G%jsd,1], ub=[G%IedB,G%jed,GV%ke], source=0.0)
+    call KE_v_a%alloc(lb=[G%isd,G%JsdB,1], ub=[G%ied,G%JedB,GV%ke], source=0.0)
+  endif
 
   call vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, GV, US, CS, &
-                   taux_bot_a, tauy_bot_a, lfpmix, Waves)
+                   taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, lfpmix, Waves)
+
+  call vertvisc_diagnostics(KE_u_a, KE_v_a, taux_bot_a, tauy_bot_a, ADp, G, Gcore, GV, CS)
 
   call u_a%copy2F(u)
   call v_a%copy2F(v)
@@ -919,6 +929,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call u_a%free()
   call v_a%free()
   call h_a%free()
+  call KE_u_a%free()
+  call KE_v_a%free()
   if (present(taux_bot)) then
     call taux_bot_a%copy2F(taux_bot)
     call taux_bot_a%free()
@@ -932,7 +944,7 @@ end subroutine vertvisc
 
 !> The implementation of vertvisc (the root of its call tree).
 subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, GV, US, &
-                       CS, taux_bot_a, tauy_bot_a, fpmix, Waves)
+                       CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, fpmix, Waves)
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
@@ -954,6 +966,10 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
                                                        !! rock [R L Z T-2 ~> Pa]
   type(RealArray_t),       intent(inout) :: tauy_bot_a !< Meridional bottom stress from ocean to
                                                        !! rock [R L Z T-2 ~> Pa]
+  type(RealArray_t),       intent(inout) :: KE_u_a !< The area integral of a KE term in a layer at
+                                                   !! u-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  type(RealArray_t),       intent(inout) :: KE_v_a !< The area integral of a KE term in a layer at
+                                                   !! v-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
   logical,                   intent(in)  :: fpmix !< fpmix along Eulerian shear
   type(wave_parameters_CS), &
                    optional, pointer     :: Waves !< Container for wave/Stokes information
@@ -993,12 +1009,10 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   real :: surface_stress(SZIB_(G), SZJB_(G))
     ! The same as stress, unless the wind stress is applied as a body force
     ! [H L T-1 ~> m2 s-1 or kg m-1 s-1].
-  real, allocatable, dimension(:,:,:) :: KE_term ! A term in the kinetic energy budget
-                                                 ! [H L2 T-3 ~> m3 s-3 or W m-2]
-  real, allocatable, dimension(:,:,:) :: KE_u ! The area integral of a KE term in a layer at u-points
-                                              ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
-  real, allocatable, dimension(:,:,:) :: KE_v ! The area integral of a KE term in a layer at v-points
-                                              ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  real, dimension(:,:,:), contiguous, pointer :: KE_u ! The area integral of a KE term in a layer at
+                                                      ! u-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  real, dimension(:,:,:), contiguous, pointer :: KE_v ! The area integral of a KE term in a layer at
+                                                      ! v-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
 
   logical :: DoStokesMixing
   logical :: lfpmix
@@ -1036,7 +1050,6 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
                                                         ! points on the v grid [nondim]
   real, dimension(:,:), contiguous, pointer :: areaCu ! The areas of the u-grid cells [L2 ~> m2]
   real, dimension(:,:), contiguous, pointer :: areaCv ! The areas of the v-grid cells [L2 ~> m2]
-  real, dimension(:,:), contiguous, pointer :: IareaT ! 1/areaT [L-2 ~> m-2]
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
@@ -1057,7 +1070,6 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   call Gcore%mask2dCv%view(mask2dCv)
   call Gcore%areaCu%view(areaCu)
   call Gcore%areaCv%view(areaCv)
-  call Gcore%IareaT%view(IareaT)
 
   nullify(taux, tauy)
   if (forces_a%taux_a%associated()) call forces_a%taux_a%view(taux)
@@ -1070,17 +1082,12 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   nullify(taux_bot, tauy_bot)
   if (taux_bot_a%associated()) call taux_bot_a%view(taux_bot)
   if (tauy_bot_a%associated()) call tauy_bot_a%view(tauy_bot)
+  nullify(KE_u, KE_v)
+  if (KE_u_a%associated()) call KE_u_a%view(KE_u)
+  if (KE_v_a%associated()) call KE_v_a%view(KE_v)
 
   if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(visc): "// &
          "Module must be initialized before it is used.")
-
-  if (CS%id_GLwork > 0) then
-    allocate(KE_u(G%IsdB:G%IedB,G%jsd:G%jed,GV%ke), source=0.0)
-    allocate(KE_v(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.0)
-    allocate(KE_term(G%isd:G%ied,G%jsd:G%jed,GV%ke), source=0.0)
-    if (.not.G%symmetric) &
-      call create_group_pass(CS%pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
-  endif
 
   if (CS%direct_stress) then
     Hmix = CS%Hmix_stress
@@ -1538,21 +1545,6 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
     enddo
   endif
 
-  ! Calculate the KE source from GL90 vertical viscosity [H L2 T-3 ~> m3 s-3].
-  ! We do the KE-rate calculation here (rather than in MOM_diagnostics) to ensure
-  ! a sign-definite term. MOM_diagnostics does not have access to the velocities
-  ! and thicknesses used in the vertical solver, but rather uses a time-mean
-  ! barotropic transport [uv]h.
-  if (CS%id_GLwork > 0) then
-    if (.not.G%symmetric) &
-      call do_group_pass(CS%pass_KE_uv, G%domain)
-    do concurrent (k=1:nz, j=js:je, i=is:ie)
-      KE_term(i,j,k) = 0.5 * IareaT(i,j) &
-          * (KE_u(I,j,k) + KE_u(I-1,j,k) + KE_v(i,J,k) + KE_v(i,J-1,k))
-    enddo
-    call post_data(CS%id_GLwork, KE_term, CS%diag)
-  endif
-
   call vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, US, CS)
 
   !$omp target exit data map(delete: c1)
@@ -1578,6 +1570,67 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
         endif
       endif
     enddo
+  endif
+
+end subroutine vertvisc_TR
+
+!> Offers the diagnostics of the vertical viscosity calculations, including the KE source from
+!! GL90 vertical viscosity.
+subroutine vertvisc_diagnostics(KE_u_a, KE_v_a, taux_bot_a, tauy_bot_a, ADp, G, Gcore, GV, CS)
+  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
+  type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
+  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
+  type(RealArray_t),       intent(in)    :: KE_u_a !< The area integral of a KE term in a layer at
+                                                   !! u-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  type(RealArray_t),       intent(in)    :: KE_v_a !< The area integral of a KE term in a layer at
+                                                   !! v-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  type(RealArray_t),       intent(in)    :: taux_bot_a !< Zonal bottom stress from ocean to
+                                                       !! rock [R L Z T-2 ~> Pa]
+  type(RealArray_t),       intent(in)    :: tauy_bot_a !< Meridional bottom stress from ocean to
+                                                       !! rock [R L Z T-2 ~> Pa]
+  type(accel_diag_ptrs),   intent(in)    :: ADp    !< Accelerations in the momentum
+                                                   !! equations for diagnostics
+  type(vertvisc_CS),       intent(inout) :: CS     !< Vertical viscosity control structure
+
+  real, allocatable, dimension(:,:,:) :: KE_term ! A term in the kinetic energy budget
+                                                 ! [H L2 T-3 ~> m3 s-3 or W m-2]
+  real, dimension(:,:,:), contiguous, pointer :: KE_u ! The area integral of a KE term in a layer at
+                                                      ! u-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  real, dimension(:,:,:), contiguous, pointer :: KE_v ! The area integral of a KE term in a layer at
+                                                      ! v-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  real, dimension(:,:), contiguous, pointer :: taux_bot, tauy_bot ! The zonal and meridional
+                                                         ! bottom stresses from ocean to rock
+                                                         ! [R L Z T-2 ~> Pa]
+  real, dimension(:,:), contiguous, pointer :: IareaT ! 1/areaT [L-2 ~> m-2]
+  integer :: i, j, k, is, ie, js, je, nz
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
+
+  nullify(KE_u, KE_v, taux_bot, tauy_bot)
+  if (KE_u_a%associated()) call KE_u_a%view(KE_u)
+  if (KE_v_a%associated()) call KE_v_a%view(KE_v)
+  if (taux_bot_a%associated()) call taux_bot_a%view(taux_bot)
+  if (tauy_bot_a%associated()) call tauy_bot_a%view(tauy_bot)
+  call Gcore%IareaT%view(IareaT)
+
+  if (CS%id_GLwork > 0) then
+    allocate(KE_term(G%isd:G%ied,G%jsd:G%jed,GV%ke), source=0.0)
+    if (.not.G%symmetric) &
+      call create_group_pass(CS%pass_KE_uv, KE_u, KE_v, G%Domain, To_North+To_East)
+  endif
+
+  ! Calculate the KE source from GL90 vertical viscosity [H L2 T-3 ~> m3 s-3].
+  ! We do the KE-rate calculation here (rather than in MOM_diagnostics) to ensure
+  ! a sign-definite term. MOM_diagnostics does not have access to the velocities
+  ! and thicknesses used in the vertical solver, but rather uses a time-mean
+  ! barotropic transport [uv]h.
+  if (CS%id_GLwork > 0) then
+    if (.not.G%symmetric) &
+      call do_group_pass(CS%pass_KE_uv, G%domain)
+    do concurrent (k=1:nz, j=js:je, i=is:ie)
+      KE_term(i,j,k) = 0.5 * IareaT(i,j) &
+          * (KE_u(I,j,k) + KE_u(I-1,j,k) + KE_v(i,J,k) + KE_v(i,J-1,k))
+    enddo
+    call post_data(CS%id_GLwork, KE_term, CS%diag)
   endif
 
   ! Offer diagnostic fields for averaging.
@@ -1632,7 +1685,7 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
     endif
   endif
 
-end subroutine vertvisc_TR
+end subroutine vertvisc_diagnostics
 
 
 !> Calculate the fraction of momentum originally in a layer that remains in the water column
