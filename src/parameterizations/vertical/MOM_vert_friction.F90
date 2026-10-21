@@ -1012,6 +1012,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 
   type(vertvisc_container_type)     :: visc_a   ! Copies of the viscosities and bottom drag in visc
   type(grid_core_type), pointer :: Gcore ! Persistent copies of the core ocean grid fields
+  type(Box_t) :: bxU0 ! The u-point box of the whole column, [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t) :: bxV0 ! The v-point box of the whole column, [isc:iec, JscB:JecB, 1:nz]
   type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
   type(RealArray_t) :: u_a  ! Zonal velocity [L T-1 ~> m s-1]
   type(RealArray_t) :: v_a  ! Meridional velocity [L T-1 ~> m s-1]
@@ -1026,6 +1028,9 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 
   lfpmix = .false. ; if (present(fpmix)) lfpmix = fpmix
   Gcore => grid_core(G)
+  call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
+  call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
+  call bxV0%set(idxS=[G%isc,G%JscB,1], idxE=[G%iec,G%JecB,GV%ke])
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
   call u_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=u)
@@ -1040,8 +1045,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
     call KE_v_a%alloc(lb=[G%isd,G%JsdB,1], ub=[G%ied,G%JedB,GV%ke], source=0.0)
   endif
 
-  call vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, GV, US, CS, &
-                   taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, lfpmix, Waves)
+  call vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, &
+                   GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, lfpmix, Waves)
 
   call vertvisc_diagnostics(KE_u_a, KE_v_a, taux_bot_a, tauy_bot_a, ADp, G, Gcore, GV, CS)
 
@@ -1053,6 +1058,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call v_a%free()
   call h_a%free()
   call KE_u_a%free()
+  call bxU0%free() ; call bxV0%free()
   call KE_v_a%free()
   if (present(taux_bot)) then
     call taux_bot_a%copy2F(taux_bot)
@@ -1066,8 +1072,12 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 end subroutine vertvisc
 
 !> The implementation of vertvisc (the root of its call tree).
-subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, GV, US, &
-                       CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, fpmix, Waves)
+subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, &
+                       GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, fpmix, Waves)
+  type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
+                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
+                                                   !! [isc:iec, JscB:JecB, 1:nz]
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
@@ -1173,9 +1183,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
                                                         ! points on the v grid [nondim]
   real, dimension(:,:), contiguous, pointer :: areaCu ! The areas of the u-grid cells [L2 ~> m2]
   real, dimension(:,:), contiguous, pointer :: areaCv ! The areas of the v-grid cells [L2 ~> m2]
-  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+  integer :: i, j, k, nz, n
+  nz = GV%ke
 
   call u_a%view(u)
   call v_a%view(v)
@@ -1238,19 +1247,22 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   ! includes Stokes.
   ! When mixing down Eulerian current + Stokes drift add before calling solver
   if (DoStokesMixing) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
       u(I,j,k) = u(I,j,k) + Waves%Us_x(I,j,k)
     enddo
   endif
 
   if (lfpmix) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
       u(I,j,k) = u(I,j,k) - Waves%Us_x(I,j,k)
     enddo
   endif
 
   if (associated(ADp%du_dt_visc)) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       ADp%du_dt_visc(I,j,k) = u(I,j,k)
     enddo
   endif
@@ -1261,13 +1273,15 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   !$omp target enter data map(alloc: ADp%du_dt_str)
 
   if (associated(ADp%du_dt_visc_gl90)) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       ADp%du_dt_visc_gl90(I,j,k) = u(I,j,k)
     enddo
   endif
 
   if (associated(ADp%du_dt_str)) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       ADp%du_dt_str(I,j,k) = 0.0
     enddo
   endif
@@ -1276,7 +1290,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
   if (CS%direct_stress) then
-    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(i,j) > 0.0) &
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(i,j) > 0.0) &
         DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
       surface_stress(I,j) = 0.0
       zDS = 0.0
@@ -1290,7 +1305,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
       enddo
     enddo
   else
-    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       surface_stress(I,j) = dt_Rho0 * (mask2dCu(I,j)*taux(I,j))
     enddo
   endif
@@ -1323,7 +1339,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
 
   !$omp target enter data map(alloc: c1)
 
-  do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
+  do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                 I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.) &
       DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (associated(Ray_u)) Ray = Ray_u(I,j,1)
@@ -1378,7 +1395,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   ! use ADp%du_dt_visc_gl90 as a placeholder for updated u (due to GL90) until last do loop
   if ((CS%id_du_dt_visc_gl90 > 0) .or. (CS%id_GLwork > 0)) then
     if (associated(ADp%du_dt_visc_gl90)) then
-      do concurrent (j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
+      do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                     I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.) &
           DO_LOCALITY(local(k, b1, d1, b_denom_1))
         b_denom_1 = h_u(I,j,1)  ! CS%a_u_gl90(I,j,1) is zero
         b1 = 1.0 / (b_denom_1 + dt * a_u_gl90(I,j,2))
@@ -1427,7 +1445,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   endif
 
   if (associated(ADp%du_dt_visc)) then
-    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq) DO_LOCALITY(local(k))
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(local(k))
       do k=1,nz
         ADp%du_dt_visc(I,j,k) = (u(I,j,k) - ADp%du_dt_visc(I,j,k)) * Idt
 
@@ -1438,18 +1457,21 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   endif
 
   if (associated(taux_shelf)) then
-    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       taux_shelf(I,j) = -GV%H_to_RZ * a1_shelf_u(I,j) * u(I,j,1) ! - u_shelf?
     enddo
   endif
 
   if (taux_bot_a%associated()) then
-    do concurrent (j=G%jsc:G%jec, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       taux_bot(I,j) = GV%H_to_RZ * (u(I,j,nz) * a_u(I,j,nz+1))
     enddo
 
     if (associated(Ray_u)) then
-      do concurrent (j=G%jsc:G%jec, I=Isq:Ieq) DO_LOCALITY(local(k))
+      do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                     I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(local(k))
         do k=1,nz
           taux_bot(I,j) = taux_bot(I,j) + GV%H_to_RZ * (Ray_u(I,j,k) * u(I,j,k))
         enddo
@@ -1459,13 +1481,15 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
 
   ! When mixing down Eulerian current + Stokes drift subtract after calling solver
   if (DoStokesMixing) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
       u(I,j,k) = u(I,j,k) - Waves%Us_x(I,j,k)
     enddo
   endif
 
   if (lfpmix) then
-    do concurrent (k=1:nz, j=G%jsc:G%jec, I=Isq:Ieq, mask2dCu(I,j) > 0.)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
       u(I,j,k) = u(I,j,k) + Waves%Us_x(I,j,k)
     enddo
   endif
@@ -1474,31 +1498,36 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
 
   ! When mixing down Eulerian current + Stokes drift add before calling solver
   if (DoStokesMixing) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
       v(i,j,k) = v(i,j,k) + Waves%Us_y(i,j,k)
     enddo
   endif
 
   if (lfpmix) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
       v(i,j,k) = v(i,j,k) - Waves%Us_y(i,j,k)
     enddo
   endif
 
   if (associated(ADp%dv_dt_visc)) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       ADp%dv_dt_visc(i,J,k) = v(i,J,k)
     enddo
   endif
 
   if (associated(ADp%dv_dt_visc_gl90)) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       ADp%dv_dt_visc_gl90(i,J,k) = v(i,J,k)
     enddo
   endif
 
   if (associated(ADp%dv_dt_str)) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       ADp%dv_dt_str(i,J,k) = 0.0
     enddo
   endif
@@ -1507,7 +1536,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
   if (CS%direct_stress) then
-    do concurrent (J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.0) &
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.0) &
         DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
       surface_stress(i,J) = 0.0
       zDS = 0.0
@@ -1521,12 +1551,14 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
       enddo
     enddo
   else
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       surface_stress(i,J) = dt_Rho0 * (mask2dCv(i,J) * tauy(i,J))
     enddo
   endif
 
-  do concurrent (J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.) &
+  do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                 i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.) &
       DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (associated(Ray_v)) Ray = Ray_v(i,J,1)
@@ -1581,7 +1613,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   ! use ADp%dv_dt_visc_gl90 as a placeholder for updated v (due to GL90) until last do loop
   if ((CS%id_dv_dt_visc_gl90 > 0) .or. (CS%id_GLwork > 0)) then
     if (associated(ADp%dv_dt_visc_gl90)) then
-      do concurrent (J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.) &
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                     i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.) &
           DO_LOCALITY(local(k, b1, d1, b_denom_1))
         b_denom_1 = h_v(i,J,1)  ! CS%a_v_gl90(i,J,1) is zero
         b1 = 1.0 / (b_denom_1 + dt*a_v_gl90(i,J,2))
@@ -1603,7 +1636,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
         enddo
       enddo
 
-      do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.)
+      do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                     i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
         ! now fill ADp%dv_dt_visc_gl90(i,J,k) with actual velocity tendency due to GL90;
         ! note that on RHS: ADp%dv_dt_visc(i,J,k) holds the original velocity value v(i,J,k)
         ! and ADp%dv_dt_visc_gl90(i,J,k) the updated velocity due to GL90
@@ -1616,7 +1650,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
       ! to compute energetics, we need to multiply by v*h, where u is original velocity before
       ! velocity update; note that ADp%dv_dt_visc(I,j,k) holds the original velocity value v(i,J,k)
       if (CS%id_GLwork > 0) then
-        do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.)
+        do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                       i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
           ! note that on RHS: ADp%dv_dt_visc(I,j,k) holds the original velocity value v(I,j,k)
           KE_v(I,j,k) = ADp%dv_dt_visc(i,J,k) * h_v(i,J,k) * areaCv(i,J) * &
                         ADp%dv_dt_visc_gl90(i,J,k)
@@ -1626,7 +1661,8 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   endif
 
   if (associated(ADp%dv_dt_visc)) then
-    do concurrent (J=Jsq:Jeq, i=is:ie) DO_LOCALITY(local(k))
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(local(k))
       do k=1,nz
         ADp%dv_dt_visc(i,J,k) = (v(i,J,k) - ADp%dv_dt_visc(i,J,k))*Idt
         if (abs(ADp%dv_dt_visc(i,J,k)) < accel_underflow) ADp%dv_dt_visc(i,J,k) = 0.0
@@ -1635,19 +1671,22 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
   endif
 
   if (associated(tauy_shelf)) then
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       tauy_shelf(i,J) = -GV%H_to_RZ * a1_shelf_v(i,J) * v(i,J,1) ! - v_shelf?
     enddo
   endif
 
   ! JORGE TODO: this has to be malloced
   if (tauy_bot_a%associated()) then
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       tauy_bot(i,J) = GV%H_to_RZ * (v(i,J,nz) * a_v(i,J,nz+1))
     enddo
 
     if (associated(Ray_v)) then
-      do concurrent (J=Jsq:Jeq, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                     i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(local(k))
         do k=1,nz
           tauy_bot(i,J) = tauy_bot(i,J) + GV%H_to_RZ * (Ray_v(i,J,k)*v(i,J,k))
         enddo
@@ -1657,18 +1696,20 @@ subroutine vertvisc_TR(u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gc
 
   ! When mixing down Eulerian current + Stokes drift subtract after calling solver
   if (DoStokesMixing) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
       v(i,J,k) = v(i,J,k) - Waves%Us_y(i,J,k)
     enddo
   endif
 
   if (lfpmix) then
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
       v(i,J,k) = v(i,J,k) + Waves%Us_y(i,J,k)
     enddo
   endif
 
-  call vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, US, CS)
+  call vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, US, CS)
 
   !$omp target exit data map(delete: c1)
 
@@ -1925,9 +1966,8 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
                                                         ! points on the u grid [nondim]
   real, dimension(:,:), contiguous, pointer :: mask2dCv ! 0 for boundary points and 1 for ocean
                                                         ! points on the v grid [nondim]
-  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  is = bxV0%idxS(1) ; ie = bxV0%idxE(1) ; js = bxU0%idxS(2) ; je = bxU0%idxE(2)
-  Isq = bxU0%idxS(1) ; Ieq = bxU0%idxE(1) ; Jsq = bxV0%idxS(2) ; Jeq = bxV0%idxE(2) ; nz = ke
+  integer :: i, j, k, nz
+  nz = ke
 
   call visc_rem_u_a%view(visc_rem_u)
   call visc_rem_v_a%view(visc_rem_v)
@@ -1944,7 +1984,8 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
 
   ! Find the zonal viscous remnant using a modification of a standard tridagonal solver.
 
-  do concurrent (j=js:je, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
+  do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                 I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.) &
       DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (associated(Ray_u)) Ray = Ray_u(I,j,1)
@@ -1975,7 +2016,8 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
 
   ! Now find the meridional viscous remnant using the robust tridiagonal solver.
 
-  do concurrent (J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.) &
+  do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                 i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.) &
       DO_LOCALITY(local(k, b1, d1, Ray, b_denom_1))
     Ray = 0.
     if (associated(Ray_v)) Ray = Ray_v(i,J,1)
@@ -2303,10 +2345,9 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
                                                           ! [T-1 ~> s-1]
   real, dimension(:), contiguous, pointer :: g_prime ! The reduced gravity at each interface
                                                      ! [L2 Z-1 T-2 ~> m s-2].
-  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, nz
 
-  is = bxV0%idxS(1) ; ie = bxV0%idxE(1) ; js = bxU0%idxS(2) ; je = bxU0%idxE(2)
-  Isq = bxU0%idxS(1) ; Ieq = bxU0%idxE(1) ; Jsq = bxV0%idxS(2) ; Jeq = bxV0%idxE(2) ; nz = vgrid%ke
+  nz = vgrid%ke
 
   call u_a%view(u)
   call v_a%view(v)
@@ -2387,7 +2428,8 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
   !$omp target update to(Kv_shear) if (associated(Kv_shear))
   !$omp target update to(Kv_shear_Bu) if (associated(Kv_shear_Bu))
 
-  do concurrent (j=js:je, I=Isq:Ieq, mask2dCu(I,j) > 0.) &
+  do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                 I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.) &
       DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh)) &
       DO_LOCALITY(local(zcol, zcol_p1, h_harm, h_arith, h_delta, dz_arith, z2, botfn)) &
       DO_LOCALITY(local(z_clear, z2_wt, h_ml, I_HTbl, Ztop_min, topfn, do_any_shelf))
@@ -2700,7 +2742,8 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
 
   ! Now work on v-points.
 
-  do concurrent (J=Jsq:Jeq, i=is:ie, mask2dCv(i,J) > 0.) &
+  do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                 i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.) &
       DO_LOCALITY(local(k, I_Hbbl, I_Hbbl_gl90, kv_bbl, bbl_thick, Dmin, zi_dir, zh)) &
       DO_LOCALITY(local(zcol, zcol_p1, h_harm, h_arith, h_delta, dz_arith, z2, botfn)) &
       DO_LOCALITY(local(z_clear, z2_wt, h_ml, I_HTbl, Ztop_min, topfn, do_any_shelf))
@@ -4239,7 +4282,12 @@ end subroutine find_coupling_coef
 !! and the running sum of the number of trunctionas within the non-symmetric memory computational
 !! domain is incremented.  Optionally, any column with excessive velocities may be sent
 !! to a diagnostic reporting subroutine.
-subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, US, CS)
+subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, &
+                              US, CS)
+  type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
+                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
+                                                   !! [isc:iec, JscB:JecB, 1:nz]
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
@@ -4308,12 +4356,14 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
     do_any_write = .false.
     trunc_any = .false.
 
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1))
       dowrite(I,j) = .false.
       vel_report(I,j) = 3.0e8 * US%m_s_to_L_T
     enddo
 
-    do concurrent (j=js:je, I=Isq:Ieq) &
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1)) &
         DO_LOCALITY(local(k, CFL) reduce(.or.: trunc_any, do_any_write))
       do k=1,nz
         if (abs(u(I,j,k)) < CS%vel_underflow) u(I,j,k) = 0.0
@@ -4331,13 +4381,15 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
       enddo
     enddo
 
-    do concurrent (j=js:je, I=Isq:Ieq, dowrite(I,j))
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1), dowrite(I,j))
       u_old(I,j,:) = u(I,j,:)
     enddo
 
     if (trunc_any) then
       ntrunc = 0
-      do concurrent (k=1:nz, j=js:je, I=Isq:Ieq) DO_LOCALITY(reduce(+: ntrunc))
+      do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                     I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
         if ((u(I,j,k) * (dt * dy_Cu(I,j))) * IareaT(i+1,j) < -CS%CFL_trunc) then
           u(I,j,k) = (-0.9*CS%CFL_trunc) * (areaT(i+1,j) / (dt * dy_Cu(I,j)))
           if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
@@ -4361,7 +4413,8 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
     endif
   else  ! Do not report accelerations leading to large velocities.
     ntrunc = 0
-    do concurrent (k=1:nz, j=js:je, I=Isq:Ieq) DO_LOCALITY(reduce(+: ntrunc))
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
       if (abs(u(I,j,k)) < CS%vel_underflow) then ; u(I,j,k) = 0.0
       elseif ((u(I,j,k) * (dt * dy_Cu(I,j))) * IareaT(i+1,j) < -CS%CFL_trunc) then
         u(I,j,k) = (-0.9*CS%CFL_trunc) * (areaT(i+1,j) / (dt * dy_Cu(I,j)))
@@ -4380,12 +4433,14 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
     do_any_write =.false.
     trunc_any = .false.
 
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1))
       dowrite(i,J) = .false.
       vel_report(i,J) = 3.0e8 * US%m_s_to_L_T
     enddo
 
-    do concurrent (J=Jsq:Jeq, i=is:ie) &
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1)) &
         DO_LOCALITY(local(k, CFL) reduce(.or.: trunc_any, do_any_write))
       do k=1,nz
         if (abs(v(i,J,k)) < CS%vel_underflow) v(i,J,k) = 0.0
@@ -4403,13 +4458,15 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
       enddo
     enddo
 
-    do concurrent (J=Jsq:Jeq, i=is:ie, dowrite(i,J))
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1), dowrite(i,J))
       v_old(i,J,:) = v(i,J,:)
     enddo
 
     if (trunc_any) then
       ntrunc = 0
-      do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie) DO_LOCALITY(reduce(+: ntrunc))
+      do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                     i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
         if ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j+1) < -CS%CFL_trunc) then
           v(i,J,k) = (-0.9*CS%CFL_trunc) * (areaT(i,j+1) / (dt * dx_Cv(i,J)))
           if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
@@ -4433,7 +4490,8 @@ subroutine vertvisc_limit_vel(u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, G
     endif
   else  ! Do not report accelerations leading to large velocities.
     ntrunc = 0
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie) DO_LOCALITY(reduce(+: ntrunc))
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
       if (abs(v(i,J,k)) < CS%vel_underflow) then ; v(i,J,k) = 0.0
       elseif ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j+1) < -CS%CFL_trunc) then
         v(i,J,k) = (-0.9*CS%CFL_trunc) * (areaT(i,j+1) / (dt * dx_Cv(i,J)))
