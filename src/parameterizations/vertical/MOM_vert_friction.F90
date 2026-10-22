@@ -351,6 +351,26 @@ type :: limit_vel_report_type
   type(LogicalArray_t) :: dowrite_v_a    !< True for the v-point columns to report
 end type limit_vel_report_type
 
+!> Copies of the acceleration diagnostics that the vertical viscosity calculations fill, each
+!! allocated only if its accel_diag_ptrs counterpart is associated.
+type :: vertvisc_AD_type
+  type(RealArray_t) :: du_dt_visc_a      !< Zonal acceleration due to vertical viscosity
+                                         !! [L T-2 ~> m s-2]
+  type(RealArray_t) :: dv_dt_visc_a      !< Meridional acceleration due to vertical viscosity
+                                         !! [L T-2 ~> m s-2]
+  type(RealArray_t) :: du_dt_visc_gl90_a !< Zonal acceleration due to GL90 vertical viscosity
+                                         !! (is included in du_dt_visc) [L T-2 ~> m s-2]
+  type(RealArray_t) :: dv_dt_visc_gl90_a !< Meridional acceleration due to GL90 vertical viscosity
+                                         !! (is included in dv_dt_visc) [L T-2 ~> m s-2]
+  type(RealArray_t) :: du_dt_str_a       !< Zonal acceleration due to the surface stress (included
+                                         !! in du_dt_visc) [L T-2 ~> m s-2]
+  type(RealArray_t) :: dv_dt_str_a       !< Meridional acceleration due to the surface stress
+                                         !! (included in dv_dt_visc) [L T-2 ~> m s-2]
+contains
+  procedure :: build_from => vertvisc_AD_build_from !< Copy in the associated fields
+  procedure :: copy_back  => vertvisc_AD_copy_back  !< Copy out the allocated fields and free
+end type vertvisc_AD_type
+
 !> The viscous coupling coefficients and effective layer thicknesses at velocity points that
 !! the coupling coefficient calculations store for the vertical viscosity solvers.
 type :: coupling_state_type
@@ -754,7 +774,7 @@ end subroutine vertFPmix
 !! a_cpl_gl90 = nu / h = f^2 * alpha / h
 
 pure subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, i, j, z_i, ke, dZ_subroundoff, g_prime, &
-                                        CoriolisBu, CS, kappa_gl90_2d, VarMix, work_on_u)
+                                        CoriolisBu, CS, kappa_gl90_2d, kdgl90_struct, work_on_u)
   !$omp declare target
   integer, intent(in) :: ke !< The number of layers/levels in the vertical
   real, intent(in) :: dZ_subroundoff !< A thickness in height units that is so small that it can be
@@ -780,7 +800,9 @@ pure subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, i, j, z_i, ke, dZ_subr
   real, dimension(:,:), pointer, &
                     intent(in) :: kappa_gl90_2d !< 2D kappa_gl90 at h-points
                                                 !! [L2 H Z-1 T-1 ~> m2 s-1 or Pa s]
-  type(VarMix_CS), intent(in) :: VarMix         !< Variable mixing coefficients
+  real, dimension(:,:,:), pointer, &
+                    intent(in) :: kdgl90_struct !< Vertical structure function used in GL90
+                                                !! diffusivity [nondim]
   logical, intent(in) :: work_on_u              !< If true, u-points are being calculated,
                                                 !! otherwise they are v-points.
 
@@ -797,9 +819,7 @@ pure subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, i, j, z_i, ke, dZ_subr
   h_neglect = dZ_subroundoff
   kdgl90_use_vert_struct = .false.
 
-  if (VarMix%use_variable_mixing) then
-    kdgl90_use_vert_struct = allocated(VarMix%kdgl90_struct)
-  endif
+  kdgl90_use_vert_struct = associated(kdgl90_struct)
 
   a_cpl_gl90(:) = 0.
 
@@ -817,7 +837,7 @@ pure subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, i, j, z_i, ke, dZ_subr
         endif
         if (kdgl90_use_vert_struct) then
           a_cpl_gl90(K) = a_cpl_gl90(K) * 0.5 &
-              * (VarMix%kdgl90_struct(i,j,k-1) + VarMix%kdgl90_struct(i+1,j,k-1))
+              * (kdgl90_struct(i,j,k-1) + kdgl90_struct(i+1,j,k-1))
         endif
       endif
       ! botfn determines when a point is within the influence of the GL90 bottom boundary layer,
@@ -840,7 +860,7 @@ pure subroutine find_coupling_coef_gl90(a_cpl_gl90, hvel, i, j, z_i, ke, dZ_subr
         endif
         if (kdgl90_use_vert_struct) then
           a_cpl_gl90(K) = a_cpl_gl90(K) * 0.5 &
-              * (VarMix%kdgl90_struct(i,j,k-1) + VarMix%kdgl90_struct(i,j+1,k-1))
+              * (kdgl90_struct(i,j,k-1) + kdgl90_struct(i,j+1,k-1))
         endif
       endif
       ! botfn determines when a point is within the influence of the GL90 bottom boundary layer,
@@ -988,6 +1008,58 @@ subroutine vgrid_consts_build(vgrid, GV, US)
   vgrid%m_s_to_L_T = US%m_s_to_L_T
 end subroutine vgrid_consts_build
 
+!> Copies each associated acceleration diagnostic in AD into its container.
+subroutine vertvisc_AD_build_from(this, AD)
+  class(vertvisc_AD_type), intent(inout) :: this !< Copies of the acceleration diagnostics
+  type(accel_diag_ptrs),   intent(in)    :: AD   !< Accelerations in the momentum
+                                                 !! equations for diagnostics
+
+  if (associated(AD%du_dt_visc)) &
+    call this%du_dt_visc_a%alloc(lb=LBOUND(AD%du_dt_visc), ub=UBOUND(AD%du_dt_visc), &
+                                 source=AD%du_dt_visc)
+  if (associated(AD%dv_dt_visc)) &
+    call this%dv_dt_visc_a%alloc(lb=LBOUND(AD%dv_dt_visc), ub=UBOUND(AD%dv_dt_visc), &
+                                 source=AD%dv_dt_visc)
+  if (associated(AD%du_dt_visc_gl90)) &
+    call this%du_dt_visc_gl90_a%alloc(lb=LBOUND(AD%du_dt_visc_gl90), &
+                                      ub=UBOUND(AD%du_dt_visc_gl90), source=AD%du_dt_visc_gl90)
+  if (associated(AD%dv_dt_visc_gl90)) &
+    call this%dv_dt_visc_gl90_a%alloc(lb=LBOUND(AD%dv_dt_visc_gl90), &
+                                      ub=UBOUND(AD%dv_dt_visc_gl90), source=AD%dv_dt_visc_gl90)
+  if (associated(AD%du_dt_str)) &
+    call this%du_dt_str_a%alloc(lb=LBOUND(AD%du_dt_str), ub=UBOUND(AD%du_dt_str), &
+                                source=AD%du_dt_str)
+  if (associated(AD%dv_dt_str)) &
+    call this%dv_dt_str_a%alloc(lb=LBOUND(AD%dv_dt_str), ub=UBOUND(AD%dv_dt_str), &
+                                source=AD%dv_dt_str)
+end subroutine vertvisc_AD_build_from
+
+!> Copies each allocated container back into AD, then frees it.
+subroutine vertvisc_AD_copy_back(this, AD)
+  class(vertvisc_AD_type), intent(inout) :: this !< Copies of the acceleration diagnostics
+  type(accel_diag_ptrs),   intent(inout) :: AD   !< Accelerations in the momentum
+                                                 !! equations for diagnostics
+
+  if (this%du_dt_visc_a%associated()) then
+    call this%du_dt_visc_a%copy2F(AD%du_dt_visc) ; call this%du_dt_visc_a%free()
+  endif
+  if (this%dv_dt_visc_a%associated()) then
+    call this%dv_dt_visc_a%copy2F(AD%dv_dt_visc) ; call this%dv_dt_visc_a%free()
+  endif
+  if (this%du_dt_visc_gl90_a%associated()) then
+    call this%du_dt_visc_gl90_a%copy2F(AD%du_dt_visc_gl90) ; call this%du_dt_visc_gl90_a%free()
+  endif
+  if (this%dv_dt_visc_gl90_a%associated()) then
+    call this%dv_dt_visc_gl90_a%copy2F(AD%dv_dt_visc_gl90) ; call this%dv_dt_visc_gl90_a%free()
+  endif
+  if (this%du_dt_str_a%associated()) then
+    call this%du_dt_str_a%copy2F(AD%du_dt_str) ; call this%du_dt_str_a%free()
+  endif
+  if (this%dv_dt_str_a%associated()) then
+    call this%dv_dt_str_a%copy2F(AD%dv_dt_str) ; call this%dv_dt_str_a%free()
+  endif
+end subroutine vertvisc_AD_copy_back
+
 !> Converts a coupling_CS to its bind(C) mirror.
 function coupling_CS_to_c(opts) result(cdesc)
   type(coupling_CS), intent(in) :: opts !< Options to convert
@@ -1117,6 +1189,8 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   type(Box_t) :: bxU0 ! The u-point box of the whole column, [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t) :: bxV0 ! The v-point box of the whole column, [isc:iec, JscB:JecB, 1:nz]
   type(vgrid_consts_CS) :: vgrid ! The vertical grid and unit-scaling constants
+  type(vertvisc_AD_type) :: AD_a ! Copies of the accelerations in the momentum equations for
+                                 ! diagnostics
   type(limit_vel_report_type) :: report_a ! The velocities and flags used to report the columns in
                                           ! which velocity truncations occur
   integer :: ntrunc_sum ! The number of velocity truncations in this call [nondim]
@@ -1131,8 +1205,25 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   type(RealArray_t) :: KE_v_a ! The area integral of a KE term in a layer at v-points
                               ! [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
   logical :: lfpmix                ! fpmix along Eulerian shear, false if fpmix is absent
+  logical :: DoStokesMixing
+  type(RealArray_t) :: Us_x_a ! 3d zonal Stokes drift profile [L T-1 ~> m s-1]
+  type(RealArray_t) :: Us_y_a ! 3d meridional Stokes drift profile [L T-1 ~> m s-1]
+
+  if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(visc): "// &
+         "Module must be initialized before it is used.")
 
   lfpmix = .false. ; if (present(fpmix)) lfpmix = fpmix
+  !Check if Stokes mixing allowed if requested (present and associated)
+  DoStokesMixing=.false.
+  if (CS%vertvisc_opts_CS%StokesMixing) then
+    if (present(Waves)) DoStokesMixing = associated(Waves)
+    if (.not. DoStokesMixing) &
+      call MOM_error(FATAL, "Stokes Mixing called without associated Waves Control Structure")
+  endif
+  if (DoStokesMixing) then
+    call Us_x_a%alloc(lb=LBOUND(Waves%Us_x), ub=UBOUND(Waves%Us_x), source=Waves%Us_x)
+    call Us_y_a%alloc(lb=LBOUND(Waves%Us_y), ub=UBOUND(Waves%Us_y), source=Waves%Us_y)
+  endif
   Gcore => grid_core(G)
   call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
   call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
@@ -1140,6 +1231,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call vgrid_consts_build(vgrid, GV, US)
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
+  call AD_a%build_from(ADp)
   call u_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=u)
   call v_a%alloc(lb=LBOUND(v), ub=UBOUND(v), source=v)
   call h_a%alloc(lb=LBOUND(h), ub=UBOUND(h), source=h)
@@ -1163,10 +1255,11 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
     call KE_v_a%alloc(lb=[G%isd,G%JsdB,1], ub=[G%ied,G%JedB,GV%ke], source=0.0)
   endif
 
-  call vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, G, Gcore, vgrid, &
-                   GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, report_a, ntrunc_sum, &
-                   lfpmix, Waves)
+  call vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, AD_a, Gcore, vgrid, &
+                   CS%vertvisc_opts_CS, CS%coupling_state, taux_bot_a, tauy_bot_a, KE_u_a, &
+                   KE_v_a, report_a, ntrunc_sum, lfpmix, Us_x_a, Us_y_a)
 
+  call AD_a%copy_back(ADp)
   CS%ntrunc = CS%ntrunc + ntrunc_sum
   if (CS%vertvisc_opts_CS%do_report_u .or. CS%vertvisc_opts_CS%do_report_v) &
     call vertvisc_limit_vel_report(report_a, h, ADp, CDp, dt, forces%taux, forces%tauy, G, GV, &
@@ -1183,6 +1276,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call h_a%free()
   call KE_u_a%free()
   call KE_v_a%free()
+  call Us_x_a%free() ; call Us_y_a%free()
   call report_a%u_old_a%free() ; call report_a%v_old_a%free()
   call report_a%vel_report_u_a%free() ; call report_a%vel_report_v_a%free()
   call report_a%dowrite_u_a%free() ; call report_a%dowrite_v_a%free()
@@ -1200,18 +1294,15 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 end subroutine vertvisc
 
 !> The implementation of vertvisc (the root of its call tree).
-subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, G, Gcore, vgrid, &
-                       GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, report_a, ntrunc_sum, &
-                       fpmix, Waves)
+subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, AD_a, Gcore, vgrid, &
+                       CS, coupling_state, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, report_a, &
+                       ntrunc_sum, fpmix, Us_x_a, Us_y_a)
   type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
                                                    !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
                                                    !! [isc:iec, JscB:JecB, 1:nz]
-  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
   type(vgrid_consts_CS),   intent(in)    :: vgrid  !< The vertical grid and unit-scaling constants
-  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
-  type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
   type(RealArray_t),       intent(inout) :: u_a    !< Zonal velocity [L T-1 ~> m s-1]
   type(RealArray_t),       intent(inout) :: v_a    !< Meridional velocity [L T-1 ~> m s-1]
   type(RealArray_t),       intent(in)    :: h_a    !< Layer thickness [H ~> m or kg m-2]
@@ -1221,9 +1312,13 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
                          intent(inout)   :: visc_a !< Copies of the viscosities and bottom drag
   real,                  intent(in)      :: dt     !< Time increment [T ~> s]
   type(ocean_OBC_type),  pointer         :: OBC    !< Open boundary condition structure
-  type(accel_diag_ptrs), intent(inout)   :: ADp    !< Accelerations in the momentum
+  type(vertvisc_AD_type), intent(inout)  :: AD_a   !< Copies of the accelerations in the momentum
                                                    !! equations for diagnostics
-  type(vertvisc_CS)                      :: CS     !< Vertical viscosity control structure
+  type(vertvisc_opts_CS),  intent(in)    :: CS     !< Vertical viscosity control structure
+  type(coupling_state_type), &
+                           intent(in)    :: coupling_state !< The viscous coupling coefficients and
+                                                           !! effective layer thicknesses at
+                                                           !! velocity points
   type(RealArray_t),       intent(inout) :: taux_bot_a !< Zonal bottom stress from ocean to
                                                        !! rock [R L Z T-2 ~> Pa]
   type(RealArray_t),       intent(inout) :: tauy_bot_a !< Meridional bottom stress from ocean to
@@ -1238,8 +1333,13 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   integer,                 intent(inout) :: ntrunc_sum !< The number of velocity truncations, added
                                                        !! to the value on entry [nondim]
   logical,                   intent(in)  :: fpmix !< fpmix along Eulerian shear
-  type(wave_parameters_CS), &
-                   optional, pointer     :: Waves !< Container for wave/Stokes information
+  type(RealArray_t),       intent(in)    :: Us_x_a !< 3d zonal Stokes drift profile [L T-1 ~> m s-1]
+                                                   !! Horizontal -> U points
+                                                   !! Vertical -> Mid-points
+  type(RealArray_t),       intent(in)    :: Us_y_a !< 3d meridional Stokes drift profile
+                                                   !! [L T-1 ~> m s-1]
+                                                   !! Horizontal -> V points
+                                                   !! Vertical -> Mid-points
 
   ! Fields from forces used in this subroutine:
   !   taux: Zonal wind stress [R L Z T-2 ~> Pa].
@@ -1249,7 +1349,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
 
   real :: b1
     ! A variable used by the tridiagonal solver [H-1 ~> m-1 or m2 kg-1].
-  real :: c1(SZK_(GV))
+  real :: c1(vgrid%ke)
     ! A variable used by the tridiagonal solver [nondim].
   real :: d1
     ! d1=1-c1 is used by the tridiagonal solver [nondim].
@@ -1273,7 +1373,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   real :: zDS, h_avg       ! Temporary thickness variables used with direct_stress
                            ! [H ~> m or kg m-2]
   real :: hfr              ! Temporary ratio of thicknesses used with direct_stress [nondim]
-  real :: surface_stress(SZIB_(G), SZJB_(G))
+  real :: surface_stress(u_a%lb(1):u_a%ub(1), v_a%lb(2):v_a%ub(2))
     ! The same as stress, unless the wind stress is applied as a body force
     ! [H L T-1 ~> m2 s-1 or kg m-1 s-1].
   real, dimension(:,:,:), contiguous, pointer :: KE_u ! The area integral of a KE term in a layer at
@@ -1317,21 +1417,34 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
                                                         ! points on the v grid [nondim]
   real, dimension(:,:), contiguous, pointer :: areaCu ! The areas of the u-grid cells [L2 ~> m2]
   real, dimension(:,:), contiguous, pointer :: areaCv ! The areas of the v-grid cells [L2 ~> m2]
+  real, dimension(:,:,:), contiguous, pointer :: du_dt_visc, dv_dt_visc ! The zonal and meridional
+                                                         ! accelerations due to vertical viscosity
+                                                         ! [L T-2 ~> m s-2]
+  real, dimension(:,:,:), contiguous, pointer :: du_dt_visc_gl90, dv_dt_visc_gl90 ! The zonal and
+                                                         ! meridional accelerations due to GL90
+                                                         ! vertical viscosity [L T-2 ~> m s-2]
+  real, dimension(:,:,:), contiguous, pointer :: du_dt_str, dv_dt_str ! The zonal and meridional
+                                                         ! accelerations due to the surface stress
+                                                         ! [L T-2 ~> m s-2]
+  real, dimension(:,:,:), contiguous, pointer :: Us_x ! 3d zonal Stokes drift profile
+                                                    ! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: Us_y ! 3d meridional Stokes drift profile
+                                                    ! [L T-1 ~> m s-1]
   integer :: i, j, k, nz, n
-  nz = GV%ke
+  nz = vgrid%ke
 
   call u_a%view(u)
   call v_a%view(v)
   call h_a%view(h)
-  call CS%coupling_state%a_u%view(a_u)
-  call CS%coupling_state%a_v%view(a_v)
-  call CS%coupling_state%h_u%view(h_u)
-  call CS%coupling_state%h_v%view(h_v)
-  call CS%coupling_state%a_u_gl90%view(a_u_gl90)
-  call CS%coupling_state%a_v_gl90%view(a_v_gl90)
+  call coupling_state%a_u%view(a_u)
+  call coupling_state%a_v%view(a_v)
+  call coupling_state%h_u%view(h_u)
+  call coupling_state%h_v%view(h_v)
+  call coupling_state%a_u_gl90%view(a_u_gl90)
+  call coupling_state%a_v_gl90%view(a_v_gl90)
   nullify(a1_shelf_u, a1_shelf_v)
-  if (CS%coupling_state%a1_shelf_u%associated()) call CS%coupling_state%a1_shelf_u%view(a1_shelf_u)
-  if (CS%coupling_state%a1_shelf_v%associated()) call CS%coupling_state%a1_shelf_v%view(a1_shelf_v)
+  if (coupling_state%a1_shelf_u%associated()) call coupling_state%a1_shelf_u%view(a1_shelf_u)
+  if (coupling_state%a1_shelf_v%associated()) call coupling_state%a1_shelf_v%view(a1_shelf_v)
   call Gcore%mask2dCu%view(mask2dCu)
   call Gcore%mask2dCv%view(mask2dCv)
   call Gcore%areaCu%view(areaCu)
@@ -1351,27 +1464,29 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   nullify(KE_u, KE_v)
   if (KE_u_a%associated()) call KE_u_a%view(KE_u)
   if (KE_v_a%associated()) call KE_v_a%view(KE_v)
+  nullify(du_dt_visc, dv_dt_visc, du_dt_visc_gl90, &
+          dv_dt_visc_gl90, du_dt_str, dv_dt_str)
+  if (AD_a%du_dt_visc_a%associated()) call AD_a%du_dt_visc_a%view(du_dt_visc)
+  if (AD_a%dv_dt_visc_a%associated()) call AD_a%dv_dt_visc_a%view(dv_dt_visc)
+  if (AD_a%du_dt_visc_gl90_a%associated()) call AD_a%du_dt_visc_gl90_a%view(du_dt_visc_gl90)
+  if (AD_a%dv_dt_visc_gl90_a%associated()) call AD_a%dv_dt_visc_gl90_a%view(dv_dt_visc_gl90)
+  if (AD_a%du_dt_str_a%associated()) call AD_a%du_dt_str_a%view(du_dt_str)
+  if (AD_a%dv_dt_str_a%associated()) call AD_a%dv_dt_str_a%view(dv_dt_str)
 
-  if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(visc): "// &
-         "Module must be initialized before it is used.")
-
-  if (CS%vertvisc_opts_CS%direct_stress) then
-    Hmix = CS%vertvisc_opts_CS%Hmix_stress
+  if (CS%direct_stress) then
+    Hmix = CS%Hmix_stress
     I_Hmix = 1.0 / Hmix
   endif
-  dt_Rho0 = dt / GV%H_to_RZ
-  h_neglect = GV%H_subroundoff
+  dt_Rho0 = dt / vgrid%H_to_RZ
+  h_neglect = vgrid%H_subroundoff
   Idt = 1.0 / dt
 
-  accel_underflow = CS%vertvisc_opts_CS%vel_underflow * Idt
+  accel_underflow = CS%vel_underflow * Idt
 
-  !Check if Stokes mixing allowed if requested (present and associated)
-  DoStokesMixing=.false.
-  if (CS%vertvisc_opts_CS%StokesMixing) then
-    if (present(Waves)) DoStokesMixing = associated(Waves)
-    if (.not. DoStokesMixing) &
-      call MOM_error(FATAL, "Stokes Mixing called without associated Waves Control Structure")
-  endif
+  nullify(Us_x, Us_y)
+  if (Us_x_a%associated()) call Us_x_a%view(Us_x)
+  if (Us_y_a%associated()) call Us_y_a%view(Us_y)
+  DoStokesMixing = associated(Us_x)
   lfpmix = fpmix
 
   !   Update the zonal velocity component using a modification of a standard
@@ -1383,47 +1498,47 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (DoStokesMixing) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
-      u(I,j,k) = u(I,j,k) + Waves%Us_x(I,j,k)
+      u(I,j,k) = u(I,j,k) + Us_x(I,j,k)
     enddo
   endif
 
   if (lfpmix) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
-      u(I,j,k) = u(I,j,k) - Waves%Us_x(I,j,k)
+      u(I,j,k) = u(I,j,k) - Us_x(I,j,k)
     enddo
   endif
 
-  if (associated(ADp%du_dt_visc)) then
+  if (associated(du_dt_visc)) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1))
-      ADp%du_dt_visc(I,j,k) = u(I,j,k)
+      du_dt_visc(I,j,k) = u(I,j,k)
     enddo
   endif
 
-  !$omp target enter data map(to: ADp)
+  !$omp target enter data map(to: AD_a)
   !$omp target enter data map(alloc: surface_stress)
-  !$omp target enter data map(alloc: ADp%dv_dt_str)
-  !$omp target enter data map(alloc: ADp%du_dt_str)
+  !$omp target enter data map(alloc: dv_dt_str)
+  !$omp target enter data map(alloc: du_dt_str)
 
-  if (associated(ADp%du_dt_visc_gl90)) then
+  if (associated(du_dt_visc_gl90)) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1))
-      ADp%du_dt_visc_gl90(I,j,k) = u(I,j,k)
+      du_dt_visc_gl90(I,j,k) = u(I,j,k)
     enddo
   endif
 
-  if (associated(ADp%du_dt_str)) then
+  if (associated(du_dt_str)) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1))
-      ADp%du_dt_str(I,j,k) = 0.0
+      du_dt_str(I,j,k) = 0.0
     enddo
   endif
 
   !   One option is to have the wind stress applied as a body force
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
-  if (CS%vertvisc_opts_CS%direct_stress) then
+  if (CS%direct_stress) then
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(i,j) > 0.0) &
         DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
@@ -1434,7 +1549,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
         h_avg = 0.5 * (h(i,j,k) + h(i+1,j,k)) + h_neglect
         hfr = 1.0 ; if ((zDS+h_avg) > Hmix) hfr = (Hmix - zDS) / h_avg
         u(I,j,k) = u(I,j,k) + I_Hmix * hfr * stress
-        if (associated(ADp%du_dt_str)) ADp%du_dt_str(I,j,k) = (I_Hmix * hfr * stress) * Idt
+        if (associated(du_dt_str)) du_dt_str(I,j,k) = (I_Hmix * hfr * stress) * Idt
         zDS = zDS + h_avg ; if (zDS >= Hmix) exit
       enddo
     enddo
@@ -1484,8 +1599,8 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
     d1 = b_denom_1 * b1
     u(I,j,1) = b1 * (h_u(I,j,1) * u(I,j,1) + surface_stress(I,j))
 
-    if (associated(ADp%du_dt_str)) then
-      ADp%du_dt_str(I,j,1) = b1 * (h_u(I,j,1) * ADp%du_dt_str(I,j,1) + surface_stress(I,j) * Idt)
+    if (associated(du_dt_str)) then
+      du_dt_str(I,j,1) = b1 * (h_u(I,j,1) * du_dt_str(I,j,1) + surface_stress(I,j) * Idt)
     endif
 
     do k=2,nz
@@ -1497,9 +1612,9 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
       d1 = b_denom_1 * b1
       u(I,j,k) = (h_u(I,j,k) * u(I,j,k) + dt * a_u(I,j,K) * u(I,j,k-1)) * b1
 
-      if (associated(ADp%du_dt_str)) then
-        ADp%du_dt_str(I,j,k) = (h_u(I,j,k) * ADp%du_dt_str(I,j,k) &
-            + dt * a_u(I,j,K) * ADp%du_dt_str(I,j,k-1)) * b1
+      if (associated(du_dt_str)) then
+        du_dt_str(I,j,k) = (h_u(I,j,k) * du_dt_str(I,j,k) &
+            + dt * a_u(I,j,K) * du_dt_str(I,j,k-1)) * b1
       endif
 
       !### Force FMA evaluation of b1 by blocking lookahead with an impossible branch.
@@ -1507,19 +1622,19 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
       if (dt < 0) exit
     enddo
 
-    if (associated(ADp%du_dt_str)) then
-      if (abs(ADp%du_dt_str(I,j,nz)) < accel_underflow) &
-        ADp%du_dt_str(I,j,nz) = 0.
+    if (associated(du_dt_str)) then
+      if (abs(du_dt_str(I,j,nz)) < accel_underflow) &
+        du_dt_str(I,j,nz) = 0.
     endif
 
     do k=nz-1,1,-1
       u(I,j,k) = u(I,j,k) + c1(k+1) * u(I,j,k+1)
 
-      if (associated(ADp%du_dt_str)) then
-        ADp%du_dt_str(I,j,k) = ADp%du_dt_str(I,j,k) + c1(k+1) * ADp%du_dt_str(I,j,k+1)
+      if (associated(du_dt_str)) then
+        du_dt_str(I,j,k) = du_dt_str(I,j,k) + c1(k+1) * du_dt_str(I,j,k+1)
 
-        if (abs(ADp%du_dt_str(I,j,k)) < accel_underflow) &
-          ADp%du_dt_str(I,j,k) = 0.0
+        if (abs(du_dt_str(I,j,k)) < accel_underflow) &
+          du_dt_str(I,j,k) = 0.0
       endif
     enddo
   enddo
@@ -1527,8 +1642,8 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   ! compute vertical velocity tendency that arises from GL90 viscosity;
   ! follow tridiagonal solve method as above; to avoid corrupting u,
   ! use ADp%du_dt_visc_gl90 as a placeholder for updated u (due to GL90) until last do loop
-  if ((CS%id_du_dt_visc_gl90 > 0) .or. (CS%id_GLwork > 0)) then
-    if (associated(ADp%du_dt_visc_gl90)) then
+  if ((CS%do_du_dt_visc_gl90) .or. (CS%do_GLwork)) then
+    if (associated(du_dt_visc_gl90)) then
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                      I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.) &
           DO_LOCALITY(local(k, b1, d1, b_denom_1))
@@ -1536,7 +1651,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
         b1 = 1.0 / (b_denom_1 + dt * a_u_gl90(I,j,2))
         d1 = b_denom_1 * b1
 
-        ADp%du_dt_visc_gl90(I,j,1) = b1 * (h_u(I,j,1) * ADp%du_dt_visc_gl90(I,j,1))
+        du_dt_visc_gl90(I,j,1) = b1 * (h_u(I,j,1) * du_dt_visc_gl90(I,j,1))
 
         do k=2,nz
           c1(k) = dt * a_u_gl90(I,j,K) * b1
@@ -1544,48 +1659,48 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
           b1 = 1.0 / (b_denom_1 + dt * a_u_gl90(I,j,K+1))
           d1 = b_denom_1 * b1
 
-          ADp%du_dt_visc_gl90(I,j,k) = (h_u(I,j,k) * ADp%du_dt_visc_gl90(I,j,k) &
-              + dt * a_u_gl90(I,j,K) * ADp%du_dt_visc_gl90(I,j,k-1)) * b1
+          du_dt_visc_gl90(I,j,k) = (h_u(I,j,k) * du_dt_visc_gl90(I,j,k) &
+              + dt * a_u_gl90(I,j,K) * du_dt_visc_gl90(I,j,k-1)) * b1
         enddo
 
         ! back substitute to solve for new velocities, held by ADp%du_dt_visc_gl90
         do k=nz-1,1,-1
-          ADp%du_dt_visc_gl90(I,j,k) = &
-              ADp%du_dt_visc_gl90(I,j,k) + c1(k+1) * ADp%du_dt_visc_gl90(I,j,k+1)
+          du_dt_visc_gl90(I,j,k) = &
+              du_dt_visc_gl90(I,j,k) + c1(k+1) * du_dt_visc_gl90(I,j,k+1)
         enddo
 
         do k=1,nz
           ! now fill ADp%du_dt_visc_gl90(I,j,k) with actual velocity tendency due to GL90;
           ! note that on RHS: ADp%du_dt_visc(I,j,k) holds the original velocity value u(I,j,k)
           ! and ADp%du_dt_visc_gl90(I,j,k) the updated velocity due to GL90
-          ADp%du_dt_visc_gl90(I,j,k) = &
-              (ADp%du_dt_visc_gl90(I,j,k) - ADp%du_dt_visc(I,j,k)) * Idt
+          du_dt_visc_gl90(I,j,k) = &
+              (du_dt_visc_gl90(I,j,k) - du_dt_visc(I,j,k)) * Idt
 
-          if (abs(ADp%du_dt_visc_gl90(I,j,k)) < accel_underflow) then
-            ADp%du_dt_visc_gl90(I,j,k) = 0.0
+          if (abs(du_dt_visc_gl90(I,j,k)) < accel_underflow) then
+            du_dt_visc_gl90(I,j,k) = 0.0
           endif
         enddo
 
         ! to compute energetics, we need to multiply by u*h, where u is original velocity before
         ! velocity update; note that ADp%du_dt_visc(I,j,k) holds the original velocity value u(I,j,k)
-        if (CS%id_GLwork > 0) then
+        if (CS%do_GLwork) then
           do k=1,nz
-            KE_u(I,j,k) = ADp%du_dt_visc(I,j,k) * h_u(I,j,k) * areaCu(I,j) * &
-                          ADp%du_dt_visc_gl90(I,j,k)
+            KE_u(I,j,k) = du_dt_visc(I,j,k) * h_u(I,j,k) * areaCu(I,j) * &
+                          du_dt_visc_gl90(I,j,k)
           enddo
         endif
       enddo
     endif
   endif
 
-  if (associated(ADp%du_dt_visc)) then
+  if (associated(du_dt_visc)) then
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(local(k))
       do k=1,nz
-        ADp%du_dt_visc(I,j,k) = (u(I,j,k) - ADp%du_dt_visc(I,j,k)) * Idt
+        du_dt_visc(I,j,k) = (u(I,j,k) - du_dt_visc(I,j,k)) * Idt
 
-        if (abs(ADp%du_dt_visc(I,j,k)) < accel_underflow) &
-          ADp%du_dt_visc(I,j,k) = 0.0
+        if (abs(du_dt_visc(I,j,k)) < accel_underflow) &
+          du_dt_visc(I,j,k) = 0.0
       enddo
     enddo
   endif
@@ -1593,21 +1708,21 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (associated(taux_shelf)) then
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1))
-      taux_shelf(I,j) = -GV%H_to_RZ * a1_shelf_u(I,j) * u(I,j,1) ! - u_shelf?
+      taux_shelf(I,j) = -vgrid%H_to_RZ * a1_shelf_u(I,j) * u(I,j,1) ! - u_shelf?
     enddo
   endif
 
   if (taux_bot_a%associated()) then
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1))
-      taux_bot(I,j) = GV%H_to_RZ * (u(I,j,nz) * a_u(I,j,nz+1))
+      taux_bot(I,j) = vgrid%H_to_RZ * (u(I,j,nz) * a_u(I,j,nz+1))
     enddo
 
     if (associated(Ray_u)) then
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                      I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(local(k))
         do k=1,nz
-          taux_bot(I,j) = taux_bot(I,j) + GV%H_to_RZ * (Ray_u(I,j,k) * u(I,j,k))
+          taux_bot(I,j) = taux_bot(I,j) + vgrid%H_to_RZ * (Ray_u(I,j,k) * u(I,j,k))
         enddo
       enddo
     endif
@@ -1617,14 +1732,14 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (DoStokesMixing) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
-      u(I,j,k) = u(I,j,k) - Waves%Us_x(I,j,k)
+      u(I,j,k) = u(I,j,k) - Us_x(I,j,k)
     enddo
   endif
 
   if (lfpmix) then
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(I,j) > 0.)
-      u(I,j,k) = u(I,j,k) + Waves%Us_x(I,j,k)
+      u(I,j,k) = u(I,j,k) + Us_x(I,j,k)
     enddo
   endif
 
@@ -1634,42 +1749,42 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (DoStokesMixing) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
-      v(i,j,k) = v(i,j,k) + Waves%Us_y(i,j,k)
+      v(i,j,k) = v(i,j,k) + Us_y(i,j,k)
     enddo
   endif
 
   if (lfpmix) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
-      v(i,j,k) = v(i,j,k) - Waves%Us_y(i,j,k)
+      v(i,j,k) = v(i,j,k) - Us_y(i,j,k)
     enddo
   endif
 
-  if (associated(ADp%dv_dt_visc)) then
+  if (associated(dv_dt_visc)) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1))
-      ADp%dv_dt_visc(i,J,k) = v(i,J,k)
+      dv_dt_visc(i,J,k) = v(i,J,k)
     enddo
   endif
 
-  if (associated(ADp%dv_dt_visc_gl90)) then
+  if (associated(dv_dt_visc_gl90)) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1))
-      ADp%dv_dt_visc_gl90(i,J,k) = v(i,J,k)
+      dv_dt_visc_gl90(i,J,k) = v(i,J,k)
     enddo
   endif
 
-  if (associated(ADp%dv_dt_str)) then
+  if (associated(dv_dt_str)) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1))
-      ADp%dv_dt_str(i,J,k) = 0.0
+      dv_dt_str(i,J,k) = 0.0
     enddo
   endif
 
   !   One option is to have the wind stress applied as a body force
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
-  if (CS%vertvisc_opts_CS%direct_stress) then
+  if (CS%direct_stress) then
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.0) &
         DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
@@ -1680,7 +1795,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
         h_avg = 0.5 * (h(i,J,k) + h(i,J+1,k)) + h_neglect
         hfr = 1.0 ; if ((zDS+h_avg) > Hmix) hfr = (Hmix - zDS) / h_avg
         v(i,J,k) = v(i,J,k) + I_Hmix * hfr * stress
-        if (associated(ADp%dv_dt_str)) ADp%dv_dt_str(i,J,k) = (I_Hmix * hfr * stress) * Idt
+        if (associated(dv_dt_str)) dv_dt_str(i,J,k) = (I_Hmix * hfr * stress) * Idt
         zDS = zDS + h_avg ; if (zDS >= Hmix) exit
       enddo
     enddo
@@ -1702,8 +1817,8 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
     d1 = b_denom_1 * b1
     v(i,J,1) = b1 * (h_v(i,J,1) * v(i,J,1) + surface_stress(i,J))
 
-    if (associated(ADp%dv_dt_str)) then
-      ADp%dv_dt_str(i,J,1) = b1 * (h_v(i,J,1) * ADp%dv_dt_str(i,J,1) + surface_stress(i,J) * Idt)
+    if (associated(dv_dt_str)) then
+      dv_dt_str(i,J,1) = b1 * (h_v(i,J,1) * dv_dt_str(i,J,1) + surface_stress(i,J) * Idt)
     endif
 
     do k=2,nz
@@ -1715,9 +1830,9 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
       d1 = b_denom_1 * b1
       v(i,J,k) = (h_v(i,J,k) * v(i,J,k) + dt * a_v(i,J,K) * v(i,J,k-1)) * b1
 
-      if (associated(ADp%dv_dt_str)) then
-        ADp%dv_dt_str(i,J,k) = (h_v(i,J,k) * ADp%dv_dt_str(i,J,k) &
-            + dt * a_v(i,J,K) * ADp%dv_dt_str(i,J,k-1)) * b1
+      if (associated(dv_dt_str)) then
+        dv_dt_str(i,J,k) = (h_v(i,J,k) * dv_dt_str(i,J,k) &
+            + dt * a_v(i,J,K) * dv_dt_str(i,J,k-1)) * b1
       endif
 
       !### Force FMA evaluation of b1 by blocking lookahead with an impossible branch.
@@ -1725,19 +1840,19 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
       if (dt < 0) exit
     enddo
 
-    if (associated(ADp%dv_dt_str)) then
-      if (abs(ADp%dv_dt_str(i,J,nz)) < accel_underflow) &
-        ADp%dv_dt_str(i,J,nz) = 0.0
+    if (associated(dv_dt_str)) then
+      if (abs(dv_dt_str(i,J,nz)) < accel_underflow) &
+        dv_dt_str(i,J,nz) = 0.0
     endif
 
     do k=nz-1,1,-1
       v(i,J,k) = v(i,J,k) + c1(k+1) * v(i,J,k+1)
 
-      if (associated(ADp%dv_dt_str)) then
-        ADp%dv_dt_str(i,J,k) = ADp%dv_dt_str(i,J,k) + c1(k+1) * ADp%dv_dt_str(i,J,k+1)
+      if (associated(dv_dt_str)) then
+        dv_dt_str(i,J,k) = dv_dt_str(i,J,k) + c1(k+1) * dv_dt_str(i,J,k+1)
 
-        if (abs(ADp%dv_dt_str(i,J,k)) < accel_underflow) &
-          ADp%dv_dt_str(i,J,k) = 0.0
+        if (abs(dv_dt_str(i,J,k)) < accel_underflow) &
+          dv_dt_str(i,J,k) = 0.0
       endif
     enddo
   enddo
@@ -1745,28 +1860,28 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   ! compute vertical velocity tendency that arises from GL90 viscosity;
   ! follow tridiagonal solve method as above; to avoid corrupting v,
   ! use ADp%dv_dt_visc_gl90 as a placeholder for updated v (due to GL90) until last do loop
-  if ((CS%id_dv_dt_visc_gl90 > 0) .or. (CS%id_GLwork > 0)) then
-    if (associated(ADp%dv_dt_visc_gl90)) then
+  if ((CS%do_dv_dt_visc_gl90) .or. (CS%do_GLwork)) then
+    if (associated(dv_dt_visc_gl90)) then
       do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                      i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.) &
           DO_LOCALITY(local(k, b1, d1, b_denom_1))
         b_denom_1 = h_v(i,J,1)  ! CS%a_v_gl90(i,J,1) is zero
         b1 = 1.0 / (b_denom_1 + dt*a_v_gl90(i,J,2))
         d1 = b_denom_1 * b1
-        ADp%dv_dt_visc_gl90(I,J,1) = b1 * (h_v(i,J,1) * ADp%dv_dt_visc_gl90(i,J,1))
+        dv_dt_visc_gl90(I,J,1) = b1 * (h_v(i,J,1) * dv_dt_visc_gl90(i,J,1))
 
         do k=2,nz
           c1(k) = dt * a_v_gl90(i,J,K) * b1
           b_denom_1 = h_v(i,J,k) + dt * (a_v_gl90(i,J,K) * d1)
           b1 = 1.0 / (b_denom_1 + dt * a_v_gl90(i,J,K+1))
           d1 = b_denom_1 * b1
-          ADp%dv_dt_visc_gl90(i,J,k) = (h_v(i,J,k) * ADp%dv_dt_visc_gl90(i,J,k) &
-              + dt * a_v_gl90(i,J,K) * ADp%dv_dt_visc_gl90(i,J,k-1)) * b1
+          dv_dt_visc_gl90(i,J,k) = (h_v(i,J,k) * dv_dt_visc_gl90(i,J,k) &
+              + dt * a_v_gl90(i,J,K) * dv_dt_visc_gl90(i,J,k-1)) * b1
         enddo
 
         ! back substitute to solve for new velocities, held by ADp%dv_dt_visc_gl90
         do k=nz-1,1,-1
-          ADp%dv_dt_visc_gl90(i,J,k) = ADp%dv_dt_visc_gl90(i,J,k) + c1(k+1) * ADp%dv_dt_visc_gl90(i,J,k+1)
+          dv_dt_visc_gl90(i,J,k) = dv_dt_visc_gl90(i,J,k) + c1(k+1) * dv_dt_visc_gl90(i,J,k+1)
         enddo
       enddo
 
@@ -1775,31 +1890,31 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
         ! now fill ADp%dv_dt_visc_gl90(i,J,k) with actual velocity tendency due to GL90;
         ! note that on RHS: ADp%dv_dt_visc(i,J,k) holds the original velocity value v(i,J,k)
         ! and ADp%dv_dt_visc_gl90(i,J,k) the updated velocity due to GL90
-        ADp%dv_dt_visc_gl90(i,J,k) = (ADp%dv_dt_visc_gl90(i,J,k) - ADp%dv_dt_visc(i,J,k)) * Idt
+        dv_dt_visc_gl90(i,J,k) = (dv_dt_visc_gl90(i,J,k) - dv_dt_visc(i,J,k)) * Idt
 
-        if (abs(ADp%dv_dt_visc_gl90(i,J,k)) < accel_underflow) &
-          ADp%dv_dt_visc_gl90(i,J,k) = 0.0
+        if (abs(dv_dt_visc_gl90(i,J,k)) < accel_underflow) &
+          dv_dt_visc_gl90(i,J,k) = 0.0
       enddo
 
       ! to compute energetics, we need to multiply by v*h, where u is original velocity before
       ! velocity update; note that ADp%dv_dt_visc(I,j,k) holds the original velocity value v(i,J,k)
-      if (CS%id_GLwork > 0) then
+      if (CS%do_GLwork) then
         do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                        i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
           ! note that on RHS: ADp%dv_dt_visc(I,j,k) holds the original velocity value v(I,j,k)
-          KE_v(I,j,k) = ADp%dv_dt_visc(i,J,k) * h_v(i,J,k) * areaCv(i,J) * &
-                        ADp%dv_dt_visc_gl90(i,J,k)
+          KE_v(I,j,k) = dv_dt_visc(i,J,k) * h_v(i,J,k) * areaCv(i,J) * &
+                        dv_dt_visc_gl90(i,J,k)
         enddo
       endif
     endif
   endif
 
-  if (associated(ADp%dv_dt_visc)) then
+  if (associated(dv_dt_visc)) then
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(local(k))
       do k=1,nz
-        ADp%dv_dt_visc(i,J,k) = (v(i,J,k) - ADp%dv_dt_visc(i,J,k))*Idt
-        if (abs(ADp%dv_dt_visc(i,J,k)) < accel_underflow) ADp%dv_dt_visc(i,J,k) = 0.0
+        dv_dt_visc(i,J,k) = (v(i,J,k) - dv_dt_visc(i,J,k))*Idt
+        if (abs(dv_dt_visc(i,J,k)) < accel_underflow) dv_dt_visc(i,J,k) = 0.0
       enddo
     enddo
   endif
@@ -1807,7 +1922,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (associated(tauy_shelf)) then
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1))
-      tauy_shelf(i,J) = -GV%H_to_RZ * a1_shelf_v(i,J) * v(i,J,1) ! - v_shelf?
+      tauy_shelf(i,J) = -vgrid%H_to_RZ * a1_shelf_v(i,J) * v(i,J,1) ! - v_shelf?
     enddo
   endif
 
@@ -1815,14 +1930,14 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (tauy_bot_a%associated()) then
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1))
-      tauy_bot(i,J) = GV%H_to_RZ * (v(i,J,nz) * a_v(i,J,nz+1))
+      tauy_bot(i,J) = vgrid%H_to_RZ * (v(i,J,nz) * a_v(i,J,nz+1))
     enddo
 
     if (associated(Ray_v)) then
       do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                      i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(local(k))
         do k=1,nz
-          tauy_bot(i,J) = tauy_bot(i,J) + GV%H_to_RZ * (Ray_v(i,J,k)*v(i,J,k))
+          tauy_bot(i,J) = tauy_bot(i,J) + vgrid%H_to_RZ * (Ray_v(i,J,k)*v(i,J,k))
         enddo
       enddo
     endif
@@ -1832,24 +1947,24 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (DoStokesMixing) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
-      v(i,J,k) = v(i,J,k) - Waves%Us_y(i,J,k)
+      v(i,J,k) = v(i,J,k) - Us_y(i,J,k)
     enddo
   endif
 
   if (lfpmix) then
     do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.)
-      v(i,J,k) = v(i,J,k) + Waves%Us_y(i,J,k)
+      v(i,J,k) = v(i,J,k) + Us_y(i,J,k)
     enddo
   endif
 
-  call vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, dt, Gcore, vgrid, CS%vertvisc_opts_CS, &
-                          CS%coupling_state, report_a, ntrunc_sum)
+  call vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, dt, Gcore, vgrid, CS, &
+                          coupling_state, report_a, ntrunc_sum)
 
   !$omp target exit data map(delete: c1)
 
-  !$omp target exit data map(from: ADp%du_dt_str, ADp%dv_dt_str)
-  !$omp target exit data map(delete: ADp)
+  !$omp target exit data map(from: du_dt_str, dv_dt_str)
+  !$omp target exit data map(delete: AD_a)
   !$omp target exit data map(delete: surface_stress)
 
   ! Here the velocities associated with open boundary conditions are applied.
@@ -2248,6 +2363,9 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   type(RealArray_t) :: h_a  ! Layer thickness [H ~> m or kg m-2]
   type(RealArray_t) :: dz_a ! Vertical distance across layers [Z ~> m]
   type(vertvisc_coef_diag_type) :: coef_diag_a ! The diagnostic arrays filled by vertvisc_coef_TR
+  type(RealArray_t) :: SpV_avg_a ! The layer averaged in situ specific volume [R-1 ~> m3 kg-1]
+  type(RealArray_t) :: kdgl90_struct_a ! Vertical structure function used in GL90 diffusivity
+                                       ! [nondim]
 
   if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(coef): "// &
          "Module must be initialized before it is used.")
@@ -2265,6 +2383,13 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call dz_a%alloc(lb=LBOUND(dz), ub=UBOUND(dz), source=dz)
   call Ustar_2d_a%alloc(lb=[G%isd,G%jsd], ub=[G%ied,G%jed])
   call Ustar_2d_a%view(Ustar_2d)
+  if (allocated(tv%SpV_avg)) &
+    call SpV_avg_a%alloc(lb=LBOUND(tv%SpV_avg), ub=UBOUND(tv%SpV_avg), source=tv%SpV_avg)
+  if (VarMix%use_variable_mixing) then
+    if (allocated(VarMix%kdgl90_struct)) &
+      call kdgl90_struct_a%alloc(lb=LBOUND(VarMix%kdgl90_struct), ub=UBOUND(VarMix%kdgl90_struct), &
+                                 source=VarMix%kdgl90_struct)
+  endif
   if (CS%id_Kv_u > 0) call coef_diag_a%Kv_u_a%alloc(lb=[G%IsdB,G%jsd,1], &
                                                ub=[G%IedB,G%jed,GV%ke], source=0.0)
   if (CS%id_Kv_v > 0) call coef_diag_a%Kv_v_a%alloc(lb=[G%isd,G%JsdB,1], &
@@ -2282,8 +2407,8 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call find_ustar(forces, tv, Ustar_2d, G, GV, US, halo=1)
 
   call vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
-                        tv, dt, Gcore, vgrid, CS%coef_opts_CS, CS%coupling_state, OBC, VarMix, &
-                        coef_diag_a)
+                        SpV_avg_a, dt, Gcore, vgrid, CS%coef_opts_CS, CS%coupling_state, OBC, &
+                        kdgl90_struct_a, coef_diag_a)
   !$omp target exit data map(delete: Ustar_2d)
 
   call vertvisc_coef_diagnostics(coef_diag_a, visc%Kv_slow, G, GV, US, CS)
@@ -2295,6 +2420,8 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call h_a%free()
   call dz_a%free()
   call Ustar_2d_a%free()
+  call SpV_avg_a%free()
+  call kdgl90_struct_a%free()
   call coef_diag_a%hML_u_a%free()
   call coef_diag_a%hML_v_a%free()
   call coef_diag_a%Kv_u_a%free()
@@ -2308,7 +2435,8 @@ end subroutine vertvisc_coef
 
 !> The implementation of vertvisc_coef (the root of its call tree).
 subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_a, visc_a, &
-                            tv, dt, Gcore, vgrid, CS, coupling_state, OBC, VarMix, coef_diag_a)
+                            SpV_avg_a, dt, Gcore, vgrid, CS, coupling_state, OBC, kdgl90_struct_a, &
+                            coef_diag_a)
   type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
                                                    !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
@@ -2327,8 +2455,8 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
                                                        !! non-Boussinesq mode [Z T-1 ~> m s-1]
   type(vertvisc_container_type), &
                            intent(in)    :: visc_a !< Copies of the viscosities and bottom drag
-  type(thermo_var_ptrs),   intent(in)    :: tv     !< A structure containing pointers to any
-                                                   !! available thermodynamic fields.
+  type(RealArray_t),       intent(in)    :: SpV_avg_a !< The layer averaged in situ specific volume
+                                                      !! [R-1 ~> m3 kg-1].
   real,                    intent(in)    :: dt     !< Time increment [T ~> s]
   type(coef_opts_CS),      intent(in)    :: CS     !< Vertical viscosity control structure
   type(coupling_state_type), &
@@ -2336,7 +2464,8 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
                                                            !! effective layer thicknesses at
                                                            !! velocity points
   type(ocean_OBC_type),    pointer       :: OBC    !< Open boundary condition structure
-  type(VarMix_CS),         intent(in) :: VarMix !< Variable mixing coefficients
+  type(RealArray_t),       intent(in)    :: kdgl90_struct_a !< Vertical structure function used in
+                                                            !! GL90 diffusivity [nondim]
   type(vertvisc_coef_diag_type), &
                            intent(inout) :: coef_diag_a !< The diagnostic arrays filled here, each
                                                         !! allocated only if it is needed
@@ -2474,6 +2603,10 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
                                                       ! tracer points [Z ~> m]
   real, dimension(:,:), contiguous, pointer :: CoriolisBu ! The Coriolis parameter at corner points
                                                           ! [T-1 ~> s-1]
+  real, dimension(:,:,:), contiguous, pointer :: SpV_avg ! The layer averaged in situ specific
+                                                         ! volume [R-1 ~> m3 kg-1]
+  real, dimension(:,:,:), contiguous, pointer :: kdgl90_struct ! Vertical structure function used
+                                                         ! in GL90 diffusivity [nondim]
   real, dimension(:), contiguous, pointer :: g_prime ! The reduced gravity at each interface
                                                      ! [L2 Z-1 T-2 ~> m s-2].
   integer :: i, j, k, nz
@@ -2486,6 +2619,9 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
   call dz_a%view(dz)
   call Ustar_2d_a%view(Ustar_2d)
   call vgrid%g_prime_a%view(g_prime)
+  nullify(SpV_avg, kdgl90_struct)
+  if (SpV_avg_a%associated()) call SpV_avg_a%view(SpV_avg)
+  if (kdgl90_struct_a%associated()) call kdgl90_struct_a%view(kdgl90_struct)
   call coupling_state%a_u%view(a_u)
   call coupling_state%a_v%view(a_v)
   call coupling_state%h_u%view(h_u)
@@ -2550,7 +2686,7 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
 
   ! TODO: tv and VarMix probably should be conditionally transferred (if at all)
   !$omp target enter data map(alloc: z_i, z_i_gl90, dz_harm, hvel, dz_vel, a_cpl, a_cpl_gl90, &
-  !$omp& tv, varmix, hvel_shelf, dz_vel_shelf, a_shelf)
+  !$omp& SpV_avg, kdgl90_struct, hvel_shelf, dz_vel_shelf, a_shelf)
 
   ! These are used in diagnostics, so they need to be mapped back and forth
   !$omp target enter data map(to: hML_u, kv_u, kv_gl90_u )
@@ -2713,13 +2849,13 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
         vgrid%ke, vgrid%Boussinesq, vgrid%nkml, vgrid%dZ_subroundoff, vgrid%H_to_m, vgrid%RZ_to_H, &
         vgrid%Z_to_H, CoriolisBu, CS%coupling_CS, Kv_shear, Kv_shear_Bu, Kv_tbl_shelf_u, &
         Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, nkml_visc_u, nkml_visc_v, Ustar_2d, &
-        tv, work_on_u=.true., OBC=OBC)
+        SpV_avg, work_on_u=.true., OBC=OBC)
 
     if (associated(hML_u)) hML_u(I,j) = h_ml
 
     if (CS%use_GL90_in_SSW) then
       call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, i, j, z_i_gl90, vgrid%ke, &
-          vgrid%dZ_subroundoff, g_prime, CoriolisBu, CS%GL90_CS, kappa_gl90_2d, VarMix, &
+          vgrid%dZ_subroundoff, g_prime, CoriolisBu, CS%GL90_CS, kappa_gl90_2d, kdgl90_struct, &
           work_on_u=.true.)
     endif
 
@@ -2802,7 +2938,7 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
             h_ml, dt, vgrid%ke, vgrid%Boussinesq, vgrid%nkml, vgrid%dZ_subroundoff, vgrid%H_to_m, &
             vgrid%RZ_to_H, vgrid%Z_to_H, CoriolisBu, CS%coupling_CS, Kv_shear, Kv_shear_Bu, &
             Kv_tbl_shelf_u, Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, nkml_visc_u, &
-            nkml_visc_v, Ustar_2d, tv, work_on_u=.true., OBC=OBC, shelf=.true.)
+            nkml_visc_v, Ustar_2d, SpV_avg, work_on_u=.true., OBC=OBC, shelf=.true.)
 
         a1_shelf_u(I,j) = a_shelf(1)
       endif
@@ -3022,13 +3158,13 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
         vgrid%ke, vgrid%Boussinesq, vgrid%nkml, vgrid%dZ_subroundoff, vgrid%H_to_m, vgrid%RZ_to_H, &
         vgrid%Z_to_H, CoriolisBu, CS%coupling_CS, Kv_shear, Kv_shear_Bu, Kv_tbl_shelf_u, &
         Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, nkml_visc_u, nkml_visc_v, Ustar_2d, &
-        tv, work_on_u=.false., OBC=OBC)
+        SpV_avg, work_on_u=.false., OBC=OBC)
 
     if (associated(hML_v)) hML_v(i,J) = h_ml
 
     if (CS%use_GL90_in_SSW) then
       call find_coupling_coef_gl90(a_cpl_gl90, dz_vel, i, j, z_i_gl90, vgrid%ke, &
-          vgrid%dZ_subroundoff, g_prime, CoriolisBu, CS%GL90_CS, kappa_gl90_2d, VarMix, &
+          vgrid%dZ_subroundoff, g_prime, CoriolisBu, CS%GL90_CS, kappa_gl90_2d, kdgl90_struct, &
           work_on_u=.false.)
     endif
 
@@ -3111,7 +3247,7 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
             h_ml, dt, vgrid%ke, vgrid%Boussinesq, vgrid%nkml, vgrid%dZ_subroundoff, vgrid%H_to_m, &
             vgrid%RZ_to_H, vgrid%Z_to_H, CoriolisBu, CS%coupling_CS, Kv_shear, Kv_shear_Bu, &
             Kv_tbl_shelf_u, Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, nkml_visc_u, &
-            nkml_visc_v, Ustar_2d, tv, work_on_u=.false., OBC=OBC, shelf=.true.)
+            nkml_visc_v, Ustar_2d, SpV_avg, work_on_u=.false., OBC=OBC, shelf=.true.)
 
         a1_shelf_v(i,J) = a_shelf(1)
       endif
@@ -3180,7 +3316,7 @@ subroutine vertvisc_coef_TR(bxU0, bxV0, u_a, v_a, h_a, dz_a, forces_a, Ustar_2d_
   enddo
 
   !$omp target exit data map(delete: z_i, z_i_gl90, dz_harm, hvel, dz_vel, a_cpl, a_cpl_gl90, &
-  !$omp& tv, varmix, hvel_shelf, dz_vel_shelf, a_shelf, hml_u, kv_u, kv_gl90_u)
+  !$omp& SpV_avg, kdgl90_struct, hvel_shelf, dz_vel_shelf, a_shelf, hml_u, kv_u, kv_gl90_u)
 
   ! These are used in diagnostics, so they need to be mapped back and forth
   !$omp target exit data map(from: hML_u, kv_u, kv_gl90_u )
@@ -3279,8 +3415,8 @@ pure subroutine find_coupling_coef_k(a_cpl, hvel, i, j, h_harm, bbl_thick, kv_bb
                                      ke, Boussinesq, nkml, dZ_subroundoff, H_to_m, RZ_to_H, &
                                      Z_to_H, CoriolisBu, CS, Kv_shear, Kv_shear_Bu, &
                                      Kv_tbl_shelf_u, Kv_tbl_shelf_v, tbl_thick_shelf_u, &
-                                     tbl_thick_shelf_v, nkml_visc_u, nkml_visc_v, Ustar_2d, tv, &
-                                     work_on_u, OBC, shelf)
+                                     tbl_thick_shelf_v, nkml_visc_u, nkml_visc_v, Ustar_2d, &
+                                     SpV_avg, work_on_u, OBC, shelf)
   !$omp declare target
   integer,                   intent(in)  :: ke !< The number of layers/levels in the vertical
   logical,                   intent(in)  :: Boussinesq !< If true, make the Boussinesq
@@ -3363,8 +3499,9 @@ pure subroutine find_coupling_coef_k(a_cpl, hvel, i, j, h_harm, bbl_thick, kv_bb
                                                  !! the Boussinesq reference density or the
                                                  !! time-evolving surface density in non-Boussinesq
                                                  !! mode [Z T-1 ~> m s-1]
-  type(thermo_var_ptrs),     intent(in)  :: tv   !< A structure containing pointers to any available
-                                                 !! thermodynamic fields.
+  real, dimension(:,:,:), &
+                   pointer, intent(in)  :: SpV_avg !< The layer averaged in situ specific volume
+                                                   !! [R-1 ~> m3 kg-1].
   logical,                   intent(in)  :: work_on_u !< If true, u-points are being calculated,
                                                   !! otherwise they are v-points
   type(ocean_OBC_type),      pointer     :: OBC   !< Open boundary condition structure
@@ -3602,46 +3739,46 @@ pure subroutine find_coupling_coef_k(a_cpl, hvel, i, j, h_harm, bbl_thick, kv_bb
     u_star = 0.
     tau_mag = 0.
 
-    if (allocated(tv%SpV_avg)) then
+    if (associated(SpV_avg)) then
       rho_av1 = 0.
 
       if (work_on_u) then
         u_star = 0.5 * (Ustar_2d(i,j) + Ustar_2d(i+1,j))
-        rho_av1 = 2. / (tv%SpV_avg(i,j,1) + tv%SpV_avg(i+1,j,1))
+        rho_av1 = 2. / (SpV_avg(i,j,1) + SpV_avg(i+1,j,1))
         absf = 0.5 * (abs(CoriolisBu(I,J-1)) + abs(CoriolisBu(I,J)))
 
         if (do_OBCs) then
           if (OBC%u_E_OBCs_on_PE) then
             if (OBC%segnum_u(I,j) > 0) then
               u_star = Ustar_2d(i,j)
-              rho_av1 = 1. / tv%SpV_avg(i,j,1)
+              rho_av1 = 1. / SpV_avg(i,j,1)
             endif
           endif
 
           if (OBC%u_W_OBCs_on_PE) then
             if (OBC%segnum_u(I,j) < 0) then
               u_star = Ustar_2d(i+1,j)
-              rho_av1 = 1. / tv%SpV_avg(i+1,j,1)
+              rho_av1 = 1. / SpV_avg(i+1,j,1)
             endif
           endif
         endif
       else
         u_star = 0.5 * (Ustar_2d(i,j) + Ustar_2d(i,j+1))
-        rho_av1 = 2. / (tv%SpV_avg(i,j,1) + tv%SpV_avg(i,j+1,1))
+        rho_av1 = 2. / (SpV_avg(i,j,1) + SpV_avg(i,j+1,1))
         absf = 0.5 * (abs(CoriolisBu(I-1,J)) + abs(CoriolisBu(I,J)))
 
         if (do_OBCs) then
           if (OBC%v_N_OBCs_on_PE) then
             if (OBC%segnum_v(i,J) > 0) then
               u_star = Ustar_2d(i,j)
-              rho_av1 = 1. / tv%SpV_avg(i,j,1)
+              rho_av1 = 1. / SpV_avg(i,j,1)
             endif
           endif
 
           if (OBC%v_S_OBCs_on_PE) then
             if (OBC%segnum_v(i,J) < 0) then
               u_star = Ustar_2d(i,j+1)
-              rho_av1 = 1. / tv%SpV_avg(i,j+1,1)
+              rho_av1 = 1. / SpV_avg(i,j+1,1)
             endif
           endif
         endif
@@ -3847,7 +3984,8 @@ pure subroutine find_coupling_coef(a_cpl, hvel, i, j, h_harm, bbl_thick, kv_bbl,
                                    ke, Boussinesq, nkml, dZ_subroundoff, H_to_m, RZ_to_H, Z_to_H, &
                                    CoriolisBu, CS, Kv_shear, Kv_shear_Bu, Kv_tbl_shelf_u, &
                                    Kv_tbl_shelf_v, tbl_thick_shelf_u, tbl_thick_shelf_v, &
-                                   nkml_visc_u, nkml_visc_v, Ustar_2d, tv, work_on_u, OBC, shelf)
+                                   nkml_visc_u, nkml_visc_v, Ustar_2d, SpV_avg, work_on_u, OBC, &
+                                   shelf)
   !$omp declare target
   integer,                   intent(in)  :: ke !< The number of layers/levels in the vertical
   logical,                   intent(in)  :: Boussinesq !< If true, make the Boussinesq
@@ -3931,8 +4069,9 @@ pure subroutine find_coupling_coef(a_cpl, hvel, i, j, h_harm, bbl_thick, kv_bbl,
                                                  !! the Boussinesq reference density or the
                                                  !! time-evolving surface density in non-Boussinesq
                                                  !! mode [Z T-1 ~> m s-1]
-  type(thermo_var_ptrs),     intent(in)  :: tv   !< A structure containing pointers to any available
-                                                 !! thermodynamic fields.
+  real, dimension(:,:,:), &
+                   pointer, intent(in)  :: SpV_avg !< The layer averaged in situ specific volume
+                                                   !! [R-1 ~> m3 kg-1].
   logical,                   intent(in)  :: work_on_u !< If true, u-points are being calculated,
                                                   !! otherwise they are v-points
   type(ocean_OBC_type),      pointer     :: OBC   !< Open boundary condition structure
@@ -4174,46 +4313,46 @@ pure subroutine find_coupling_coef(a_cpl, hvel, i, j, h_harm, bbl_thick, kv_bbl,
     u_star = 0.   ! Zero out the friction velocity on land points.
     tau_mag = 0.  ! Zero out the friction velocity on land points.
 
-    if (allocated(tv%SpV_avg)) then
+    if (associated(SpV_avg)) then
       rho_av1 = 0.
 
       if (work_on_u) then
         u_star = 0.5 * (Ustar_2d(i,j) + Ustar_2d(i+1,j))
-        rho_av1 = 2. / (tv%SpV_avg(i,j,1) + tv%SpV_avg(i+1,j,1))
+        rho_av1 = 2. / (SpV_avg(i,j,1) + SpV_avg(i+1,j,1))
         absf = 0.5 * (abs(CoriolisBu(I,J-1)) + abs(CoriolisBu(I,J)))
 
         if (do_OBCs) then
           if (OBC%u_E_OBCs_on_PE) then
             if (OBC%segnum_u(I,j) > 0) then
               u_star = Ustar_2d(i,j)
-              rho_av1 = 1. / tv%SpV_avg(i,j,1)
+              rho_av1 = 1. / SpV_avg(i,j,1)
             endif
           endif
 
           if (OBC%u_W_OBCs_on_PE) then
             if (OBC%segnum_u(I,j) < 0) then
               u_star = Ustar_2d(i+1,j)
-              rho_av1 = 1. / tv%SpV_avg(i+1,j,1)
+              rho_av1 = 1. / SpV_avg(i+1,j,1)
             endif
           endif
         endif
       else
         u_star = 0.5 * (Ustar_2d(i,j) + Ustar_2d(i,j+1))
-        rho_av1 = 2. / (tv%SpV_avg(i,j,1) + tv%SpV_avg(i,j+1,1))
+        rho_av1 = 2. / (SpV_avg(i,j,1) + SpV_avg(i,j+1,1))
         absf = 0.5 * (abs(CoriolisBu(I-1,J)) + abs(CoriolisBu(I,J)))
 
         if (do_OBCs) then
           if (OBC%v_N_OBCs_on_PE) then
             if (OBC%segnum_v(i,J) > 0) then
               u_star = Ustar_2d(i,j)
-              rho_av1 = 1. / tv%SpV_avg(i,j,1)
+              rho_av1 = 1. / SpV_avg(i,j,1)
             endif
           endif
 
           if (OBC%v_S_OBCs_on_PE) then
             if (OBC%segnum_v(i,J) < 0) then
               u_star = Ustar_2d(i,j+1)
-              rho_av1 = 1. / tv%SpV_avg(i,j+1,1)
+              rho_av1 = 1. / SpV_avg(i,j+1,1)
             endif
           endif
         endif
