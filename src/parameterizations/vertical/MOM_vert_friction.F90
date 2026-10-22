@@ -5132,8 +5132,6 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "1e-30 m/s, which is less than an Angstrom divided by "//&
                  "the age of the universe.", units="m s-1", default=0.0, scale=US%m_s_to_L_T)
 
-  !$omp target update to(CS)
-
   call CS%coupling_state%a_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
   call CS%coupling_state%a_u_gl90%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz+1], source=0.0)
   call CS%coupling_state%h_u%alloc(lb=[IsdB,jsd,1], ub=[IedB,jed,nz], source=0.0)
@@ -5141,10 +5139,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
   call CS%coupling_state%a_v_gl90%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz+1], source=0.0)
   call CS%coupling_state%h_v%alloc(lb=[isd,JsdB,1], ub=[ied,JedB,nz], source=0.0)
 
-  !$omp target enter data map(to: CS%coupling_state%a_u, CS%coupling_state%a_v)
-  !$omp target enter data map(to: CS%coupling_state%h_u, CS%coupling_state%h_v)
   ! TODO: Conditional?
-  !$omp target enter data map(to: CS%coupling_state%a_u_gl90, CS%coupling_state%a_v_gl90)
 
   CS%id_Kv_slow = register_diag_field('ocean_model', 'Kv_slow', diag%axesTi, Time, &
       'Slow varying vertical viscosity', 'm2 s-1', conversion=GV%HZ_T_to_m2_s)
