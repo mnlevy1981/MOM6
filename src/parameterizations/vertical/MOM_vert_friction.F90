@@ -37,7 +37,7 @@ use MOM_verticalGrid,  only : verticalGrid_type
 use MOM_wave_interface, only : wave_parameters_CS
 use MOM_set_visc,      only : set_v_at_u, set_u_at_v
 use MOM_lateral_mixing_coeffs, only : VarMix_CS
-use array_mod,         only : RealArray_t, RealArray_C
+use array_mod,         only : RealArray_t, RealArray_C, LogicalArray_t
 use box_mod,           only : Box_t
 use iso_c_binding,     only : c_int, c_bool, c_double
 
@@ -241,6 +241,11 @@ type :: vgrid_consts_CS
                  !! depth [H Z-1 ~> 1 or kg m-3].
   real :: T_to_s !< A constant that translates the units of time to seconds
                  !! [s T-1 ~> 1]
+  real :: Angstrom_H !< A one-Angstrom thickness in the model thickness units [H ~> m or kg m-2].
+  real :: H_to_RZ !< A constant that translates thickness units to the units of
+                  !! mass per unit area [R Z H-1 ~> kg m-3 or 1].
+  real :: m_s_to_L_T !< Convert lateral velocities from m s-1 to L T-1
+                     !! [L s T-1 m-1 ~> 1]
   type(RealArray_t) :: g_prime_a !< The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
 end type vgrid_consts_CS
 
@@ -268,8 +273,83 @@ type, bind(C) :: vgrid_consts_C
                            !! depth [H Z-1 ~> 1 or kg m-3].
   real(c_double) :: T_to_s !< A constant that translates the units of time to seconds
                            !! [s T-1 ~> 1]
+  real(c_double) :: Angstrom_H !< A one-Angstrom thickness in the model thickness units
+                               !! [H ~> m or kg m-2].
+  real(c_double) :: H_to_RZ !< A constant that translates thickness units to the units of
+                            !! mass per unit area [R Z H-1 ~> kg m-3 or 1].
+  real(c_double) :: m_s_to_L_T !< Convert lateral velocities from m s-1 to L T-1
+                               !! [L s T-1 m-1 ~> 1]
   type(RealArray_C) :: g_prime_a !< The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
 end type vgrid_consts_C
+
+!> Options used in the vertical viscosity solver and the velocity truncations.
+type :: vertvisc_opts_CS
+  real    :: Hmix_stress     !< The mixed layer thickness over which the wind
+                             !! stress is applied with direct_stress [H ~> m or kg m-2].
+  logical :: direct_stress  !< If true, the wind stress is distributed over the topmost Hmix_stress
+                            !! of fluid, and an added mixed layer viscosity or a physically based
+                            !! boundary layer turbulence parameterization is not needed for
+                            !! stability.
+  logical :: StokesMixing   !< If true, do Stokes drift mixing via the Lagrangian current
+                            !! (Eulerian plus Stokes drift).  False by default and set
+                            !! via STOKES_MIXING_COMBINED.
+  real    :: vel_underflow   !< Velocity components smaller than vel_underflow
+                             !! are set to 0 [L T-1 ~> m s-1].
+  real    :: CFL_trunc       !< Velocity components will be truncated when they
+                             !! are large enough that the corresponding CFL number
+                             !! exceeds this value [nondim].
+  real    :: CFL_report      !< The value of the CFL number that will cause the
+                             !! accelerations to be reported [nondim].  CFL_report
+                             !! will often equal CFL_trunc.
+  logical :: do_report_u = .false. !< If true, the columns with large u-velocities are reported.
+  logical :: do_report_v = .false. !< If true, the columns with large v-velocities are reported.
+  logical :: do_GLwork = .false. !< If true, the KE source from GL90 vertical viscosity is needed
+                                 !! for diagnostics.
+  logical :: do_du_dt_visc_gl90 = .false. !< If true, the zonal acceleration from GL90 vertical
+                                          !! viscosity is needed for diagnostics.
+  logical :: do_dv_dt_visc_gl90 = .false. !< If true, the meridional acceleration from GL90 vertical
+                                          !! viscosity is needed for diagnostics.
+end type vertvisc_opts_CS
+
+!> bind(C) mirror of vertvisc_opts_CS, field-for-field, same order.
+type, bind(C) :: vertvisc_opts_CS_C
+  real(c_double) :: Hmix_stress !< The mixed layer thickness over which the wind
+                                !! stress is applied with direct_stress [H ~> m or kg m-2].
+  logical(c_bool) :: direct_stress !< If true, the wind stress is distributed over the topmost
+                                   !! Hmix_stress of fluid, and an added mixed layer viscosity or a
+                                   !! physically based boundary layer turbulence parameterization is
+                                   !! not needed for stability.
+  logical(c_bool) :: StokesMixing !< If true, do Stokes drift mixing via the Lagrangian current
+                                  !! (Eulerian plus Stokes drift).  False by default and set
+                                  !! via STOKES_MIXING_COMBINED.
+  real(c_double) :: vel_underflow !< Velocity components smaller than vel_underflow
+                                  !! are set to 0 [L T-1 ~> m s-1].
+  real(c_double) :: CFL_trunc !< Velocity components will be truncated when they
+                              !! are large enough that the corresponding CFL number
+                              !! exceeds this value [nondim].
+  real(c_double) :: CFL_report !< The value of the CFL number that will cause the
+                               !! accelerations to be reported [nondim].  CFL_report
+                               !! will often equal CFL_trunc.
+  logical(c_bool) :: do_report_u !< If true, the columns with large u-velocities are reported.
+  logical(c_bool) :: do_report_v !< If true, the columns with large v-velocities are reported.
+  logical(c_bool) :: do_GLwork !< If true, the KE source from GL90 vertical viscosity is needed for
+                               !! diagnostics.
+  logical(c_bool) :: do_du_dt_visc_gl90 !< If true, the zonal acceleration from GL90 vertical
+                                        !! viscosity is needed for diagnostics.
+  logical(c_bool) :: do_dv_dt_visc_gl90 !< If true, the meridional acceleration from GL90 vertical
+                                        !! viscosity is needed for diagnostics.
+end type vertvisc_opts_CS_C
+
+!> The velocities and flags used to report the columns in which velocity truncations occur,
+!! each allocated only if those reports are being written.
+type :: limit_vel_report_type
+  type(RealArray_t)    :: u_old_a        !< The previous u-velocity [L T-1 ~> m s-1]
+  type(RealArray_t)    :: v_old_a        !< The previous v-velocity [L T-1 ~> m s-1]
+  type(RealArray_t)    :: vel_report_u_a !< The u-velocity to report [L T-1 ~> m s-1]
+  type(RealArray_t)    :: vel_report_v_a !< The v-velocity to report [L T-1 ~> m s-1]
+  type(LogicalArray_t) :: dowrite_u_a    !< True for the u-point columns to report
+  type(LogicalArray_t) :: dowrite_v_a    !< True for the v-point columns to report
+end type limit_vel_report_type
 
 !> The viscous coupling coefficients and effective layer thicknesses at velocity points that
 !! the coupling coefficient calculations store for the vertical viscosity solvers.
@@ -297,17 +377,9 @@ type, public :: vertvisc_CS ; private
   logical :: initialized = .false. !< True if this control structure has been initialized.
   type(coef_opts_CS) :: coef_opts_CS !< Options used in the vertical viscosity coupling
                                      !! coefficient calculations.
-  real    :: Hmix_stress     !< The mixed layer thickness over which the wind
-                             !! stress is applied with direct_stress [H ~> m or kg m-2].
+  type(vertvisc_opts_CS) :: vertvisc_opts_CS !< Options used in the vertical viscosity solver
+                                             !! and the velocity truncations.
 
-  real    :: vel_underflow   !< Velocity components smaller than vel_underflow
-                             !! are set to 0 [L T-1 ~> m s-1].
-  real    :: CFL_trunc       !< Velocity components will be truncated when they
-                             !! are large enough that the corresponding CFL number
-                             !! exceeds this value [nondim].
-  real    :: CFL_report      !< The value of the CFL number that will cause the
-                             !! accelerations to be reported [nondim].  CFL_report
-                             !! will often equal CFL_trunc.
   real    :: truncRampTime   !< The time-scale over which to ramp up the value of
                              !! CFL_trunc from CFL_truncS to CFL_truncE [T ~> s]
   real    :: CFL_truncS      !< The start value of CFL_trunc [nondim]
@@ -319,9 +391,6 @@ type, public :: vertvisc_CS ; private
                                               !! effective layer thicknesses at velocity points
 
   logical :: split          !< If true, use the split time stepping scheme.
-  logical :: direct_stress  !< If true, the wind stress is distributed over the topmost Hmix_stress
-                            !! of fluid, and an added mixed layer viscosity or a physically based
-                            !! boundary layer turbulence parameterization is not needed for stability.
   logical :: debug          !< If true, write verbose checksums for debugging purposes.
   integer :: nkml           !< The number of layers in the mixed layer.
   integer, pointer :: ntrunc !< The number of times the velocity has been
@@ -330,9 +399,6 @@ type, public :: vertvisc_CS ; private
                             !! u-accelerations are written if velocity truncations occur.
   character(len=200) :: v_trunc_file !< The complete path to a file in which a column of
                             !! v-accelerations are written if velocity truncations occur.
-  logical :: StokesMixing   !< If true, do Stokes drift mixing via the Lagrangian current
-                            !! (Eulerian plus Stokes drift).  False by default and set
-                            !! via STOKES_MIXING_COMBINED.
 
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
                                    !! timing of diagnostic output.
@@ -906,6 +972,22 @@ subroutine mech_forcing_container_free(this)
   if (this%frac_shelf_v_a%associated()) call this%frac_shelf_v_a%free()
 end subroutine mech_forcing_container_free
 
+!> Fills the vertical grid and unit-scaling constants used by the vertical viscosity
+!! calculations.
+subroutine vgrid_consts_build(vgrid, GV, US)
+  type(vgrid_consts_CS),   intent(inout) :: vgrid !< The vertical grid and unit-scaling constants
+  type(verticalGrid_type), intent(in)    :: GV    !< Ocean vertical grid structure
+  type(unit_scale_type),   intent(in)    :: US    !< A dimensional unit scaling type
+
+  vgrid%ke = GV%ke ; vgrid%Boussinesq = GV%Boussinesq ; vgrid%nkml = GV%nkml
+  vgrid%dZ_subroundoff = GV%dZ_subroundoff ; vgrid%H_subroundoff = GV%H_subroundoff
+  vgrid%H_to_m = GV%H_to_m ; vgrid%m_to_H = GV%m_to_H
+  vgrid%RZ_to_H = GV%RZ_to_H ; vgrid%Z_to_H = GV%Z_to_H ; vgrid%T_to_s = US%T_to_s
+  call vgrid%g_prime_a%alloc(lb=LBOUND(GV%g_prime), ub=UBOUND(GV%g_prime), source=GV%g_prime)
+  vgrid%Angstrom_H = GV%Angstrom_H ; vgrid%H_to_RZ = GV%H_to_RZ
+  vgrid%m_s_to_L_T = US%m_s_to_L_T
+end subroutine vgrid_consts_build
+
 !> Converts a coupling_CS to its bind(C) mirror.
 function coupling_CS_to_c(opts) result(cdesc)
   type(coupling_CS), intent(in) :: opts !< Options to convert
@@ -921,6 +1003,23 @@ function coupling_CS_to_c(opts) result(cdesc)
   cdesc%apply_LOTW_floor = opts%apply_LOTW_floor
   cdesc%answer_date = opts%answer_date
 end function coupling_CS_to_c
+
+!> Converts a vertvisc_opts_CS to its bind(C) mirror.
+function vertvisc_opts_CS_to_c(opts) result(cdesc)
+  type(vertvisc_opts_CS), intent(in) :: opts !< Options to convert
+  type(vertvisc_opts_CS_C) :: cdesc          !< bind(C) mirror of opts
+  cdesc%Hmix_stress = opts%Hmix_stress
+  cdesc%direct_stress = opts%direct_stress
+  cdesc%StokesMixing = opts%StokesMixing
+  cdesc%vel_underflow = opts%vel_underflow
+  cdesc%CFL_trunc = opts%CFL_trunc
+  cdesc%CFL_report = opts%CFL_report
+  cdesc%do_report_u = opts%do_report_u
+  cdesc%do_report_v = opts%do_report_v
+  cdesc%do_GLwork = opts%do_GLwork
+  cdesc%do_du_dt_visc_gl90 = opts%do_du_dt_visc_gl90
+  cdesc%do_dv_dt_visc_gl90 = opts%do_dv_dt_visc_gl90
+end function vertvisc_opts_CS_to_c
 
 #ifdef _TIM
 !> Converts a GL90_CS to its bind(C) mirror.
@@ -963,6 +1062,9 @@ function vgrid_consts_to_c(vgrid) result(cdesc)
   cdesc%RZ_to_H = vgrid%RZ_to_H
   cdesc%Z_to_H = vgrid%Z_to_H
   cdesc%T_to_s = vgrid%T_to_s
+  cdesc%Angstrom_H = vgrid%Angstrom_H
+  cdesc%H_to_RZ = vgrid%H_to_RZ
+  cdesc%m_s_to_L_T = vgrid%m_s_to_L_T
   cdesc%g_prime_a = vgrid%g_prime_a%to_c()
 end function vgrid_consts_to_c
 #endif
@@ -1014,6 +1116,10 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   type(grid_core_type), pointer :: Gcore ! Persistent copies of the core ocean grid fields
   type(Box_t) :: bxU0 ! The u-point box of the whole column, [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t) :: bxV0 ! The v-point box of the whole column, [isc:iec, JscB:JecB, 1:nz]
+  type(vgrid_consts_CS) :: vgrid ! The vertical grid and unit-scaling constants
+  type(limit_vel_report_type) :: report_a ! The velocities and flags used to report the columns in
+                                          ! which velocity truncations occur
+  integer :: ntrunc_sum ! The number of velocity truncations in this call [nondim]
   type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
   type(RealArray_t) :: u_a  ! Zonal velocity [L T-1 ~> m s-1]
   type(RealArray_t) :: v_a  ! Meridional velocity [L T-1 ~> m s-1]
@@ -1031,6 +1137,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
   call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
   call bxV0%set(idxS=[G%isc,G%JscB,1], idxE=[G%iec,G%JecB,GV%ke])
+  call vgrid_consts_build(vgrid, GV, US)
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
   call u_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=u)
@@ -1040,13 +1147,30 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
     call taux_bot_a%alloc(lb=LBOUND(taux_bot), ub=UBOUND(taux_bot), source=taux_bot)
   if (present(tauy_bot)) &
     call tauy_bot_a%alloc(lb=LBOUND(tauy_bot), ub=UBOUND(tauy_bot), source=tauy_bot)
+  if (CS%vertvisc_opts_CS%do_report_u) then
+    call report_a%u_old_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=0.0)
+    call report_a%vel_report_u_a%alloc(lb=[G%IsdB,G%JsdB], ub=[G%IedB,G%JedB], source=0.0)
+    call report_a%dowrite_u_a%alloc(lb=[G%IsdB,G%JsdB], ub=[G%IedB,G%JedB], source=.false.)
+  endif
+  if (CS%vertvisc_opts_CS%do_report_v) then
+    call report_a%v_old_a%alloc(lb=LBOUND(v), ub=UBOUND(v), source=0.0)
+    call report_a%vel_report_v_a%alloc(lb=[G%IsdB,G%JsdB], ub=[G%IedB,G%JedB], source=0.0)
+    call report_a%dowrite_v_a%alloc(lb=[G%IsdB,G%JsdB], ub=[G%IedB,G%JedB], source=.false.)
+  endif
+  ntrunc_sum = 0
   if (CS%id_GLwork > 0) then
     call KE_u_a%alloc(lb=[G%IsdB,G%jsd,1], ub=[G%IedB,G%jed,GV%ke], source=0.0)
     call KE_v_a%alloc(lb=[G%isd,G%JsdB,1], ub=[G%ied,G%JedB,GV%ke], source=0.0)
   endif
 
-  call vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, &
-                   GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, lfpmix, Waves)
+  call vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, G, Gcore, vgrid, &
+                   GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, report_a, ntrunc_sum, &
+                   lfpmix, Waves)
+
+  CS%ntrunc = CS%ntrunc + ntrunc_sum
+  if (CS%vertvisc_opts_CS%do_report_u .or. CS%vertvisc_opts_CS%do_report_v) &
+    call vertvisc_limit_vel_report(report_a, h, ADp, CDp, dt, forces%taux, forces%tauy, G, GV, &
+                                   US, CS)
 
   call vertvisc_diagnostics(KE_u_a, KE_v_a, taux_bot_a, tauy_bot_a, ADp, G, Gcore, GV, CS)
 
@@ -1058,8 +1182,12 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
   call v_a%free()
   call h_a%free()
   call KE_u_a%free()
-  call bxU0%free() ; call bxV0%free()
   call KE_v_a%free()
+  call report_a%u_old_a%free() ; call report_a%v_old_a%free()
+  call report_a%vel_report_u_a%free() ; call report_a%vel_report_v_a%free()
+  call report_a%dowrite_u_a%free() ; call report_a%dowrite_v_a%free()
+  call vgrid%g_prime_a%free()
+  call bxU0%free() ; call bxV0%free()
   if (present(taux_bot)) then
     call taux_bot_a%copy2F(taux_bot)
     call taux_bot_a%free()
@@ -1072,14 +1200,16 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
 end subroutine vertvisc
 
 !> The implementation of vertvisc (the root of its call tree).
-subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, CDp, G, Gcore, &
-                       GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, fpmix, Waves)
+subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp, G, Gcore, vgrid, &
+                       GV, US, CS, taux_bot_a, tauy_bot_a, KE_u_a, KE_v_a, report_a, ntrunc_sum, &
+                       fpmix, Waves)
   type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
                                                    !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
                                                    !! [isc:iec, JscB:JecB, 1:nz]
   type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
+  type(vgrid_consts_CS),   intent(in)    :: vgrid  !< The vertical grid and unit-scaling constants
   type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
   type(RealArray_t),       intent(inout) :: u_a    !< Zonal velocity [L T-1 ~> m s-1]
@@ -1093,7 +1223,6 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   type(ocean_OBC_type),  pointer         :: OBC    !< Open boundary condition structure
   type(accel_diag_ptrs), intent(inout)   :: ADp    !< Accelerations in the momentum
                                                    !! equations for diagnostics
-  type(cont_diag_ptrs),  intent(inout)   :: CDp    !< Continuity equation terms
   type(vertvisc_CS)                      :: CS     !< Vertical viscosity control structure
   type(RealArray_t),       intent(inout) :: taux_bot_a !< Zonal bottom stress from ocean to
                                                        !! rock [R L Z T-2 ~> Pa]
@@ -1103,6 +1232,11 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
                                                    !! u-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
   type(RealArray_t),       intent(inout) :: KE_v_a !< The area integral of a KE term in a layer at
                                                    !! v-points [H L4 T-3 ~> m5 s-3 or kg m2 s-3]
+  type(limit_vel_report_type), &
+                           intent(inout) :: report_a !< The velocities and flags used to report the
+                                                     !! columns in which velocity truncations occur
+  integer,                 intent(inout) :: ntrunc_sum !< The number of velocity truncations, added
+                                                       !! to the value on entry [nondim]
   logical,                   intent(in)  :: fpmix !< fpmix along Eulerian shear
   type(wave_parameters_CS), &
                    optional, pointer     :: Waves !< Container for wave/Stokes information
@@ -1221,19 +1355,19 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   if (.not.CS%initialized) call MOM_error(FATAL,"MOM_vert_friction(visc): "// &
          "Module must be initialized before it is used.")
 
-  if (CS%direct_stress) then
-    Hmix = CS%Hmix_stress
+  if (CS%vertvisc_opts_CS%direct_stress) then
+    Hmix = CS%vertvisc_opts_CS%Hmix_stress
     I_Hmix = 1.0 / Hmix
   endif
   dt_Rho0 = dt / GV%H_to_RZ
   h_neglect = GV%H_subroundoff
   Idt = 1.0 / dt
 
-  accel_underflow = CS%vel_underflow * Idt
+  accel_underflow = CS%vertvisc_opts_CS%vel_underflow * Idt
 
   !Check if Stokes mixing allowed if requested (present and associated)
   DoStokesMixing=.false.
-  if (CS%StokesMixing) then
+  if (CS%vertvisc_opts_CS%StokesMixing) then
     if (present(Waves)) DoStokesMixing = associated(Waves)
     if (.not. DoStokesMixing) &
       call MOM_error(FATAL, "Stokes Mixing called without associated Waves Control Structure")
@@ -1289,7 +1423,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   !   One option is to have the wind stress applied as a body force
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
-  if (CS%direct_stress) then
+  if (CS%vertvisc_opts_CS%direct_stress) then
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1), mask2dCu(i,j) > 0.0) &
         DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
@@ -1535,7 +1669,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
   !   One option is to have the wind stress applied as a body force
   ! over the topmost Hmix fluid.  If DIRECT_STRESS is not defined,
   ! the wind stress is applied as a stress boundary condition.
-  if (CS%direct_stress) then
+  if (CS%vertvisc_opts_CS%direct_stress) then
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1), mask2dCv(i,J) > 0.0) &
         DO_LOCALITY(local(k, zDS, stress, h_avg, hfr))
@@ -1709,7 +1843,8 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, ADp
     enddo
   endif
 
-  call vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, US, CS)
+  call vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, dt, Gcore, vgrid, CS%vertvisc_opts_CS, &
+                          CS%coupling_state, report_a, ntrunc_sum)
 
   !$omp target exit data map(delete: c1)
 
@@ -2121,11 +2256,7 @@ subroutine vertvisc_coef(u, v, h, dz, forces, visc, tv, dt, G, GV, US, CS, OBC, 
   call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
   call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
   call bxV0%set(idxS=[G%isc,G%JscB,1], idxE=[G%iec,G%JecB,GV%ke])
-  vgrid%ke = GV%ke ; vgrid%Boussinesq = GV%Boussinesq ; vgrid%nkml = GV%nkml
-  vgrid%dZ_subroundoff = GV%dZ_subroundoff ; vgrid%H_subroundoff = GV%H_subroundoff
-  vgrid%H_to_m = GV%H_to_m ; vgrid%m_to_H = GV%m_to_H
-  vgrid%RZ_to_H = GV%RZ_to_H ; vgrid%Z_to_H = GV%Z_to_H ; vgrid%T_to_s = US%T_to_s
-  call vgrid%g_prime_a%alloc(lb=LBOUND(GV%g_prime), ub=UBOUND(GV%g_prime), source=GV%g_prime)
+  call vgrid_consts_build(vgrid, GV, US)
   call visc_a%build_from(visc)
   call forces_a%build_from(forces)
   call u_a%alloc(lb=LBOUND(u), ub=UBOUND(u), source=u)
@@ -4282,43 +4413,40 @@ end subroutine find_coupling_coef
 !! and the running sum of the number of trunctionas within the non-symmetric memory computational
 !! domain is incremented.  Optionally, any column with excessive velocities may be sent
 !! to a diagnostic reporting subroutine.
-subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt, G, Gcore, GV, &
-                              US, CS)
+subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, dt, Gcore, vgrid, CS, coupling_state, &
+                              report_a, ntrunc_sum)
   type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
                                                    !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
                                                    !! [isc:iec, JscB:JecB, 1:nz]
-  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
   type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
-  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
-  type(unit_scale_type),   intent(in)    :: US     !< A dimensional unit scaling type
+  type(vgrid_consts_CS),   intent(in)    :: vgrid  !< The vertical grid and unit-scaling constants
   type(RealArray_t),       intent(inout) :: u_a    !< Zonal velocity [L T-1 ~> m s-1]
   type(RealArray_t),       intent(inout) :: v_a    !< Meridional velocity [L T-1 ~> m s-1]
-  type(RealArray_t),       intent(in)    :: h_a    !< Layer thickness [H ~> m or kg m-2]
-  type(accel_diag_ptrs),   intent(in)    :: ADp    !< Acceleration diagnostic pointers
-  type(cont_diag_ptrs),    intent(in)    :: CDp    !< Continuity diagnostic pointers
-  type(mech_forcing_container_type), &
-                           intent(in)    :: forces_a !< Copies of the driving mechanical forces
   real,                    intent(in)    :: dt     !< Time increment [T ~> s]
-  type(vertvisc_CS)                      :: CS     !< Vertical viscosity control structure
+  type(vertvisc_opts_CS),  intent(in)    :: CS     !< Vertical viscosity control structure
+  type(coupling_state_type), &
+                           intent(in)    :: coupling_state !< The viscous coupling coefficients and
+                                                           !! effective layer thicknesses at
+                                                           !! velocity points
+  type(limit_vel_report_type), &
+                           intent(inout) :: report_a !< The velocities and flags used to report the
+                                                     !! columns in which velocity truncations occur
+  integer,                 intent(inout) :: ntrunc_sum !< The number of velocity truncations, added
+                                                       !! to the value on entry [nondim]
 
   ! Local variables
   real :: CFL              ! The local CFL number [nondim]
   real :: H_report         ! A thickness below which not to report truncations [H ~> m or kg m-2]
-  real :: vel_report(SZIB_(G),SZJB_(G))   ! The velocity to report [L T-1 ~> m s-1]
-  real :: u_old(SZIB_(G),SZJ_(G),SZK_(GV)) ! The previous u-velocity [L T-1 ~> m s-1]
-  real :: v_old(SZI_(G),SZJB_(G),SZK_(GV)) ! The previous v-velocity [L T-1 ~> m s-1]
-  logical :: trunc_any_array(SZI_(G),SZJB_(G),SZK_(GV))
-  logical :: trunc_any, dowrite(SZIB_(G),SZJB_(G))
+  real, dimension(:,:), contiguous, pointer :: vel_report ! The velocity to report [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: u_old ! The previous u-velocity [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: v_old ! The previous v-velocity [L T-1 ~> m s-1]
+  logical, dimension(:,:), contiguous, pointer :: dowrite ! True for the columns to report
+  logical :: trunc_any
   logical :: do_any_write
   integer :: ntrunc         ! Thread-safe truncation counter
-  real, dimension(:,:), contiguous, pointer :: taux, tauy ! The zonal and meridional wind stresses
-                                                         ! [R L Z T-2 ~> Pa]
   real, dimension(:,:,:), contiguous, pointer :: u, v ! The zonal and meridional velocities
                                                     ! [L T-1 ~> m s-1]
-  real, dimension(:,:,:), contiguous, pointer :: h    ! Layer thickness [H ~> m or kg m-2]
-  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
-                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
   real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
                                                     ! u- and v-points [H ~> m or kg m-2]
   real, dimension(:,:), contiguous, pointer :: areaT ! The area of an h-cell [L2 ~> m2]
@@ -4327,39 +4455,37 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt,
                                                      ! h-cell [L ~> m]
   real, dimension(:,:), contiguous, pointer :: dy_Cu ! The unblocked lengths of the u-faces of the
                                                      ! h-cell [L ~> m]
-  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  integer :: i, j, k, is, ie, js, je, nz
+  is = bxV0%idxS(1) ; ie = bxV0%idxE(1) ; js = bxU0%idxS(2) ; je = bxU0%idxE(2) ; nz = vgrid%ke
 
   call u_a%view(u)
   call v_a%view(v)
-  call h_a%view(h)
-  call CS%coupling_state%a_u%view(a_u)
-  call CS%coupling_state%a_v%view(a_v)
-  call CS%coupling_state%h_u%view(h_u)
-  call CS%coupling_state%h_v%view(h_v)
+  call coupling_state%h_u%view(h_u)
+  call coupling_state%h_v%view(h_v)
   call Gcore%areaT%view(areaT)
   call Gcore%IareaT%view(IareaT)
   call Gcore%dx_Cv%view(dx_Cv)
   call Gcore%dy_Cu%view(dy_Cu)
 
-  nullify(taux, tauy)
-  if (forces_a%taux_a%associated()) call forces_a%taux_a%view(taux)
-  if (forces_a%tauy_a%associated()) call forces_a%tauy_a%view(tauy)
+  nullify(u_old, v_old, vel_report, dowrite)
+  if (report_a%u_old_a%associated()) call report_a%u_old_a%view(u_old)
+  if (report_a%v_old_a%associated()) call report_a%v_old_a%view(v_old)
+  if (report_a%vel_report_u_a%associated()) call report_a%vel_report_u_a%view(vel_report)
+  if (report_a%dowrite_u_a%associated()) call report_a%dowrite_u_a%view(dowrite)
 
-  H_report = 3.0 * GV%Angstrom_H
+  H_report = 3.0 * vgrid%Angstrom_H
 
   !$omp target enter data map(alloc: dowrite, vel_report)
   !$omp target enter data map(alloc: u_old, v_old)
 
-  if (len_trim(CS%u_trunc_file) > 0) then
+  if (CS%do_report_u) then
     do_any_write = .false.
     trunc_any = .false.
 
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
                    I=bxU0%idxS(1):bxU0%idxE(1))
       dowrite(I,j) = .false.
-      vel_report(I,j) = 3.0e8 * US%m_s_to_L_T
+      vel_report(I,j) = 3.0e8 * vgrid%m_s_to_L_T
     enddo
 
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
@@ -4392,25 +4518,17 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt,
                      I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
         if ((u(I,j,k) * (dt * dy_Cu(I,j))) * IareaT(i+1,j) < -CS%CFL_trunc) then
           u(I,j,k) = (-0.9*CS%CFL_trunc) * (areaT(i+1,j) / (dt * dy_Cu(I,j)))
-          if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
+          if (((I >= is) .and. (I <= ie) .and. (j >= js) .and. (j <= je)) .and. &
               (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
         elseif ((u(I,j,k) * (dt * dy_Cu(I,j))) * IareaT(i,j) > CS%CFL_trunc) then
           u(I,j,k) = (0.9*CS%CFL_trunc) * (areaT(i,j) / (dt * dy_Cu(I,j)))
-          if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
+          if (((I >= is) .and. (I <= ie) .and. (j >= js) .and. (j <= je)) .and. &
               (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
         endif
       enddo
-      CS%ntrunc = CS%ntrunc + ntrunc
+      ntrunc_sum = ntrunc_sum + ntrunc
     endif
 
-    if (do_any_write) then
-      !$omp target update from (u_old, vel_report)
-      do j=js,je ; do I=Isq,Ieq ; if (dowrite(I,j)) then
-        ! Call a diagnostic reporting subroutines are called if unphysically large values are found.
-        call write_u_accel(I, j, u_old, h, ADp, CDp, dt, G, GV, US, CS%PointAccel_CSp, &
-                           vel_report(I,j), taux(I,j), a=a_u, hv=h_u)
-      endif ; enddo ; enddo
-    endif
   else  ! Do not report accelerations leading to large velocities.
     ntrunc = 0
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), &
@@ -4418,25 +4536,27 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt,
       if (abs(u(I,j,k)) < CS%vel_underflow) then ; u(I,j,k) = 0.0
       elseif ((u(I,j,k) * (dt * dy_Cu(I,j))) * IareaT(i+1,j) < -CS%CFL_trunc) then
         u(I,j,k) = (-0.9*CS%CFL_trunc) * (areaT(i+1,j) / (dt * dy_Cu(I,j)))
-        if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
+        if (((I >= is) .and. (I <= ie) .and. (j >= js) .and. (j <= je)) .and. &
             (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
       elseif ((u(I,j,k) * (dt * dy_Cu(I,j))) * IareaT(i,j) > CS%CFL_trunc) then
         u(I,j,k) = (0.9*CS%CFL_trunc) * (areaT(i,j) / (dt * dy_Cu(I,j)))
-        if (((I >= G%isc) .and. (I <= G%iec) .and. (j >= G%jsc) .and. (j <= G%jec)) .and. &
+        if (((I >= is) .and. (I <= ie) .and. (j >= js) .and. (j <= je)) .and. &
             (h_u(I,j,k) > H_report)) ntrunc = ntrunc + 1
       endif
     enddo
-    CS%ntrunc = CS%ntrunc + ntrunc
+    ntrunc_sum = ntrunc_sum + ntrunc
   endif
 
-  if (len_trim(CS%v_trunc_file) > 0) then
+  if (CS%do_report_v) then
+    call report_a%vel_report_v_a%view(vel_report)
+    call report_a%dowrite_v_a%view(dowrite)
     do_any_write =.false.
     trunc_any = .false.
 
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
                    i=bxV0%idxS(1):bxV0%idxE(1))
       dowrite(i,J) = .false.
-      vel_report(i,J) = 3.0e8 * US%m_s_to_L_T
+      vel_report(i,J) = 3.0e8 * vgrid%m_s_to_L_T
     enddo
 
     do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
@@ -4469,17 +4589,96 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt,
                      i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
         if ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j+1) < -CS%CFL_trunc) then
           v(i,J,k) = (-0.9*CS%CFL_trunc) * (areaT(i,j+1) / (dt * dx_Cv(i,J)))
-          if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
+          if (((i >= is) .and. (i <= ie) .and. (J >= js) .and. (J <= je)) .and. &
               (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
         elseif ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j) > CS%CFL_trunc) then
           v(i,J,k) = (0.9*CS%CFL_trunc) * (areaT(i,j) / (dt * dx_Cv(i,J)))
-          if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
+          if (((i >= is) .and. (i <= ie) .and. (J >= js) .and. (J <= je)) .and. &
               (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
         endif
       enddo
-      CS%ntrunc = CS%ntrunc + ntrunc
+      ntrunc_sum = ntrunc_sum + ntrunc
     endif
 
+  else  ! Do not report accelerations leading to large velocities.
+    ntrunc = 0
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
+      if (abs(v(i,J,k)) < CS%vel_underflow) then ; v(i,J,k) = 0.0
+      elseif ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j+1) < -CS%CFL_trunc) then
+        v(i,J,k) = (-0.9*CS%CFL_trunc) * (areaT(i,j+1) / (dt * dx_Cv(i,J)))
+        if (((i >= is) .and. (i <= ie) .and. (J >= js) .and. (J <= je)) .and. &
+            (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
+      elseif ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j) > CS%CFL_trunc) then
+        v(i,J,k) = (0.9*CS%CFL_trunc) * (areaT(i,j) / (dt * dx_Cv(i,J)))
+        if (((i >= is) .and. (i <= ie) .and. (J >= js) .and. (J <= je)) .and. &
+            (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
+      endif
+    enddo
+    ntrunc_sum = ntrunc_sum + ntrunc
+  endif
+
+  !$omp target exit data map(release: u_old, v_old, dowrite, vel_report)
+end subroutine vertvisc_limit_vel
+
+!> Writes the accelerations in the columns with large velocities to the truncation files.
+subroutine vertvisc_limit_vel_report(report_a, h, ADp, CDp, dt, taux, tauy, G, GV, US, CS)
+  type(ocean_grid_type),   intent(in) :: G   !< Ocean grid structure
+  type(verticalGrid_type), intent(in) :: GV  !< Ocean vertical grid structure
+  type(unit_scale_type),   intent(in) :: US  !< A dimensional unit scaling type
+  type(limit_vel_report_type), &
+                           intent(in) :: report_a !< The velocities and flags used to report the
+                                                  !! columns in which velocity truncations occur
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in) :: h   !< Layer thickness [H ~> m or kg m-2]
+  type(accel_diag_ptrs),   intent(in) :: ADp !< Acceleration diagnostic pointers
+  type(cont_diag_ptrs),    intent(in) :: CDp !< Continuity diagnostic pointers
+  real,                    intent(in) :: dt  !< Time increment [T ~> s]
+  real, dimension(SZIB_(G),SZJ_(G)), &
+                           intent(in) :: taux !< zonal wind stress [R L Z T-2 ~> Pa]
+  real, dimension(SZI_(G),SZJB_(G)), &
+                           intent(in) :: tauy !< meridional wind stress [R L Z T-2 ~> Pa]
+  type(vertvisc_CS),       intent(in) :: CS  !< Vertical viscosity control structure
+
+  ! Local variables
+  real, dimension(:,:), contiguous, pointer :: vel_report ! The velocity to report [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: u_old ! The previous u-velocity [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: v_old ! The previous v-velocity [L T-1 ~> m s-1]
+  logical, dimension(:,:), contiguous, pointer :: dowrite ! True for the columns to report
+  logical :: do_any_write
+  real, dimension(:,:,:), contiguous, pointer :: a_u, a_v ! The u- and v-drag coefficients
+                                                    ! across interfaces [H T-1 ~> m s-1 or Pa s m-1]
+  real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
+                                                    ! u- and v-points [H ~> m or kg m-2]
+  integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  call CS%coupling_state%a_u%view(a_u)
+  call CS%coupling_state%a_v%view(a_v)
+  call CS%coupling_state%h_u%view(h_u)
+  call CS%coupling_state%h_v%view(h_v)
+
+  if (CS%vertvisc_opts_CS%do_report_u) then
+    call report_a%u_old_a%view(u_old)
+    call report_a%vel_report_u_a%view(vel_report)
+    call report_a%dowrite_u_a%view(dowrite)
+    do_any_write = any(dowrite)
+    if (do_any_write) then
+      !$omp target update from (u_old, vel_report)
+      do j=js,je ; do I=Isq,Ieq ; if (dowrite(I,j)) then
+        ! Call a diagnostic reporting subroutines are called if unphysically large values are found.
+        call write_u_accel(I, j, u_old, h, ADp, CDp, dt, G, GV, US, CS%PointAccel_CSp, &
+                           vel_report(I,j), taux(I,j), a=a_u, hv=h_u)
+      endif ; enddo ; enddo
+    endif
+  endif
+
+  if (CS%vertvisc_opts_CS%do_report_v) then
+    call report_a%v_old_a%view(v_old)
+    call report_a%vel_report_v_a%view(vel_report)
+    call report_a%dowrite_v_a%view(dowrite)
+    do_any_write = any(dowrite)
     if (do_any_write) then
       !$omp target update from(v_old, vel_report)
       do J=Jsq,Jeq ; do i=is,ie ; if (dowrite(i,J)) then
@@ -4488,26 +4687,8 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, h_a, ADp, CDp, forces_a, dt,
                            vel_report(i,J), tauy(i,J), a=a_v, hv=h_v)
       endif ; enddo ; enddo
     endif
-  else  ! Do not report accelerations leading to large velocities.
-    ntrunc = 0
-    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), &
-                   i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(reduce(+: ntrunc))
-      if (abs(v(i,J,k)) < CS%vel_underflow) then ; v(i,J,k) = 0.0
-      elseif ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j+1) < -CS%CFL_trunc) then
-        v(i,J,k) = (-0.9*CS%CFL_trunc) * (areaT(i,j+1) / (dt * dx_Cv(i,J)))
-        if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
-            (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
-      elseif ((v(i,J,k) * (dt * dx_Cv(i,J))) * IareaT(i,j) > CS%CFL_trunc) then
-        v(i,J,k) = (0.9*CS%CFL_trunc) * (areaT(i,j) / (dt * dx_Cv(i,J)))
-        if (((i >= G%isc) .and. (i <= G%iec) .and. (J >= G%jsc) .and. (J <= G%jec)) .and. &
-            (h_v(i,J,k) > H_report)) ntrunc = ntrunc + 1
-      endif
-    enddo
-    CS%ntrunc = CS%ntrunc + ntrunc
   endif
-
-  !$omp target exit data map(release: u_old, v_old, dowrite, vel_report)
-end subroutine vertvisc_limit_vel
+end subroutine vertvisc_limit_vel_report
 
 
 !> Initialize the vertical friction module
@@ -4581,7 +4762,7 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "may be an assumed value or it may be based on the "//&
                  "actual velocity in the bottommost HBBL, depending on "//&
                  "LINEAR_DRAG.", default=.true.)
-  call get_param(param_file, mdl, "DIRECT_STRESS", CS%direct_stress, &
+  call get_param(param_file, mdl, "DIRECT_STRESS", CS%vertvisc_opts_CS%direct_stress, &
                  "If true, the wind stress is distributed over the topmost HMIX_STRESS of fluid "//&
                  "(like in HYCOM), and an added mixed layer viscosity or a physically based "//&
                  "boundary layer turbulence parameterization is not needed for stability.", &
@@ -4634,17 +4815,17 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "diffusivity are elevated when the bulk mixed layer is not used.", &
                  units="m", scale=US%m_to_Z, fail_if_missing=.true.)
   endif
-  if (CS%direct_stress) then
+  if (CS%vertvisc_opts_CS%direct_stress) then
     if (GV%nkml < 1) then
-      call get_param(param_file, mdl, "HMIX_STRESS", CS%Hmix_stress, &
+      call get_param(param_file, mdl, "HMIX_STRESS", CS%vertvisc_opts_CS%Hmix_stress, &
                  "The depth over which the wind stress is applied if DIRECT_STRESS is true.", &
                  units="m", default=US%Z_to_m*CS%coef_opts_CS%coupling_CS%Hmix, scale=GV%m_to_H)
     else
-      call get_param(param_file, mdl, "HMIX_STRESS", CS%Hmix_stress, &
+      call get_param(param_file, mdl, "HMIX_STRESS", CS%vertvisc_opts_CS%Hmix_stress, &
                  "The depth over which the wind stress is applied if DIRECT_STRESS is true.", &
                  units="m", fail_if_missing=.true., scale=GV%m_to_H)
     endif
-    if (CS%Hmix_stress <= 0.0) call MOM_error(FATAL, "vertvisc_init: " // &
+    if (CS%vertvisc_opts_CS%Hmix_stress <= 0.0) call MOM_error(FATAL, "vertvisc_init: " // &
        "HMIX_STRESS must be set to a positive value if DIRECT_STRESS is true.")
   endif
   call get_param(param_file, mdl, "KV", Kv_back_z, &
@@ -4770,24 +4951,24 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
                  "near-bottom velocities are averaged for the drag law if BOTTOMDRAGLAW is "//&
                  "defined but LINEAR_DRAG is not.", &
                  units="m", fail_if_missing=.true., scale=US%m_to_Z)
-  call get_param(param_file, mdl, "CFL_TRUNCATE", CS%CFL_trunc, &
+  call get_param(param_file, mdl, "CFL_TRUNCATE", CS%vertvisc_opts_CS%CFL_trunc, &
                  "The value of the CFL number that will cause velocity "//&
                  "components to be truncated; instability can occur past 0.5.", &
                  units="nondim", default=0.5)
-  call get_param(param_file, mdl, "CFL_REPORT", CS%CFL_report, &
+  call get_param(param_file, mdl, "CFL_REPORT", CS%vertvisc_opts_CS%CFL_report, &
                  "The value of the CFL number that causes accelerations "//&
                  "to be reported; the default is CFL_TRUNCATE.", &
-                 units="nondim", default=CS%CFL_trunc)
+                 units="nondim", default=CS%vertvisc_opts_CS%CFL_trunc)
   call get_param(param_file, mdl, "CFL_TRUNCATE_RAMP_TIME", CS%truncRampTime, &
                  "The time over which the CFL truncation value is ramped "//&
                  "up at the beginning of the run.", &
                  units="s", default=0., scale=US%s_to_T)
-  CS%CFL_truncE = CS%CFL_trunc
+  CS%CFL_truncE = CS%vertvisc_opts_CS%CFL_trunc
   call get_param(param_file, mdl, "CFL_TRUNCATE_START", CS%CFL_truncS, &
                  "The start value of the truncation CFL number used when "//&
                  "ramping up CFL_TRUNC.", &
                  units="nondim", default=0.)
-  call get_param(param_file, mdl, "STOKES_MIXING_COMBINED", CS%StokesMixing, &
+  call get_param(param_file, mdl, "STOKES_MIXING_COMBINED", CS%vertvisc_opts_CS%StokesMixing, &
                  "Flag to use Stokes drift Mixing via the Lagrangian "//&
                  " current (Eulerian plus Stokes drift). "//&
                  " Still needs work and testing, so not recommended for use.",&
@@ -4801,12 +4982,12 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
   !   care is given to the previously mentioned issues.  Comment out the following
   !   MOM_error to use, but do so at your own risk and with these points in mind.
   !}
-  if (CS%StokesMixing) then
+  if (CS%vertvisc_opts_CS%StokesMixing) then
     call MOM_error(FATAL, "Stokes mixing requires user intervention in the code.\n"//&
                           "  Model now exiting.  See MOM_vert_friction.F90 for \n"//&
                           "  details (search 'BGR 04/04/2018' to locate comment).")
   endif
-  call get_param(param_file, mdl, "VEL_UNDERFLOW", CS%vel_underflow, &
+  call get_param(param_file, mdl, "VEL_UNDERFLOW", CS%vertvisc_opts_CS%vel_underflow, &
                  "A negligibly small velocity magnitude below which velocity "//&
                  "components are set to 0.  A reasonable value might be "//&
                  "1e-30 m/s, which is less than an Angstrom divided by "//&
@@ -5013,6 +5194,12 @@ subroutine vertvisc_init(MIS, Time, G, GV, US, param_file, diag, ADp, dirs, &
   if ((len_trim(CS%u_trunc_file) > 0) .or. (len_trim(CS%v_trunc_file) > 0)) &
     call PointAccel_init(MIS, Time, G, param_file, diag, dirs, CS%PointAccel_CSp)
 
+  CS%vertvisc_opts_CS%do_report_u = (len_trim(CS%u_trunc_file) > 0)
+  CS%vertvisc_opts_CS%do_report_v = (len_trim(CS%v_trunc_file) > 0)
+  CS%vertvisc_opts_CS%do_GLwork = (CS%id_GLwork > 0)
+  CS%vertvisc_opts_CS%do_du_dt_visc_gl90 = (CS%id_du_dt_visc_gl90 > 0)
+  CS%vertvisc_opts_CS%do_dv_dt_visc_gl90 = (CS%id_dv_dt_visc_gl90 > 0)
+
 end subroutine vertvisc_init
 
 !> Update the CFL truncation value as a function of time.
@@ -5043,16 +5230,16 @@ subroutine updateCFLtruncationValue(Time, CS, US, activate)
   if (.not.CS%CFLrampingIsActivated) return
   deltaTime = max(0., time_minus_signed(Time, CS%rampStartTime, scale=US%s_to_T))
   if (deltaTime >= CS%truncRampTime) then
-    CS%CFL_trunc = CS%CFL_truncE
+    CS%vertvisc_opts_CS%CFL_trunc = CS%CFL_truncE
     CS%truncRampTime = 0. ! This turns off ramping after this call
   else
     wghtA = min( 1., deltaTime / CS%truncRampTime ) ! Linear profile in time
     !wghtA = wghtA*wghtA ! Convert linear profile to parabolic profile in time
     !wghtA = wghtA*wghtA*(3. - 2.*wghtA) ! Convert linear profile to cosine profile
     wghtA = 1. - ( (1. - wghtA)**2 ) ! Convert linear profile to inverted parabolic profile
-    CS%CFL_trunc = CS%CFL_truncS + wghtA * ( CS%CFL_truncE - CS%CFL_truncS )
+    CS%vertvisc_opts_CS%CFL_trunc = CS%CFL_truncS + wghtA * ( CS%CFL_truncE - CS%CFL_truncS )
   endif
-  write(msg(1:12),'(es12.3)') CS%CFL_trunc
+  write(msg(1:12),'(es12.3)') CS%vertvisc_opts_CS%CFL_trunc
   call MOM_error(NOTE, "MOM_vert_friction: updateCFLtruncationValue set CFL limit to "//trim(msg))
 end subroutine updateCFLtruncationValue
 
