@@ -12,11 +12,14 @@ env:
   MOM_TARGET_SLUG: ${{ github.repository }}
   MOM_TARGET_LOCAL_BRANCH: ${{ github.base_ref }}
 
+# Runners are pinned to macos-15 rather than macOS-latest, which moved to macOS 26 in October
+# 2026, so that runner image changes are not mixed with code changes. The Fortran compiler is
+# still Homebrew's current gcc (installed by macos-setup), which this pin does not fix.
 jobs:
   # Executables
 
   build-symmetric:
-    runs-on: macOS-latest
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +45,7 @@ jobs:
           retention-days: 1
 
   build-asymmetric:
-    runs-on: macOS-latest
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +71,7 @@ jobs:
           retention-days: 1
 
   build-repro:
-    runs-on: macOS-latest
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -94,7 +97,7 @@ jobs:
           retention-days: 1
 
   build-openmp:
-    runs-on: macOS-latest
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +124,7 @@ jobs:
 
   build-target:
     if: github.event_name == 'pull_request'
-    runs-on: macOS-latest
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -154,7 +157,7 @@ jobs:
   # Tests
 
   test-grid:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs:
       - build-symmetric
       - build-asymmetric
@@ -187,7 +190,7 @@ jobs:
           test.grid
 
   test-layout:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs: build-symmetric
 
     steps:
@@ -210,7 +213,7 @@ jobs:
           test.layout
 
   test-rotate:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs: build-symmetric
 
     steps:
@@ -233,7 +236,7 @@ jobs:
           test.rotate
 
   test-restart:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs: build-symmetric
 
     steps:
@@ -256,7 +259,7 @@ jobs:
           test.restart
 
   test-nan:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs: build-symmetric
 
     steps:
@@ -279,7 +282,7 @@ jobs:
           test.nan
 
   test-dim:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs: build-symmetric
 
     strategy:
@@ -312,7 +315,7 @@ jobs:
           test.dim.${{ matrix.dim.id }}
 
   test-openmp:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs:
       - build-symmetric
       - build-openmp
@@ -345,7 +348,7 @@ jobs:
           test.openmp
 
   test-repro:
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs:
       - build-symmetric
       - build-repro
@@ -379,7 +382,7 @@ jobs:
 
   test-regression:
     if: github.event_name == 'pull_request'
-    runs-on: macOS-latest
+    runs-on: macos-15
     needs:
       - build-symmetric
       - build-target
@@ -415,7 +418,7 @@ jobs:
   # Cleanup
 
   cleanup-common:
-    runs-on: macOS-latest
+    runs-on: macos-15
     permissions:
       id-token: write
     needs:
@@ -437,7 +440,7 @@ jobs:
 
   cleanup-push:
     if: github.event_name != 'pull_request'
-    runs-on: macOS-latest
+    runs-on: macos-15
     permissions:
       id-token: write
     needs:
@@ -459,7 +462,7 @@ jobs:
 
   cleanup-pr:
     if: github.event_name == 'pull_request'
-    runs-on: macOS-latest
+    runs-on: macos-15
     permissions:
       id-token: write
     needs:
