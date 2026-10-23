@@ -1051,7 +1051,7 @@ subroutine vertFPmix_TR(bxU0, bxV0, ui_a, vi_a, hbl_h_a, forces_a, Us_x_a, Us_y_
   type(mech_forcing_container_C) :: forces_c
   type(RealArray_C)  :: Us_x_c
   type(RealArray_C)  :: Us_y_c
-  type(coupling_state_C) :: coupling_state_c
+  type(coupling_state_C) :: coupling_state_cdesc
   type(FPmix_diag_C) :: FPdiag_c
 
   kernel = "vertfpmix_tr"
@@ -1109,10 +1109,10 @@ subroutine vertFPmix_TR(bxU0, bxV0, ui_a, vi_a, hbl_h_a, forces_a, Us_x_a, Us_y_
       forces_c = mech_forcing_container_to_c(forces_a)
       Us_x_c = Us_x_a%to_c()
       Us_y_c = Us_y_a%to_c()
-      coupling_state_c = coupling_state_to_c(coupling_state)
+      coupling_state_cdesc = coupling_state_to_c(coupling_state)
       FPdiag_c = FPmix_diag_to_c(FPdiag_a)
       call turbotmp_vertfpmix_tr_bridge(bxU0_c, bxV0_c, ui_c, vi_c, hbl_h_c, forces_c, Us_x_c, &
-                                        Us_y_c, dt, Cemp_NL, Irho0, Gcore%C, coupling_state_c, &
+                                        Us_y_c, dt, Cemp_NL, Irho0, Gcore%C, coupling_state_cdesc, &
                                         FPdiag_c)
 #endif
 
@@ -3397,7 +3397,7 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
   type(RealArray_C)  :: visc_rem_u_c
   type(RealArray_C)  :: visc_rem_v_c
   integer(c_int)     :: ke_c
-  type(coupling_state_C) :: coupling_state_c
+  type(coupling_state_C) :: coupling_state_cdesc
 
   kernel = "vertvisc_remnant_tr"
   mode = getenv_mode("VERTVISC_REMNANT_TR_MODE", default=TIMH_runFORTRAN)
@@ -3444,9 +3444,9 @@ subroutine vertvisc_remnant_TR(bxU0, bxV0, visc_a, visc_rem_u_a, visc_rem_v_a, d
       visc_rem_u_c = visc_rem_u_a%to_c()
       visc_rem_v_c = visc_rem_v_a%to_c()
       ke_c = ke
-      coupling_state_c = coupling_state_to_c(coupling_state)
+      coupling_state_cdesc = coupling_state_to_c(coupling_state)
       call turbotmp_vertvisc_remnant_tr_bridge(bxU0_c, bxV0_c, visc_c, visc_rem_u_c, visc_rem_v_c, &
-                                               dt, Gcore%C, ke_c, coupling_state_c)
+                                               dt, Gcore%C, ke_c, coupling_state_cdesc)
 #endif
 
     case default
@@ -5956,7 +5956,7 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, dt, Gcore, vgrid, CS, coupli
   type(RealArray_C)  :: v_c
   type(vgrid_consts_C) :: vgrid_c
   type(vertvisc_opts_CS_C) :: CS_c
-  type(coupling_state_C) :: coupling_state_c
+  type(coupling_state_C) :: coupling_state_cdesc
   type(limit_vel_report_C) :: report_c
   integer(c_int)     :: ntrunc_sum_c
 
@@ -6011,11 +6011,11 @@ subroutine vertvisc_limit_vel(bxU0, bxV0, u_a, v_a, dt, Gcore, vgrid, CS, coupli
       v_c = v_a%to_c()
       vgrid_c = vgrid_consts_to_c(vgrid)
       CS_c = vertvisc_opts_CS_to_c(CS)
-      coupling_state_c = coupling_state_to_c(coupling_state)
+      coupling_state_cdesc = coupling_state_to_c(coupling_state)
       report_c = limit_vel_report_to_c(report_a)
       ntrunc_sum_c = ntrunc_sum
       call turbotmp_vertvisc_limit_vel_bridge(bxU0_c, bxV0_c, u_c, v_c, dt, Gcore%C, vgrid_c, &
-                                              CS_c, coupling_state_c, report_c, ntrunc_sum_c)
+                                              CS_c, coupling_state_cdesc, report_c, ntrunc_sum_c)
       ntrunc_sum = ntrunc_sum_c
       call limit_vel_report_from_c(report_a)
 #endif
