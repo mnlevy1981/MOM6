@@ -42,7 +42,6 @@ use box_mod,           only : Box_t
 use turbotmp_helperF,  only : io_recorder
 use iso_c_binding,     only : c_int, c_bool, c_double
 
-use CVMix_kpp,         only : cvmix_kpp_composite_Gshape
 
 implicit none ; private
 
@@ -675,36 +674,62 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
                    optional, pointer  :: Waves   !< Container for wave/Stokes information
 
   ! local variables
-  real, dimension(SZIB_(G),SZJ_(G))  :: hbl_u   !< boundary layer depth (u-pts) [H ~> m]
-  real, dimension(SZI_(G),SZJB_(G))  :: hbl_v   !< boundary layer depth (v-pts) [H ~> m]
-  real, dimension(SZIB_(G),SZJ_(G))  :: taux_u  !< kinematic zonal wind stress (u-pts) [L2 T-2 ~> m2 s-2]
-  real, dimension(SZI_(G),SZJB_(G))  :: tauy_v  !< kinematic merid wind stress (v-pts) [L2 T-2 ~> m2 s-2]
-  real, dimension(SZI_(G),SZJ_(G))   :: uS0     !< surface zonal Stokes drift h-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G))   :: vS0     !< surface zonal Stokes drift h-pts [L T-1 ~> m s-1]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uE_u    !< zonal Eulerian u-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uE_h    !< zonal Eulerian h-pts [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vE_v    !< merid Eulerian v-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vE_h    !< merid Eulerian h-pts [L T-1 ~> m s-1]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uInc_u  !< zonal Eulerian u-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uInc_h  !< zonal Eulerian h-pts [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vInc_v  !< merid Eulerian v-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vInc_h  !< merid Eulerian h-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uStk    !< zonal Stokes Drift (h-pts) [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vStk    !< merid Stokes Drift (h-pts) [L T-1 ~> m s-1]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2s !< angle stress to shear (h-pts) [rad]
-  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2w !< angle stress to wind  (h-pts) [rad]
-  real :: omega_tmp, omega_s2x, omega_tau2x                    !< temporary angle wrt the x axis [rad]
+
+  call pass_var(hbl_h , G%Domain, halo=1)
+
+  call vertFPmix_TR(ui, vi, uE_u, vE_v, uInc_u, vInc_v, hbl_h, forces, dt, Cemp_NL, G, GV, CS, &
+                    Waves)
+
+  ! Compute and store diagnostics, only during the corrector step.
+  if (lpost)  then
+    call vertFPmix_diagnostics(uE_u, vE_v, uInc_u, vInc_v, h, forces, G, GV, CS, Waves)
+  endif
+
+end subroutine vertFPmix
+
+!> Adds the nonlocal stress increments to ui^n and vi^n, and returns the Eulerian velocities and
+!! the increments for the diagnostics.
+subroutine vertFPmix_TR(ui, vi, uE_u, vE_v, uInc_u, vInc_v, hbl_h, forces, dt, Cemp_NL, G, GV, &
+                        CS, Waves)
+  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
+  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: ui     !< Zonal velocity after vertvisc [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: vi     !< Meridional velocity after vertvisc [L T-1 ~> m s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(out)   :: uE_u   !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(out)   :: vE_v   !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(out)   :: uInc_u !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(out)   :: vInc_v !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: hbl_h !<  boundary layer depth [H ~> m]
+  type(mech_forcing),      intent(in) :: forces  !< A structure with the driving mechanical forces
+  real,                    intent(in) :: dt      !< Time increment [T ~> s]
+  real,                    intent(in) :: Cemp_NL !< empirical coefficient of non-local momentum mixing [nondim]
+  type(vertvisc_CS),       pointer    :: CS      !< Vertical viscosity control structure
+  type(wave_parameters_CS), &
+                   optional, pointer  :: Waves   !< Container for wave/Stokes information
+
+  ! local variables
+  real :: hbl_u   !< boundary layer depth (u-pts) [H ~> m]
+  real :: hbl_v   !< boundary layer depth (v-pts) [H ~> m]
+  real :: taux_u  !< kinematic zonal wind stress (u-pts) [L2 T-2 ~> m2 s-2]
+  real :: tauy_v  !< kinematic merid wind stress (v-pts) [L2 T-2 ~> m2 s-2]
   real :: Irho0        !< Inverse of the mean density rescaled to [Z L-1 R-1 ~> m3 kg-1]
-  real :: pi           !< ! The ratio of the circumference of a circle to its diameter [nondim]
   real :: tmp_u, tmp_v !< temporary ocean mask weights on u and v points [nondim]
-  real :: fexp         !< temporary exponential function [nondim]
   real :: sigma        !< temporary normalize boundary layer coordinate [nondim]
   real :: Gat1, Gsig, dGdsig !< Shape parameters [nondim]
-  real :: du, dv       !< Intermediate velocity differences [L T-1 ~> m s-1]
   real :: depth        !< Cumulative of thicknesses [H ~> m]
   real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
                                                     ! u- and v-points [H ~> m or kg m-2]
-  integer :: b, kp1, k, nz !< band and vertical indices
+  integer :: k, nz !< vertical indices
   integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq !< horizontal indices
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
@@ -713,162 +738,229 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
   call CS%coupling_state%h_u%view(h_u)
   call CS%coupling_state%h_v%view(h_v)
 
-  pi = 4. * atan2(1.,1.)
   Irho0 = 1.0 / GV%Rho0
 
-  call pass_var(hbl_h , G%Domain, halo=1)
-
   ! u-points
-  do j = js,je
-    do I = Isq,Ieq
-      taux_u(I,j)  = forces%taux(I,j) * Irho0
-      if ( (G%mask2dCu(I,j) > 0.5) ) then
-        ! h to u-pts
-        tmp_u  = MAX (1.0 ,(G%mask2dT(i,j) + G%mask2dT(i+1,j) ) )
-        hbl_u(I,j) = ((G%mask2dT(i,j) * hbl_h(i,j)) + (G%mask2dT(i+1,j) * hbl_h(i+1,j))) / tmp_u
-        depth   = 0.
-        Gat1  = 0.
-        do k=1, nz
-          ! cell center
+  do concurrent (j=js:je, I=Isq:Ieq) &
+      DO_LOCALITY(local(k, taux_u, hbl_u, tmp_u, depth, Gat1, sigma, Gsig, dGdsig))
+    taux_u  = forces%taux(I,j) * Irho0
+    if ( (G%mask2dCu(I,j) > 0.5) ) then
+      ! h to u-pts
+      tmp_u  = MAX (1.0 ,(G%mask2dT(i,j) + G%mask2dT(i+1,j) ) )
+      hbl_u = ((G%mask2dT(i,j) * hbl_h(i,j)) + (G%mask2dT(i+1,j) * hbl_h(i+1,j))) / tmp_u
+      depth   = 0.
+      Gat1  = 0.
+      do k=1, nz
+        ! cell center
+        depth = depth + 0.5*h_u(I,j,k)
+        uE_u(I,j,k) = ui(I,j,k) - waves%Us_x(I,j,k)
+        if ( depth < hbl_u )     then
+          sigma = depth / hbl_u
+          ! cell bottom
           depth = depth + 0.5*h_u(I,j,k)
-          uE_u(I,j,k) = ui(I,j,k) - waves%Us_x(I,j,k)
-          if ( depth < hbl_u(I,j) )     then
-            sigma = depth / hbl_u(i,j)
-            ! cell bottom
-            depth = depth + 0.5*h_u(I,j,k)
-            call cvmix_kpp_composite_Gshape(sigma,Gat1,Gsig,dGdsig)
-            ! nonlocal boundary-layer increment
-            uInc_u(I,j,k)  = dt * Cemp_NL * taux_u(I,j) * dGdsig / hbl_u(I,j)
-            ui(I,j,k) = ui(I,j,k) + uInc_u(I,j,k)
-          else
-            uInc_u(I,j,k) = 0.0
-          endif
-        enddo
-      else
-        do k=1, nz
+          call FPmix_Gshape(sigma,Gat1,Gsig,dGdsig)
+          ! nonlocal boundary-layer increment
+          uInc_u(I,j,k)  = dt * Cemp_NL * taux_u * dGdsig / hbl_u
+          ui(I,j,k) = ui(I,j,k) + uInc_u(I,j,k)
+        else
           uInc_u(I,j,k) = 0.0
-        enddo
-      endif
-    enddo
+        endif
+      enddo
+    else
+      do k=1, nz
+        uInc_u(I,j,k) = 0.0
+      enddo
+    endif
   enddo
 
   ! v-points
-  do J = Jsq,Jeq
-    do i = is,ie
-      tauy_v(i,J)  = forces%tauy(i,J) * Irho0
-      if ( (G%mask2dCv(i,J) > 0.5) ) then
-        ! h to v-pts
-        tmp_v  = max( 1.0 ,(G%mask2dT(i,j) + G%mask2dT(i,j+1)))
-        hbl_v(i,J) = (G%mask2dT(i,j) * hbl_h(i,J) + G%mask2dT(i,j+1) * hbl_h(i,j+1)) / tmp_v
-        depth = 0.
-        Gat1  = 0.
-        do k=1, nz
-          ! cell center
+  do concurrent (J=Jsq:Jeq, i=is:ie) &
+      DO_LOCALITY(local(k, tauy_v, hbl_v, tmp_v, depth, Gat1, sigma, Gsig, dGdsig))
+    tauy_v  = forces%tauy(i,J) * Irho0
+    if ( (G%mask2dCv(i,J) > 0.5) ) then
+      ! h to v-pts
+      tmp_v  = max( 1.0 ,(G%mask2dT(i,j) + G%mask2dT(i,j+1)))
+      hbl_v = (G%mask2dT(i,j) * hbl_h(i,J) + G%mask2dT(i,j+1) * hbl_h(i,j+1)) / tmp_v
+      depth = 0.
+      Gat1  = 0.
+      do k=1, nz
+        ! cell center
+        depth = depth + 0.5* h_v(i,J,k)
+        vE_v(i,J,k) = vi(i,J,k) - waves%Us_y(i,J,k)
+        if ( depth < hbl_v )    then
+          sigma = depth / hbl_v
+          ! cell bottom
           depth = depth + 0.5* h_v(i,J,k)
-          vE_v(i,J,k) = vi(i,J,k) - waves%Us_y(i,J,k)
-          if ( depth < hbl_v(i,J) )    then
-            sigma = depth / hbl_v(i,J)
-            ! cell bottom
-            depth = depth + 0.5* h_v(i,J,k)
-            call cvmix_kpp_composite_Gshape(sigma,Gat1,Gsig,dGdsig)
-            ! nonlocal boundary-layer increment
-            vInc_v(i,J,k) = dt * Cemp_NL * tauy_v(i,J) * dGdsig / hbl_v(i,J)
-            vi(i,J,k) = vi(i,J,k) + vInc_v(i,J,k)
-          else
-            vInc_v(i,J,k)  = 0.0
-          endif
-        enddo
-      else
-        do k=1, nz
+          call FPmix_Gshape(sigma,Gat1,Gsig,dGdsig)
+          ! nonlocal boundary-layer increment
+          vInc_v(i,J,k) = dt * Cemp_NL * tauy_v * dGdsig / hbl_v
+          vi(i,J,k) = vi(i,J,k) + vInc_v(i,J,k)
+        else
           vInc_v(i,J,k)  = 0.0
+        endif
+      enddo
+    else
+      do k=1, nz
+        vInc_v(i,J,k)  = 0.0
+      enddo
+    endif
+  enddo
+
+end subroutine vertFPmix_TR
+
+!> Computes and posts the diagnostics of the nonlocal stress increments.
+subroutine vertFPmix_diagnostics(uE_u, vE_v, uInc_u, vInc_v, h, forces, G, GV, CS, Waves)
+  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
+  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: uE_u   !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: vE_v   !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(inout) :: uInc_u !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(inout) :: vInc_v !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in) :: h       !< Layer thicknesses [H ~> m or kg m-2]
+  type(mech_forcing),      intent(in) :: forces  !< A structure with the driving mechanical forces
+  type(vertvisc_CS),       pointer    :: CS      !< Vertical viscosity control structure
+  type(wave_parameters_CS), &
+                   optional, pointer  :: Waves   !< Container for wave/Stokes information
+
+  ! local variables
+  real, dimension(SZI_(G),SZJ_(G))   :: uS0     !< surface zonal Stokes drift h-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G))   :: vS0     !< surface zonal Stokes drift h-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uE_h    !< zonal Eulerian h-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vE_h    !< merid Eulerian h-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uInc_h  !< zonal Eulerian h-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vInc_h  !< merid Eulerian h-pts [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: uStk    !< zonal Stokes Drift (h-pts) [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)) :: vStk    !< merid Stokes Drift (h-pts) [L T-1 ~> m s-1]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2s !< angle stress to shear (h-pts) [rad]
+  real, dimension(SZI_(G) ,SZJ_(G),SZK_(GV)+1) :: omega_tau2w !< angle stress to wind  (h-pts) [rad]
+  real :: omega_tmp, omega_s2x, omega_tau2x                    !< temporary angle wrt the x axis [rad]
+  real :: pi           !< ! The ratio of the circumference of a circle to its diameter [nondim]
+  real :: tmp_u, tmp_v !< temporary ocean mask weights on u and v points [nondim]
+  real :: fexp         !< temporary exponential function [nondim]
+  real :: du, dv       !< Intermediate velocity differences [L T-1 ~> m s-1]
+  real :: depth        !< Cumulative of thicknesses [H ~> m]
+  integer :: b, kp1, k, nz !< band and vertical indices
+  integer :: i, j, is, ie, js, je !< horizontal indices
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+  nz = GV%ke
+
+  pi = 4. * atan2(1.,1.)
+
+  call pass_vector(uE_u  ,  vE_v  , G%Domain, To_All)
+  call pass_vector(uInc_u, vInc_v , G%Domain, To_All)
+  uStk = 0.0
+  vStk = 0.0
+  uS0  = 0.0
+  vS0  = 0.0
+
+  do j = js,je
+    do i = is,ie
+      if (G%mask2dT(i,j) > 0.5)  then
+        ! u to h-pts
+        tmp_u  = max( 1.0 ,(G%mask2dCu(i,j) + G%mask2dCu(i-1,j)))
+        ! v to h-pts
+        tmp_v  = max( 1.0 ,(G%mask2dCv(i,j) + G%mask2dCv(i,j-1)))
+        do k = 1,nz
+          uE_h(i,j,k)   = (G%mask2dCu(i,j) *   uE_u(i,j,k) + G%mask2dCu(i-1,j) *   uE_u(i-1,j,k)) / tmp_u
+          uInc_h(i,j,k) = (G%mask2dCu(i,j) * uInc_u(i,j,k) + G%mask2dCu(i-1,j) * uInc_u(i-1,j,k)) / tmp_u
+          vE_h(i,j,k)   = (G%mask2dCv(i,j) *   vE_v(i,j,k) + G%mask2dCv(i,j-1) *   vE_v(i,j-1,k)) / tmp_v
+          vInc_h(i,j,k) = (G%mask2dCv(i,j) * vInc_v(i,j,k) + G%mask2dCv(i,j-1) * vInc_v(i,j-1,k)) / tmp_v
+        enddo
+        ! Wind, Stress and Shear align at surface
+        Omega_tau2w(i,j,1) = 0.0
+        Omega_tau2s(i,j,1) = 0.0
+        do k = 1,nz
+          kp1 = min( nz , k+1)
+          du = uE_h(i,j,k) - uE_h(i,j,kp1)
+          dv = vE_h(i,j,k) - vE_h(i,j,kp1)
+          omega_s2x = atan2( dv , du )
+
+          du = du + uInc_h(i,j,k) - uInc_h(i,j,kp1)
+          dv = dv + vInc_h(i,j,k) - vInc_h(i,j,kp1)
+          omega_tau2x = atan2( dv , du )
+
+          omega_tmp = omega_tau2x - forces%omega_w2x(i,j)
+          if ( (omega_tmp  >   pi   ) )  omega_tmp = omega_tmp - 2.*pi
+          if ( (omega_tmp  < (0.-pi)) )  omega_tmp = omega_tmp + 2.*pi
+          Omega_tau2w(i,j,kp1) = omega_tmp
+
+          omega_tmp = omega_tau2x - omega_s2x
+          if ( (omega_tmp  >   pi   ) )  omega_tmp = omega_tmp - 2.*pi
+          if ( (omega_tmp  < (0.-pi)) )  omega_tmp = omega_tmp + 2.*pi
+          Omega_tau2s(i,j,kp1) = omega_tmp
+
         enddo
       endif
+
+      ! Stokes drift
+      do b=1,waves%NumBands
+        uS0(i,j)  = uS0(i,j) + waves%UStk_Hb(i,j,b)    ! or forces%UStkb(i,j,b)
+        vS0(i,j)  = vS0(i,j) + waves%VStk_Hb(i,j,b)    ! or forces%VStkb(i,j,b)
+      enddo
+      depth = 0.0
+      do k = 1,nz
+        do b  = 1, waves%NumBands
+          ! cell center
+          fexp = exp(-2. * waves%WaveNum_Cen(b) * (depth+0.5*h(i,j,k)) )
+          uStk(i,j,k) = uStk(i,j,k) + waves%UStk_Hb(i,j,b) * fexp
+          vStk(i,j,k) = vStk(i,j,k) + waves%VStk_Hb(i,j,b) * fexp
+        enddo
+        ! cell bottom
+        depth = depth + h(i,j,k)
+      enddo
     enddo
   enddo
 
-  ! Compute and store diagnostics, only during the corrector step.
-  if (lpost)  then
-    call pass_vector(uE_u  ,  vE_v  , G%Domain, To_All)
-    call pass_vector(uInc_u, vInc_v , G%Domain, To_All)
-    uStk = 0.0
-    vStk = 0.0
-    uS0  = 0.0
-    vS0  = 0.0
+  ! post FPmix diagnostics
+  if (CS%id_uE_h    > 0) call post_data(CS%id_uE_h     , uE_h   , CS%diag)
+  if (CS%id_vE_h    > 0) call post_data(CS%id_vE_h   , vE_h   , CS%diag)
+  if (CS%id_uInc_h  > 0) call post_data(CS%id_uInc_h , uInc_h , CS%diag)
+  if (CS%id_vInc_h  > 0) call post_data(CS%id_vInc_h , vInc_h , CS%diag)
+  if (CS%id_FPtau2s > 0) call post_data(CS%id_FPtau2s, Omega_tau2s, CS%diag)
+  if (CS%id_FPtau2w > 0) call post_data(CS%id_FPtau2w, Omega_tau2w, CS%diag)
+  if (CS%id_uStk0   > 0) call post_data(CS%id_uStk0  , uS0 , CS%diag)
+  if (CS%id_vStk0   > 0) call post_data(CS%id_vStk0  , vS0    , CS%diag)
+  if (CS%id_uStk    > 0) call post_data(CS%id_uStk   , uStk   , CS%diag)
+  if (CS%id_vStk    > 0) call post_data(CS%id_vStk   , vStk   , CS%diag)
+  if (CS%id_Omega_w2x > 0) call post_data(CS%id_Omega_w2x, forces%omega_w2x, CS%diag)
 
-    do j = js,je
-      do i = is,ie
-        if (G%mask2dT(i,j) > 0.5)  then
-          ! u to h-pts
-          tmp_u  = max( 1.0 ,(G%mask2dCu(i,j) + G%mask2dCu(i-1,j)))
-          ! v to h-pts
-          tmp_v  = max( 1.0 ,(G%mask2dCv(i,j) + G%mask2dCv(i,j-1)))
-          do k = 1,nz
-            uE_h(i,j,k)   = (G%mask2dCu(i,j) *   uE_u(i,j,k) + G%mask2dCu(i-1,j) *   uE_u(i-1,j,k)) / tmp_u
-            uInc_h(i,j,k) = (G%mask2dCu(i,j) * uInc_u(i,j,k) + G%mask2dCu(i-1,j) * uInc_u(i-1,j,k)) / tmp_u
-            vE_h(i,j,k)   = (G%mask2dCv(i,j) *   vE_v(i,j,k) + G%mask2dCv(i,j-1) *   vE_v(i,j-1,k)) / tmp_v
-            vInc_h(i,j,k) = (G%mask2dCv(i,j) * vInc_v(i,j,k) + G%mask2dCv(i,j-1) * vInc_v(i,j-1,k)) / tmp_v
-          enddo
-          ! Wind, Stress and Shear align at surface
-          Omega_tau2w(i,j,1) = 0.0
-          Omega_tau2s(i,j,1) = 0.0
-          do k = 1,nz
-            kp1 = min( nz , k+1)
-            du = uE_h(i,j,k) - uE_h(i,j,kp1)
-            dv = vE_h(i,j,k) - vE_h(i,j,kp1)
-            omega_s2x = atan2( dv , du )
+end subroutine vertFPmix_diagnostics
 
-            du = du + uInc_h(i,j,k) - uInc_h(i,j,kp1)
-            dv = dv + vInc_h(i,j,k) - vInc_h(i,j,kp1)
-            omega_tau2x = atan2( dv , du )
+!> Computes the composite shape function and its derivative at sigma. This is a pure copy of
+!! cvmix_kpp_composite_Gshape from pkg/CVMix-src, so that it can be called inside do concurrent.
+pure subroutine FPmix_Gshape(sigma, Gat1, Gsig, dGdsig)
+  real, intent(in)    :: sigma  !< Normalized boundary layer coordinate [nondim]
+  real, intent(in)    :: Gat1   !< The shape function at sigma = 1 [nondim]
+  real, intent(inout) :: Gsig   !< The shape function at sigma [nondim]
+  real, intent(inout) :: dGdsig !< The derivative of the shape function with sigma [nondim]
 
-            omega_tmp = omega_tau2x - forces%omega_w2x(i,j)
-            if ( (omega_tmp  >   pi   ) )  omega_tmp = omega_tmp - 2.*pi
-            if ( (omega_tmp  < (0.-pi)) )  omega_tmp = omega_tmp + 2.*pi
-            Omega_tau2w(i,j,kp1) = omega_tmp
+  real, parameter ::     a2Gsig = -2.1637,               &  ! Shape parameters [nondim]
+                         a3Gsig =  0.5831,               &
+                         sig_m  =  0.35,                 &
+                         G_m    =  0.11
 
-            omega_tmp = omega_tau2x - omega_s2x
-            if ( (omega_tmp  >   pi   ) )  omega_tmp = omega_tmp - 2.*pi
-            if ( (omega_tmp  < (0.-pi)) )  omega_tmp = omega_tmp + 2.*pi
-            Omega_tau2s(i,j,kp1) = omega_tmp
+  real  :: bGsig, G_1, sig  ! Intermediate shape values [nondim]
 
-          enddo
-        endif
+  G_1    =  MAX( 0.0  ,  MIN( Gat1 , G_m ) )
 
-        ! Stokes drift
-        do b=1,waves%NumBands
-          uS0(i,j)  = uS0(i,j) + waves%UStk_Hb(i,j,b)    ! or forces%UStkb(i,j,b)
-          vS0(i,j)  = vS0(i,j) + waves%VStk_Hb(i,j,b)    ! or forces%VStkb(i,j,b)
-        enddo
-        depth = 0.0
-        do k = 1,nz
-          do b  = 1, waves%NumBands
-            ! cell center
-            fexp = exp(-2. * waves%WaveNum_Cen(b) * (depth+0.5*h(i,j,k)) )
-            uStk(i,j,k) = uStk(i,j,k) + waves%UStk_Hb(i,j,b) * fexp
-            vStk(i,j,k) = vStk(i,j,k) + waves%VStk_Hb(i,j,b) * fexp
-          enddo
-          ! cell bottom
-          depth = depth + h(i,j,k)
-        enddo
-      enddo
-    enddo
+  if (sigma .lT. sig_m)  then
+    sig    = MAX( sigma , 0.0)
+    Gsig   = sig + sig * sig * (a2Gsig + a3Gsig * sig)
+    dGdsig = 1.0 + sig * (2.0 * a2Gsig + 3.0 * a3Gsig * sig)
+  else
+    bGsig  =  (G_m-G_1) / (1.-sig_m)**2
+    sig    = MIN( sigma , 1.0 )
+    Gsig   = G_1 + bGsig * (1.0 - sig) * (1.0 - sig)
+    dGdsig = bGsig * 2.0 * (sig - 1.0)
+  end if
 
-    ! post FPmix diagnostics
-    if (CS%id_uE_h    > 0) call post_data(CS%id_uE_h     , uE_h   , CS%diag)
-    if (CS%id_vE_h    > 0) call post_data(CS%id_vE_h   , vE_h   , CS%diag)
-    if (CS%id_uInc_h  > 0) call post_data(CS%id_uInc_h , uInc_h , CS%diag)
-    if (CS%id_vInc_h  > 0) call post_data(CS%id_vInc_h , vInc_h , CS%diag)
-    if (CS%id_FPtau2s > 0) call post_data(CS%id_FPtau2s, Omega_tau2s, CS%diag)
-    if (CS%id_FPtau2w > 0) call post_data(CS%id_FPtau2w, Omega_tau2w, CS%diag)
-    if (CS%id_uStk0   > 0) call post_data(CS%id_uStk0  , uS0 , CS%diag)
-    if (CS%id_vStk0   > 0) call post_data(CS%id_vStk0  , vS0    , CS%diag)
-    if (CS%id_uStk    > 0) call post_data(CS%id_uStk   , uStk   , CS%diag)
-    if (CS%id_vStk    > 0) call post_data(CS%id_vStk   , vStk   , CS%diag)
-    if (CS%id_Omega_w2x > 0) call post_data(CS%id_Omega_w2x, forces%omega_w2x, CS%diag)
-
-  endif
-
-end subroutine vertFPmix
+end subroutine FPmix_Gshape
 
 
 !> Compute coupling coefficient associated with vertical viscosity parameterization as in Greatbatch and Lamb
