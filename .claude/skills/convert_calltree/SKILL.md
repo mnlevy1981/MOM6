@@ -83,6 +83,12 @@ edits it, never the implementation/`_TR` subroutine.
    descendant reached from more than one entry point can't have its
    containerization decided in isolation — flag it in the plan (Step 4)
    as "shared with `<other entry point>`, decide jointly."
+3. Find every **sibling call tree** (Step 1f): every other entry point in
+   the host module that computes with the same control structure or
+   shadowed types. Whether a test configuration calls it does not matter.
+   Siblings are converted in the same campaign by default, because they
+   share the structures each stage restructures. Leaving one out costs a
+   second full campaign later, so only the user can exclude one (Step 3).
 
 ## Phase 1 — survey, classify, decide, record
 
@@ -101,13 +107,45 @@ edits it, never the implementation/`_TR` subroutine.
     and/or a rename (Case 3 only).
 1e. Every runtime option (`get_param` flag, scheme selector, block
     size) that selects a different code path inside the tree, and
-    which of those paths the standard test cases actually exercise.
-    The unexercised ones become the plan's list of override runs for
+    which of those paths the test coverage actually exercises. Test
+    coverage means the standard test cases **and the whole CI**, not
+    just `double_gyre`. MOM6's CI (`.github/workflows/verify-*.yml`,
+    `.testing/`) runs its own `tc*` configurations under symmetric and
+    asymmetric memory, layout, restart, rotation, dimension-scaling,
+    REPRO-vs-DEBUG, OpenMP and NaN tests, plus the unit tests, on
+    Linux and macOS. Read the workflow files and the `tc*` parameter
+    files to see which paths they reach; don't assume. The paths
+    nothing exercises become the plan's list of override runs for
     bit-for-bit checks (Step 5). Example: CorAdCalc's `double_gyre`
     only runs `SADOURNY75_ENERGY` + `KE_ARAKAWA`. The other 8
     `CORIOLIS_SCHEME` values, `KE_UP3` (with and without its limiter),
     `BOUND_CORIOLIS`, `CORIOLIS_EN_DIS`, `CORIOLIS_ADV_NKBLOCK` and
     symmetric memory all need explicit `MOM_override` runs.
+    Coverage decides the testing plan only, never the campaign's scope
+    (1f).
+1f. **Sibling call trees.** List every procedure in the host module and
+    sort each into one of four kinds:
+    - **in the tree:** reachable from the entry point (compute the call
+      graph by script, including type-bound calls);
+    - **sibling call tree:** an entry point of its own (usually `public`,
+      called from another module) that computes with the tree's control
+      structure, its shadowed types or its grid fields;
+    - **lifecycle:** `*_init`, `*_end`, and scalar parameter updates such
+      as `updateCFLtruncationValue`. These stay Fortran; record each one
+      and why;
+    - **plumbing:** converters, `record_*` helpers, `build_from`/
+      `copy_back`.
+
+    Then list every caller of each entry point and sibling, repo-wide
+    (e.g. all four dynamics drivers), and note which runtime flag gates
+    each call. Record every sibling in the plan (Step 4) as part of the
+    campaign, with its own 1a–1e inventory. Never leave one out because
+    no test configuration calls it: that is a testing problem, solved
+    with an override run (1e), not a reason to shrink the scope.
+    Example: the `vertvisc_family` survey left out `vertFPmix` because
+    `FPMIX` is off in `double_gyre`. It shares `vertvisc_CS` with the
+    three converted trees, so Stage 6a had to edit it anyway, and its
+    conversion now needs a second campaign.
 
 ### Step 2. Classify each target against fixed rules
 
@@ -116,6 +154,14 @@ edits it, never the implementation/`_TR` subroutine.
   containerizing if it's an array.
 - A struct/pointer only ever forwarded opaquely (confirm by grep, never
   assume from its name) → leave alone; record the confirmation.
+- **Classify a shared or deferred struct by what the tree does with it,
+  not by whether the test configuration allocates it.** If any
+  subroutine in the tree writes it or computes with its fields, it is a
+  container target (shadow or field containers), even when it is unused
+  in the standard cases. Example: `vertvisc_family` first classified
+  `ADp` as inert because `double_gyre` allocates none of its arrays, but
+  `vertvisc` writes six of them, and Phase 2 needed an extra stage for
+  it.
 - A private, scalar-or-container-field control structure whose fields
   recur together across signatures → `create_config_bundle_type`.
 - A struct used elsewhere in the repo outside this tree →
@@ -151,7 +197,10 @@ edits it, never the implementation/`_TR` subroutine.
 
 Typically a large multi-field struct (`G`/`GV`/`US`-shaped) too big to
 shadow or bundle without measuring first, or anything whose shared-vs-
-private status isn't obvious. For each: measure total fields touched
+private status isn't obvious. Also any proposal to leave a sibling call
+tree (Step 1f) out of the campaign: present what it shares with the
+tree and the cost of converting it later as a separate campaign, and
+let the user decide. For each: measure total fields touched
 vs. total fields, and whether the touched ones recur together (a
 bundling/shadowing candidate) or are each used at only one or two sites
 (not worth it). Present the measurement and the real tradeoff via
@@ -174,7 +223,16 @@ and structural claim in the plan is only valid for that commit. (The
 first CorAdCalc plan was surveyed against an older pinned commit, and
 its loop-structure decisions turned out to be wrong for
 `dev/turbo-debug`, which had since been rewritten.) Also record Step
-1e's override-run list.
+1e's override-run list, and Step 1f's sorted procedure list with every
+sibling call tree.
+
+**List every bridge-readiness item as a Phase 2 stage.** For each
+Phase 3 target, check it against the Phase 2 exit criterion (Step 6b)
+and give every gap a Phase 2 stage: report or I/O splits, diagnostics
+moved to the cap, `bind(C)` mirrors and converters for every container
+group, shadows of written structs, field containers for whole structs.
+Never defer Fortran-only work to Phase 3. Phase 3 should be only
+bridges and C++.
 
 **Structural restructuring belongs in Stage 1.** If Phase 1 decides the
 tree must be restructured before containerization, record each change
@@ -286,7 +344,10 @@ Stage 1 sub-steps as separate checkpoints), in sequence:
    bit-for-bit identical to the previous stage's output: the default
    test cases, plus the Step 1e override runs covering the code paths
    this stage touched. Name those runs explicitly in the hand-off,
-   since the default cases may exercise only one path.
+   since the default cases may exercise only one path. A stage also
+   isn't verified until the whole CI passes (item 4). Its rotation,
+   dimension-scaling, layout, restart and REPRO-vs-DEBUG tests catch
+   errors a bit-for-bit `double_gyre` run cannot.
 4. **Commit and push** onto the branch, message naming the stage and
    what ran, if commit gating (below) allows. Otherwise hand the
    uncommitted diff to the user, who commits and pushes. Then check CI
@@ -326,6 +387,38 @@ Also confirm Step 1d's case played out correctly (Case 2: implementation
 kept its name; Case 3: `_TR` exists, pre-split body unchanged), and that
 the wrapper's own signature matches 1a and carries no `bind(C)`
 interface.
+
+### Step 6b. Phase 2 exit: the bridge-readiness audit
+
+**Phase 2's purpose is to make the Fortran bridge-ready, and Phase 2 is
+not done until it is.** Finishing the planned stages does not count.
+Bridge-ready means, for every Phase 3 target in the tree and in every
+sibling call tree (Step 1f):
+
+1. Every dummy can cross `bind(C)`:
+   - a container (`RealArray_t`/`IntArray_t`/`LogicalArray_t`) or a
+     `Box_t`;
+   - a non-pointer `real`/`integer`/`logical` scalar;
+   - `grid_core_type`;
+   - a derived type with a `bind(C)` mirror and a converter in the
+     module (container groups need these too, not only scalar bundles);
+   - or `OBC` as a pointer, which crosses as a `c_ptr` that the C++
+     aborts on when non-null.
+
+   No whole `G`/`GV`/`US`, control structure, `tv`, `VarMix`, `Waves`
+   or diagnostics struct, and no `character` or `optional` dummies.
+2. No Fortran-only work in the body: no `post_*`,
+   `query_averaging_enabled`, halo passes, checksums, point-accel
+   reporting, `MOM_error`, file I/O, `G%`/`GV%`/`US%` references or
+   `SZ*_` macros.
+3. Every `do concurrent` iterates over a `Box_t`.
+4. The per-point kernels (Step 2) take no `tv`/`VarMix`/`G`/`GV`/`US`.
+
+Run this as a scripted audit (`audit_bridge_ready.py` in this skill's
+directory) after every stage from Stage 10 onward, and include its output
+in each hand-off. Any gap becomes another Phase 2 stage, recorded in the
+plan. Declare Phase 2 done only when the audit prints `BRIDGE-READY` and
+the user has committed that stage.
 
 ## Phase 3 — leaf-to-root bridging
 
@@ -399,7 +492,13 @@ stripped later.
 ## Hard rules
 
 - Never skip the `!!SKILLS: 0.3.2` marker on a file Step 5a edits directly.
-- Never skip the shared-descendant check (1c).
+- Never skip the shared-descendant check (1c) or the sibling survey (1f).
+- Never leave a sibling call tree out of the campaign because no test
+  configuration calls it; only the user can exclude one (Step 3).
+- Never let test coverage decide scope. Coverage decides the override
+  runs (1e); the whole CI must pass at every stage.
+- Never declare Phase 2 done before the bridge-readiness audit (Step 6b)
+  prints `BRIDGE-READY`, and never defer a readiness gap to Phase 3.
 - Never let Phase 2 or Phase 3 resolve a judgment call Phase 1 didn't
   record — return to Phase 1 instead.
 - Never re-ask a decision Phase 1 already recorded; read the plan
@@ -446,7 +545,9 @@ push before the next stage starts.
 ## Output to the user on success
 
 **Phase 1:** the plan file path, and a summary table (target → skill →
-decision) for review before Phase 2 runs.
+decision) for review before Phase 2 runs, plus Step 1f's table of every
+procedure in the host module (in the tree / sibling / lifecycle /
+plumbing).
 **Phase 2, per stage:** the stage number, what ran, the commit hash (or
 "uncommitted" plus `git diff --stat`, under manual commit gating), the
 build/bit-for-bit status with the override runs it needs, and CI status.
@@ -454,6 +555,8 @@ Then stop.
 **Phase 2, after Stage 9:** Step 6's verification results, confirmation
 the entry point's signature is unchanged, and a rollup of all 9 stages'
 commits.
+**Phase 2, done:** the Step 6b audit output (`BRIDGE-READY`) for every
+target in the tree and its siblings.
 **Phase 3, per wave:** the wave number, which subroutines it bridged,
 the commit hash, CI status — then stop.
 **Phase 3, after the last wave:** Step 8's verification results, and the

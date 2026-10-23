@@ -37,8 +37,9 @@ use MOM_verticalGrid,  only : verticalGrid_type
 use MOM_wave_interface, only : wave_parameters_CS
 use MOM_set_visc,      only : set_v_at_u, set_u_at_v
 use MOM_lateral_mixing_coeffs, only : VarMix_CS
-use array_mod,         only : RealArray_t, RealArray_C, LogicalArray_t
+use array_mod,         only : RealArray_t, RealArray_C, LogicalArray_t, LogicalArray_C
 use box_mod,           only : Box_t
+use turbotmp_helperF,  only : io_recorder
 use iso_c_binding,     only : c_int, c_bool, c_double
 
 use CVMix_kpp,         only : cvmix_kpp_composite_Gshape
@@ -351,6 +352,16 @@ type :: limit_vel_report_type
   type(LogicalArray_t) :: dowrite_v_a    !< True for the v-point columns to report
 end type limit_vel_report_type
 
+!> bind(C) mirror of limit_vel_report_type, field-for-field, same order.
+type, bind(C) :: limit_vel_report_C
+  type(RealArray_C) :: u_old !< The previous u-velocity [L T-1 ~> m s-1]
+  type(RealArray_C) :: v_old !< The previous v-velocity [L T-1 ~> m s-1]
+  type(RealArray_C) :: vel_report_u !< The u-velocity to report [L T-1 ~> m s-1]
+  type(RealArray_C) :: vel_report_v !< The v-velocity to report [L T-1 ~> m s-1]
+  type(LogicalArray_C) :: dowrite_u !< True for the u-point columns to report
+  type(LogicalArray_C) :: dowrite_v !< True for the v-point columns to report
+end type limit_vel_report_C
+
 !> Copies of the acceleration diagnostics that the vertical viscosity calculations fill, each
 !! allocated only if its accel_diag_ptrs counterpart is associated.
 type :: vertvisc_AD_type
@@ -370,6 +381,22 @@ contains
   procedure :: build_from => vertvisc_AD_build_from !< Copy in the associated fields
   procedure :: copy_back  => vertvisc_AD_copy_back  !< Copy out the allocated fields and free
 end type vertvisc_AD_type
+
+!> bind(C) mirror of vertvisc_AD_type, field-for-field, same order.
+type, bind(C) :: vertvisc_AD_C
+  type(RealArray_C) :: du_dt_visc !< Zonal acceleration due to vertical viscosity
+                                  !! [L T-2 ~> m s-2]
+  type(RealArray_C) :: dv_dt_visc !< Meridional acceleration due to vertical viscosity
+                                  !! [L T-2 ~> m s-2]
+  type(RealArray_C) :: du_dt_visc_gl90 !< Zonal acceleration due to GL90 vertical viscosity
+                                       !! (is included in du_dt_visc) [L T-2 ~> m s-2]
+  type(RealArray_C) :: dv_dt_visc_gl90 !< Meridional acceleration due to GL90 vertical viscosity
+                                       !! (is included in dv_dt_visc) [L T-2 ~> m s-2]
+  type(RealArray_C) :: du_dt_str !< Zonal acceleration due to the surface stress (included
+                                 !! in du_dt_visc) [L T-2 ~> m s-2]
+  type(RealArray_C) :: dv_dt_str !< Meridional acceleration due to the surface stress
+                                 !! (included in dv_dt_visc) [L T-2 ~> m s-2]
+end type vertvisc_AD_C
 
 !> The viscous coupling coefficients and effective layer thicknesses at velocity points that
 !! the coupling coefficient calculations store for the vertical viscosity solvers.
@@ -391,6 +418,26 @@ type :: coupling_state_type
                                   !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
                                   !! under shelves.
 end type coupling_state_type
+
+!> bind(C) mirror of coupling_state_type, field-for-field, same order.
+type, bind(C) :: coupling_state_C
+  type(RealArray_C) :: a_u !< The u-drag coefficient across an interface
+                           !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_C) :: a_u_gl90 !< The u-drag coefficient associated with GL90 across an interface
+                                !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_C) :: h_u !< The effective layer thickness at u-points [H ~> m or kg m-2].
+  type(RealArray_C) :: a_v !< The v-drag coefficient across an interface
+                           !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_C) :: a_v_gl90 !< The v-drag coefficient associated with GL90 across an interface
+                                !! [H T-1 ~> m s-1 or Pa s m-1]
+  type(RealArray_C) :: h_v !< The effective layer thickness at v-points [H ~> m or kg m-2].
+  type(RealArray_C) :: a1_shelf_u !< The u-momentum coupling coefficient under ice shelves
+                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
+                                  !! under shelves.
+  type(RealArray_C) :: a1_shelf_v !< The v-momentum coupling coefficient under ice shelves
+                                  !! [H T-1 ~> m s-1 or Pa s m-1]. Retained to determine stress
+                                  !! under shelves.
+end type coupling_state_C
 
 !> The control structure with parameters and memory for the MOM_vert_friction module
 type, public :: vertvisc_CS ; private
@@ -497,6 +544,48 @@ contains
   procedure :: free       => vertvisc_container_free !< Free every allocated field
 end type vertvisc_container_type
 
+!> bind(C) mirror of vertvisc_container_type, field-for-field, same order.
+type, bind(C) :: vertvisc_container_C
+  type(RealArray_C) :: Ray_u !< The Rayleigh drag velocity to be applied to each layer
+                             !! at u-points [H T-1 ~> m s-1 or Pa s m-1].
+  type(RealArray_C) :: Ray_v !< The Rayleigh drag velocity to be applied to each layer
+                             !! at v-points [H T-1 ~> m s-1 or Pa s m-1].
+  type(RealArray_C) :: taux_shelf !< The zonal stresses on the ocean under shelves
+                                  !! [R Z L T-2 ~> Pa].
+  type(RealArray_C) :: tauy_shelf !< The meridional stresses on the ocean under shelves
+                                  !! [R Z L T-2 ~> Pa].
+  type(RealArray_C) :: kv_bbl_u !< The bottom boundary layer viscosity at the u-points
+                                !! [H Z T-1 ~> m2 s-1 or Pa s]
+  type(RealArray_C) :: kv_bbl_v !< The bottom boundary layer viscosity at the v-points
+                                !! [H Z T-1 ~> m2 s-1 or Pa s]
+  type(RealArray_C) :: bbl_thick_u !< The bottom boundary layer thickness at the u-points
+                                   !! [Z ~> m].
+  type(RealArray_C) :: bbl_thick_v !< The bottom boundary layer thickness at the v-points
+                                   !! [Z ~> m].
+  type(RealArray_C) :: tbl_thick_shelf_u !< Thickness of the viscous top boundary layer under ice
+                                         !! shelves at u-points [Z ~> m].
+  type(RealArray_C) :: tbl_thick_shelf_v !< Thickness of the viscous top boundary layer under ice
+                                         !! shelves at v-points [Z ~> m].
+  type(RealArray_C) :: kv_tbl_shelf_u !< Viscosity in the viscous top boundary layer under ice
+                                      !! shelves at u-points [H Z T-1 ~> m2 s-1 or Pa s]
+  type(RealArray_C) :: kv_tbl_shelf_v !< Viscosity in the viscous top boundary layer under ice
+                                      !! shelves at v-points [H Z T-1 ~> m2 s-1 or Pa s]
+  type(RealArray_C) :: nkml_visc_u !< The number of layers in the viscous surface mixed
+                                   !! layer at u-points [nondim]. This is not an integer
+                                   !! because there may be fractional layers, and it is
+                                   !! stored in terms of layers, not depth, to facilitate
+                                   !! the movement of the viscous boundary layer with the
+                                   !! flow.
+  type(RealArray_C) :: nkml_visc_v !< The number of layers in the viscous surface mixed
+                                   !! layer at v-points [nondim].
+  type(RealArray_C) :: Kv_shear !< The shear-driven turbulent vertical viscosity at the
+                                !! interfaces between layers in tracer columns
+                                !! [H Z T-1 ~> m2 s-1 or Pa s]
+  type(RealArray_C) :: Kv_shear_Bu !< The shear-driven turbulent vertical viscosity at the
+                                   !! interfaces between layers in corner columns
+                                   !! [H Z T-1 ~> m2 s-1 or Pa s]
+end type vertvisc_container_C
+
 !> Copies of the mech_forcing fields used by the vertvisc and vertvisc_coef calculations,
 !! each allocated only if its mech_forcing counterpart is associated.
 type, public :: mech_forcing_container_type
@@ -515,6 +604,20 @@ contains
   procedure :: free       => mech_forcing_container_free !< Free every allocated field
 end type mech_forcing_container_type
 
+!> bind(C) mirror of mech_forcing_container_type, field-for-field, same order.
+type, bind(C) :: mech_forcing_container_C
+  type(RealArray_C) :: taux !< zonal wind stress [R L Z T-2 ~> Pa]
+  type(RealArray_C) :: tauy !< meridional wind stress [R L Z T-2 ~> Pa]
+  type(RealArray_C) :: frac_shelf_u !< Fractional ice shelf coverage of u-cells, nondimensional
+                                    !! from 0 to 1 [nondim]. This is only associated if ice
+                                    !! shelves are enabled, and is exactly 0 away from shelves or
+                                    !! on land.
+  type(RealArray_C) :: frac_shelf_v !< Fractional ice shelf coverage of v-cells, nondimensional
+                                    !! from 0 to 1 [nondim]. This is only associated if ice
+                                    !! shelves are enabled, and is exactly 0 away from shelves or
+                                    !! on land.
+end type mech_forcing_container_C
+
 !> The diagnostic arrays that the vertical viscosity coupling coefficient calculations fill,
 !! each allocated only if it is needed for a diagnostic or for debugging checksums.
 type :: vertvisc_coef_diag_type
@@ -529,6 +632,20 @@ type :: vertvisc_coef_diag_type
   type(RealArray_t) :: Kv_gl90_v_a !< GL90 vertical viscosity at v-points in
                                    !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
 end type vertvisc_coef_diag_type
+
+!> bind(C) mirror of vertvisc_coef_diag_type, field-for-field, same order.
+type, bind(C) :: vertvisc_coef_diag_C
+  type(RealArray_C) :: hML_u !< Diagnostic of the mixed layer depth at u points [Z ~> m].
+  type(RealArray_C) :: hML_v !< Diagnostic of the mixed layer depth at v points [Z ~> m].
+  type(RealArray_C) :: Kv_u !< Total vertical viscosity at u-points in
+                            !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  type(RealArray_C) :: Kv_v !< Total vertical viscosity at v-points in
+                            !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  type(RealArray_C) :: Kv_gl90_u !< GL90 vertical viscosity at u-points in
+                                 !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+  type(RealArray_C) :: Kv_gl90_v !< GL90 vertical viscosity at v-points in
+                                 !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
+end type vertvisc_coef_diag_C
 
 contains
 
@@ -1139,7 +1256,499 @@ function vgrid_consts_to_c(vgrid) result(cdesc)
   cdesc%m_s_to_L_T = vgrid%m_s_to_L_T
   cdesc%g_prime_a = vgrid%g_prime_a%to_c()
 end function vgrid_consts_to_c
+
+!> Converts a limit_vel_report_type to its bind(C) mirror.
+function limit_vel_report_to_c(report_a) result(cdesc)
+  type(limit_vel_report_type), target, intent(inout) :: report_a !< The velocities and flags used to
+                                                                 !! report truncations
+  type(limit_vel_report_C) :: cdesc !< bind(C) mirror of report_a
+  cdesc%u_old = report_a%u_old_a%to_c()
+  cdesc%v_old = report_a%v_old_a%to_c()
+  cdesc%vel_report_u = report_a%vel_report_u_a%to_c()
+  cdesc%vel_report_v = report_a%vel_report_v_a%to_c()
+  cdesc%dowrite_u = report_a%dowrite_u_a%to_c()
+  cdesc%dowrite_v = report_a%dowrite_v_a%to_c()
+end function limit_vel_report_to_c
+
+!> Refreshes the logical arrays in a limit_vel_report_type from the integer-encoded copies
+!! that limit_vel_report_to_c passed to C.
+subroutine limit_vel_report_from_c(report_a)
+  type(limit_vel_report_type), intent(inout) :: report_a !< The velocities and flags used to report
+                                                         !! truncations
+  if (report_a%dowrite_u_a%associated()) call report_a%dowrite_u_a%from_c()
+  if (report_a%dowrite_v_a%associated()) call report_a%dowrite_v_a%from_c()
+end subroutine limit_vel_report_from_c
+
+!> Converts a vertvisc_AD_type to its bind(C) mirror.
+function vertvisc_AD_to_c(AD_a) result(cdesc)
+  type(vertvisc_AD_type), target, intent(in) :: AD_a !< Copies of the acceleration diagnostics
+  type(vertvisc_AD_C) :: cdesc !< bind(C) mirror of AD_a
+  cdesc%du_dt_visc = AD_a%du_dt_visc_a%to_c()
+  cdesc%dv_dt_visc = AD_a%dv_dt_visc_a%to_c()
+  cdesc%du_dt_visc_gl90 = AD_a%du_dt_visc_gl90_a%to_c()
+  cdesc%dv_dt_visc_gl90 = AD_a%dv_dt_visc_gl90_a%to_c()
+  cdesc%du_dt_str = AD_a%du_dt_str_a%to_c()
+  cdesc%dv_dt_str = AD_a%dv_dt_str_a%to_c()
+end function vertvisc_AD_to_c
+
+!> Converts a coupling_state_type to its bind(C) mirror.
+function coupling_state_to_c(coupling_state) result(cdesc)
+  type(coupling_state_type), target, intent(in) :: coupling_state !< The viscous coupling
+                                                                  !! coefficients and thicknesses
+  type(coupling_state_C) :: cdesc !< bind(C) mirror of coupling_state
+  cdesc%a_u = coupling_state%a_u%to_c()
+  cdesc%a_u_gl90 = coupling_state%a_u_gl90%to_c()
+  cdesc%h_u = coupling_state%h_u%to_c()
+  cdesc%a_v = coupling_state%a_v%to_c()
+  cdesc%a_v_gl90 = coupling_state%a_v_gl90%to_c()
+  cdesc%h_v = coupling_state%h_v%to_c()
+  cdesc%a1_shelf_u = coupling_state%a1_shelf_u%to_c()
+  cdesc%a1_shelf_v = coupling_state%a1_shelf_v%to_c()
+end function coupling_state_to_c
+
+!> Converts a vertvisc_container_type to its bind(C) mirror.
+function vertvisc_container_to_c(visc_a) result(cdesc)
+  type(vertvisc_container_type), target, intent(in) :: visc_a !< Copies of the vertvisc_type fields
+  type(vertvisc_container_C) :: cdesc !< bind(C) mirror of visc_a
+  cdesc%Ray_u = visc_a%Ray_u_a%to_c()
+  cdesc%Ray_v = visc_a%Ray_v_a%to_c()
+  cdesc%taux_shelf = visc_a%taux_shelf_a%to_c()
+  cdesc%tauy_shelf = visc_a%tauy_shelf_a%to_c()
+  cdesc%kv_bbl_u = visc_a%kv_bbl_u_a%to_c()
+  cdesc%kv_bbl_v = visc_a%kv_bbl_v_a%to_c()
+  cdesc%bbl_thick_u = visc_a%bbl_thick_u_a%to_c()
+  cdesc%bbl_thick_v = visc_a%bbl_thick_v_a%to_c()
+  cdesc%tbl_thick_shelf_u = visc_a%tbl_thick_shelf_u_a%to_c()
+  cdesc%tbl_thick_shelf_v = visc_a%tbl_thick_shelf_v_a%to_c()
+  cdesc%kv_tbl_shelf_u = visc_a%kv_tbl_shelf_u_a%to_c()
+  cdesc%kv_tbl_shelf_v = visc_a%kv_tbl_shelf_v_a%to_c()
+  cdesc%nkml_visc_u = visc_a%nkml_visc_u_a%to_c()
+  cdesc%nkml_visc_v = visc_a%nkml_visc_v_a%to_c()
+  cdesc%Kv_shear = visc_a%Kv_shear_a%to_c()
+  cdesc%Kv_shear_Bu = visc_a%Kv_shear_Bu_a%to_c()
+end function vertvisc_container_to_c
+
+!> Converts a mech_forcing_container_type to its bind(C) mirror.
+function mech_forcing_container_to_c(forces_a) result(cdesc)
+  type(mech_forcing_container_type), target, intent(in) :: forces_a !< Copies of the mech_forcing
+                                                                    !! fields
+  type(mech_forcing_container_C) :: cdesc !< bind(C) mirror of forces_a
+  cdesc%taux = forces_a%taux_a%to_c()
+  cdesc%tauy = forces_a%tauy_a%to_c()
+  cdesc%frac_shelf_u = forces_a%frac_shelf_u_a%to_c()
+  cdesc%frac_shelf_v = forces_a%frac_shelf_v_a%to_c()
+end function mech_forcing_container_to_c
+
+!> Converts a vertvisc_coef_diag_type to its bind(C) mirror.
+function vertvisc_coef_diag_to_c(coef_diag_a) result(cdesc)
+  type(vertvisc_coef_diag_type), target, intent(in) :: coef_diag_a !< The coupling coefficient
+                                                                   !! diagnostic arrays
+  type(vertvisc_coef_diag_C) :: cdesc !< bind(C) mirror of coef_diag_a
+  cdesc%hML_u = coef_diag_a%hML_u_a%to_c()
+  cdesc%hML_v = coef_diag_a%hML_v_a%to_c()
+  cdesc%Kv_u = coef_diag_a%Kv_u_a%to_c()
+  cdesc%Kv_v = coef_diag_a%Kv_v_a%to_c()
+  cdesc%Kv_gl90_u = coef_diag_a%Kv_gl90_u_a%to_c()
+  cdesc%Kv_gl90_v = coef_diag_a%Kv_gl90_v_a%to_c()
+end function vertvisc_coef_diag_to_c
 #endif
+
+!> Records which arrays in a limit_vel_report_type are allocated (with an empty suffix), or the
+!! values of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_limit_vel_report(rec, prefix, report_a, suffix)
+  type(io_recorder),           intent(inout) :: rec      !< The capture file being written
+  character(len=*),            intent(in)    :: prefix   !< The start of each record name
+  type(limit_vel_report_type), intent(in)    :: report_a !< The velocities and flags used to report
+                                                         !! truncations
+  character(len=*),            intent(in)    :: suffix   !< The end of each value record name, or
+                                                         !! empty to record which arrays are
+                                                         !! allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_u_old_allocated", report_a%u_old_a%associated())
+  elseif (report_a%u_old_a%associated()) then
+    call rec%add(prefix//"_u_old"//suffix, report_a%u_old_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_v_old_allocated", report_a%v_old_a%associated())
+  elseif (report_a%v_old_a%associated()) then
+    call rec%add(prefix//"_v_old"//suffix, report_a%v_old_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_vel_report_u_allocated", report_a%vel_report_u_a%associated())
+  elseif (report_a%vel_report_u_a%associated()) then
+    call rec%add(prefix//"_vel_report_u"//suffix, report_a%vel_report_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_vel_report_v_allocated", report_a%vel_report_v_a%associated())
+  elseif (report_a%vel_report_v_a%associated()) then
+    call rec%add(prefix//"_vel_report_v"//suffix, report_a%vel_report_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dowrite_u_allocated", report_a%dowrite_u_a%associated())
+  elseif (report_a%dowrite_u_a%associated()) then
+    call rec%add(prefix//"_dowrite_u"//suffix, report_a%dowrite_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dowrite_v_allocated", report_a%dowrite_v_a%associated())
+  elseif (report_a%dowrite_v_a%associated()) then
+    call rec%add(prefix//"_dowrite_v"//suffix, report_a%dowrite_v_a)
+  endif
+end subroutine record_limit_vel_report
+
+!> Records which arrays in a vertvisc_AD_type are allocated (with an empty suffix), or the values of
+!! the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_vertvisc_AD(rec, prefix, AD_a, suffix)
+  type(io_recorder),      intent(inout) :: rec    !< The capture file being written
+  character(len=*),       intent(in)    :: prefix !< The start of each record name
+  type(vertvisc_AD_type), intent(in)    :: AD_a   !< Copies of the acceleration diagnostics
+  character(len=*),       intent(in)    :: suffix !< The end of each value record name, or empty to
+                                                  !! record which arrays are allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_du_dt_visc_allocated", AD_a%du_dt_visc_a%associated())
+  elseif (AD_a%du_dt_visc_a%associated()) then
+    call rec%add(prefix//"_du_dt_visc"//suffix, AD_a%du_dt_visc_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dv_dt_visc_allocated", AD_a%dv_dt_visc_a%associated())
+  elseif (AD_a%dv_dt_visc_a%associated()) then
+    call rec%add(prefix//"_dv_dt_visc"//suffix, AD_a%dv_dt_visc_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_du_dt_visc_gl90_allocated", AD_a%du_dt_visc_gl90_a%associated())
+  elseif (AD_a%du_dt_visc_gl90_a%associated()) then
+    call rec%add(prefix//"_du_dt_visc_gl90"//suffix, AD_a%du_dt_visc_gl90_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dv_dt_visc_gl90_allocated", AD_a%dv_dt_visc_gl90_a%associated())
+  elseif (AD_a%dv_dt_visc_gl90_a%associated()) then
+    call rec%add(prefix//"_dv_dt_visc_gl90"//suffix, AD_a%dv_dt_visc_gl90_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_du_dt_str_allocated", AD_a%du_dt_str_a%associated())
+  elseif (AD_a%du_dt_str_a%associated()) then
+    call rec%add(prefix//"_du_dt_str"//suffix, AD_a%du_dt_str_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dv_dt_str_allocated", AD_a%dv_dt_str_a%associated())
+  elseif (AD_a%dv_dt_str_a%associated()) then
+    call rec%add(prefix//"_dv_dt_str"//suffix, AD_a%dv_dt_str_a)
+  endif
+end subroutine record_vertvisc_AD
+
+!> Records which arrays in a coupling_state_type are allocated (with an empty suffix), or the values
+!! of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_coupling_state(rec, prefix, coupling_state, suffix)
+  type(io_recorder),         intent(inout) :: rec            !< The capture file being written
+  character(len=*),          intent(in)    :: prefix         !< The start of each record name
+  type(coupling_state_type), intent(in)    :: coupling_state !< The viscous coupling coefficients
+                                                             !! and thicknesses
+  character(len=*),          intent(in)    :: suffix         !< The end of each value record name,
+                                                             !! or empty to record which arrays are
+                                                             !! allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_a_u_allocated", coupling_state%a_u%associated())
+  elseif (coupling_state%a_u%associated()) then
+    call rec%add(prefix//"_a_u"//suffix, coupling_state%a_u)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_a_u_gl90_allocated", coupling_state%a_u_gl90%associated())
+  elseif (coupling_state%a_u_gl90%associated()) then
+    call rec%add(prefix//"_a_u_gl90"//suffix, coupling_state%a_u_gl90)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_h_u_allocated", coupling_state%h_u%associated())
+  elseif (coupling_state%h_u%associated()) then
+    call rec%add(prefix//"_h_u"//suffix, coupling_state%h_u)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_a_v_allocated", coupling_state%a_v%associated())
+  elseif (coupling_state%a_v%associated()) then
+    call rec%add(prefix//"_a_v"//suffix, coupling_state%a_v)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_a_v_gl90_allocated", coupling_state%a_v_gl90%associated())
+  elseif (coupling_state%a_v_gl90%associated()) then
+    call rec%add(prefix//"_a_v_gl90"//suffix, coupling_state%a_v_gl90)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_h_v_allocated", coupling_state%h_v%associated())
+  elseif (coupling_state%h_v%associated()) then
+    call rec%add(prefix//"_h_v"//suffix, coupling_state%h_v)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_a1_shelf_u_allocated", coupling_state%a1_shelf_u%associated())
+  elseif (coupling_state%a1_shelf_u%associated()) then
+    call rec%add(prefix//"_a1_shelf_u"//suffix, coupling_state%a1_shelf_u)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_a1_shelf_v_allocated", coupling_state%a1_shelf_v%associated())
+  elseif (coupling_state%a1_shelf_v%associated()) then
+    call rec%add(prefix//"_a1_shelf_v"//suffix, coupling_state%a1_shelf_v)
+  endif
+end subroutine record_coupling_state
+
+!> Records which arrays in a vertvisc_container_type are allocated (with an empty suffix), or the
+!! values of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_vertvisc_container(rec, prefix, visc_a, suffix)
+  type(io_recorder),             intent(inout) :: rec    !< The capture file being written
+  character(len=*),              intent(in)    :: prefix !< The start of each record name
+  type(vertvisc_container_type), intent(in)    :: visc_a !< Copies of the vertvisc_type fields
+  character(len=*),              intent(in)    :: suffix !< The end of each value record name, or
+                                                         !! empty to record which arrays are
+                                                         !! allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ray_u_allocated", visc_a%Ray_u_a%associated())
+  elseif (visc_a%Ray_u_a%associated()) then
+    call rec%add(prefix//"_Ray_u"//suffix, visc_a%Ray_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ray_v_allocated", visc_a%Ray_v_a%associated())
+  elseif (visc_a%Ray_v_a%associated()) then
+    call rec%add(prefix//"_Ray_v"//suffix, visc_a%Ray_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_taux_shelf_allocated", visc_a%taux_shelf_a%associated())
+  elseif (visc_a%taux_shelf_a%associated()) then
+    call rec%add(prefix//"_taux_shelf"//suffix, visc_a%taux_shelf_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_tauy_shelf_allocated", visc_a%tauy_shelf_a%associated())
+  elseif (visc_a%tauy_shelf_a%associated()) then
+    call rec%add(prefix//"_tauy_shelf"//suffix, visc_a%tauy_shelf_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_kv_bbl_u_allocated", visc_a%kv_bbl_u_a%associated())
+  elseif (visc_a%kv_bbl_u_a%associated()) then
+    call rec%add(prefix//"_kv_bbl_u"//suffix, visc_a%kv_bbl_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_kv_bbl_v_allocated", visc_a%kv_bbl_v_a%associated())
+  elseif (visc_a%kv_bbl_v_a%associated()) then
+    call rec%add(prefix//"_kv_bbl_v"//suffix, visc_a%kv_bbl_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_bbl_thick_u_allocated", visc_a%bbl_thick_u_a%associated())
+  elseif (visc_a%bbl_thick_u_a%associated()) then
+    call rec%add(prefix//"_bbl_thick_u"//suffix, visc_a%bbl_thick_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_bbl_thick_v_allocated", visc_a%bbl_thick_v_a%associated())
+  elseif (visc_a%bbl_thick_v_a%associated()) then
+    call rec%add(prefix//"_bbl_thick_v"//suffix, visc_a%bbl_thick_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_tbl_thick_shelf_u_allocated", visc_a%tbl_thick_shelf_u_a%associated())
+  elseif (visc_a%tbl_thick_shelf_u_a%associated()) then
+    call rec%add(prefix//"_tbl_thick_shelf_u"//suffix, visc_a%tbl_thick_shelf_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_tbl_thick_shelf_v_allocated", visc_a%tbl_thick_shelf_v_a%associated())
+  elseif (visc_a%tbl_thick_shelf_v_a%associated()) then
+    call rec%add(prefix//"_tbl_thick_shelf_v"//suffix, visc_a%tbl_thick_shelf_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_kv_tbl_shelf_u_allocated", visc_a%kv_tbl_shelf_u_a%associated())
+  elseif (visc_a%kv_tbl_shelf_u_a%associated()) then
+    call rec%add(prefix//"_kv_tbl_shelf_u"//suffix, visc_a%kv_tbl_shelf_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_kv_tbl_shelf_v_allocated", visc_a%kv_tbl_shelf_v_a%associated())
+  elseif (visc_a%kv_tbl_shelf_v_a%associated()) then
+    call rec%add(prefix//"_kv_tbl_shelf_v"//suffix, visc_a%kv_tbl_shelf_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_nkml_visc_u_allocated", visc_a%nkml_visc_u_a%associated())
+  elseif (visc_a%nkml_visc_u_a%associated()) then
+    call rec%add(prefix//"_nkml_visc_u"//suffix, visc_a%nkml_visc_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_nkml_visc_v_allocated", visc_a%nkml_visc_v_a%associated())
+  elseif (visc_a%nkml_visc_v_a%associated()) then
+    call rec%add(prefix//"_nkml_visc_v"//suffix, visc_a%nkml_visc_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kv_shear_allocated", visc_a%Kv_shear_a%associated())
+  elseif (visc_a%Kv_shear_a%associated()) then
+    call rec%add(prefix//"_Kv_shear"//suffix, visc_a%Kv_shear_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kv_shear_Bu_allocated", visc_a%Kv_shear_Bu_a%associated())
+  elseif (visc_a%Kv_shear_Bu_a%associated()) then
+    call rec%add(prefix//"_Kv_shear_Bu"//suffix, visc_a%Kv_shear_Bu_a)
+  endif
+end subroutine record_vertvisc_container
+
+!> Records which arrays in a mech_forcing_container_type are allocated (with an empty suffix), or
+!! the values of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_mech_forcing_container(rec, prefix, forces_a, suffix)
+  type(io_recorder),                 intent(inout) :: rec      !< The capture file being written
+  character(len=*),                  intent(in)    :: prefix   !< The start of each record name
+  type(mech_forcing_container_type), intent(in)    :: forces_a !< Copies of the mech_forcing fields
+  character(len=*),                  intent(in)    :: suffix   !< The end of each value record name,
+                                                               !! or empty to record which arrays
+                                                               !! are allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_taux_allocated", forces_a%taux_a%associated())
+  elseif (forces_a%taux_a%associated()) then
+    call rec%add(prefix//"_taux"//suffix, forces_a%taux_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_tauy_allocated", forces_a%tauy_a%associated())
+  elseif (forces_a%tauy_a%associated()) then
+    call rec%add(prefix//"_tauy"//suffix, forces_a%tauy_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_frac_shelf_u_allocated", forces_a%frac_shelf_u_a%associated())
+  elseif (forces_a%frac_shelf_u_a%associated()) then
+    call rec%add(prefix//"_frac_shelf_u"//suffix, forces_a%frac_shelf_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_frac_shelf_v_allocated", forces_a%frac_shelf_v_a%associated())
+  elseif (forces_a%frac_shelf_v_a%associated()) then
+    call rec%add(prefix//"_frac_shelf_v"//suffix, forces_a%frac_shelf_v_a)
+  endif
+end subroutine record_mech_forcing_container
+
+!> Records which arrays in a vertvisc_coef_diag_type are allocated (with an empty suffix), or the
+!! values of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_vertvisc_coef_diag(rec, prefix, coef_diag_a, suffix)
+  type(io_recorder),             intent(inout) :: rec         !< The capture file being written
+  character(len=*),              intent(in)    :: prefix      !< The start of each record name
+  type(vertvisc_coef_diag_type), intent(in)    :: coef_diag_a !< The coupling coefficient diagnostic
+                                                              !! arrays
+  character(len=*),              intent(in)    :: suffix      !< The end of each value record name,
+                                                              !! or empty to record which arrays are
+                                                              !! allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_hML_u_allocated", coef_diag_a%hML_u_a%associated())
+  elseif (coef_diag_a%hML_u_a%associated()) then
+    call rec%add(prefix//"_hML_u"//suffix, coef_diag_a%hML_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_hML_v_allocated", coef_diag_a%hML_v_a%associated())
+  elseif (coef_diag_a%hML_v_a%associated()) then
+    call rec%add(prefix//"_hML_v"//suffix, coef_diag_a%hML_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kv_u_allocated", coef_diag_a%Kv_u_a%associated())
+  elseif (coef_diag_a%Kv_u_a%associated()) then
+    call rec%add(prefix//"_Kv_u"//suffix, coef_diag_a%Kv_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kv_v_allocated", coef_diag_a%Kv_v_a%associated())
+  elseif (coef_diag_a%Kv_v_a%associated()) then
+    call rec%add(prefix//"_Kv_v"//suffix, coef_diag_a%Kv_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kv_gl90_u_allocated", coef_diag_a%Kv_gl90_u_a%associated())
+  elseif (coef_diag_a%Kv_gl90_u_a%associated()) then
+    call rec%add(prefix//"_Kv_gl90_u"//suffix, coef_diag_a%Kv_gl90_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kv_gl90_v_allocated", coef_diag_a%Kv_gl90_v_a%associated())
+  elseif (coef_diag_a%Kv_gl90_v_a%associated()) then
+    call rec%add(prefix//"_Kv_gl90_v"//suffix, coef_diag_a%Kv_gl90_v_a)
+  endif
+end subroutine record_vertvisc_coef_diag
+
+!> Records the members of a coupling_CS in a capture file, with names starting with
+!! prefix.
+subroutine record_coupling_CS(rec, prefix, opts)
+  type(io_recorder), intent(inout) :: rec    !< The capture file being written
+  character(len=*),  intent(in)    :: prefix !< The start of each record name
+  type(coupling_CS), intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_Hmix", opts%Hmix)
+  call rec%add(prefix//"_Kvml_invZ2", opts%Kvml_invZ2)
+  call rec%add(prefix//"_Kv", opts%Kv)
+  call rec%add(prefix//"_Kv_extra_bbl", opts%Kv_extra_bbl)
+  call rec%add(prefix//"_vonKar", opts%vonKar)
+  call rec%add(prefix//"_bottomdraglaw", opts%bottomdraglaw)
+  call rec%add(prefix//"_dynamic_viscous_ML", opts%dynamic_viscous_ML)
+  call rec%add(prefix//"_fixed_LOTW_ML", opts%fixed_LOTW_ML)
+  call rec%add(prefix//"_apply_LOTW_floor", opts%apply_LOTW_floor)
+  call rec%add(prefix//"_answer_date", opts%answer_date)
+end subroutine record_coupling_CS
+
+!> Records the members of a GL90_CS in a capture file, with names starting with
+!! prefix.
+subroutine record_GL90_CS(rec, prefix, opts)
+  type(io_recorder), intent(inout) :: rec    !< The capture file being written
+  character(len=*),  intent(in)    :: prefix !< The start of each record name
+  type(GL90_CS),     intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_use_GL90_N2", opts%use_GL90_N2)
+  call rec%add(prefix//"_kappa_gl90", opts%kappa_gl90)
+  call rec%add(prefix//"_read_kappa_gl90", opts%read_kappa_gl90)
+  call rec%add(prefix//"_alpha_gl90", opts%alpha_gl90)
+  call rec%add(prefix//"_kappa_gl90_2d_allocated", opts%kappa_gl90_2d%associated())
+  if (opts%kappa_gl90_2d%associated()) call rec%add(prefix//"_kappa_gl90_2d", opts%kappa_gl90_2d)
+end subroutine record_GL90_CS
+
+!> Records the members of a coef_opts_CS in a capture file, with names starting with
+!! prefix.
+subroutine record_coef_opts_CS(rec, prefix, opts)
+  type(io_recorder),  intent(inout) :: rec    !< The capture file being written
+  character(len=*),   intent(in)    :: prefix !< The start of each record name
+  type(coef_opts_CS), intent(in)    :: opts   !< The options to record
+
+  call record_coupling_CS(rec, prefix//"_coupling_CS", opts%coupling_CS)
+  call rec%add(prefix//"_Hbbl", opts%Hbbl)
+  call rec%add(prefix//"_Hbbl_gl90", opts%Hbbl_gl90)
+  call rec%add(prefix//"_use_GL90_in_SSW", opts%use_GL90_in_SSW)
+  call record_GL90_CS(rec, prefix//"_GL90_CS", opts%GL90_CS)
+  call rec%add(prefix//"_harmonic_visc", opts%harmonic_visc)
+  call rec%add(prefix//"_harm_BL_val", opts%harm_BL_val)
+end subroutine record_coef_opts_CS
+
+!> Records the members of a vgrid_consts_CS in a capture file, with names starting with
+!! prefix.
+subroutine record_vgrid_consts_CS(rec, prefix, opts)
+  type(io_recorder),     intent(inout) :: rec    !< The capture file being written
+  character(len=*),      intent(in)    :: prefix !< The start of each record name
+  type(vgrid_consts_CS), intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_ke", opts%ke)
+  call rec%add(prefix//"_Boussinesq", opts%Boussinesq)
+  call rec%add(prefix//"_nkml", opts%nkml)
+  call rec%add(prefix//"_dZ_subroundoff", opts%dZ_subroundoff)
+  call rec%add(prefix//"_H_subroundoff", opts%H_subroundoff)
+  call rec%add(prefix//"_H_to_m", opts%H_to_m)
+  call rec%add(prefix//"_m_to_H", opts%m_to_H)
+  call rec%add(prefix//"_RZ_to_H", opts%RZ_to_H)
+  call rec%add(prefix//"_Z_to_H", opts%Z_to_H)
+  call rec%add(prefix//"_T_to_s", opts%T_to_s)
+  call rec%add(prefix//"_Angstrom_H", opts%Angstrom_H)
+  call rec%add(prefix//"_H_to_RZ", opts%H_to_RZ)
+  call rec%add(prefix//"_m_s_to_L_T", opts%m_s_to_L_T)
+  call rec%add(prefix//"_g_prime", opts%g_prime_a)
+end subroutine record_vgrid_consts_CS
+
+!> Records the members of a vertvisc_opts_CS in a capture file, with names starting with
+!! prefix.
+subroutine record_vertvisc_opts_CS(rec, prefix, opts)
+  type(io_recorder),      intent(inout) :: rec    !< The capture file being written
+  character(len=*),       intent(in)    :: prefix !< The start of each record name
+  type(vertvisc_opts_CS), intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_Hmix_stress", opts%Hmix_stress)
+  call rec%add(prefix//"_direct_stress", opts%direct_stress)
+  call rec%add(prefix//"_StokesMixing", opts%StokesMixing)
+  call rec%add(prefix//"_vel_underflow", opts%vel_underflow)
+  call rec%add(prefix//"_CFL_trunc", opts%CFL_trunc)
+  call rec%add(prefix//"_CFL_report", opts%CFL_report)
+  call rec%add(prefix//"_do_report_u", opts%do_report_u)
+  call rec%add(prefix//"_do_report_v", opts%do_report_v)
+  call rec%add(prefix//"_do_GLwork", opts%do_GLwork)
+  call rec%add(prefix//"_do_du_dt_visc_gl90", opts%do_du_dt_visc_gl90)
+  call rec%add(prefix//"_do_dv_dt_visc_gl90", opts%do_dv_dt_visc_gl90)
+end subroutine record_vertvisc_opts_CS
 
 
 !> Perform a fully implicit vertical diffusion
