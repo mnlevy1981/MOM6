@@ -646,6 +646,23 @@ type, bind(C) :: vertvisc_coef_diag_C
                                  !! thickness-based units [H2 T-1 ~> m2 s-1 or kg2 m-4 s-1].
 end type vertvisc_coef_diag_C
 
+!> The Eulerian velocities and the nonlocal stress increments that vertFPmix_TR returns for the
+!! FPmix diagnostics.
+type :: FPmix_diag_type
+  type(RealArray_t) :: uE_u_a   !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  type(RealArray_t) :: vE_v_a   !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  type(RealArray_t) :: uInc_u_a !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  type(RealArray_t) :: vInc_v_a !< merid Eulerian v-pts [L T-1 ~> m s-1]
+end type FPmix_diag_type
+
+!> bind(C) mirror of FPmix_diag_type, field-for-field, same order.
+type, bind(C) :: FPmix_diag_C
+  type(RealArray_C) :: uE_u !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  type(RealArray_C) :: vE_v !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  type(RealArray_C) :: uInc_u !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  type(RealArray_C) :: vInc_v !< merid Eulerian v-pts [L T-1 ~> m s-1]
+end type FPmix_diag_C
+
 contains
 
 !> Add nonlocal stress increments to ui^n and vi^n.
@@ -674,86 +691,160 @@ subroutine vertFPmix(ui, vi, uold, vold, hbl_h, h, forces, dt, lpost, Cemp_NL, G
                    optional, pointer  :: Waves   !< Container for wave/Stokes information
 
   ! local variables
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uE_u    !< zonal Eulerian u-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vE_v    !< merid Eulerian v-pts [L T-1 ~> m s-1]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: uInc_u  !< zonal Eulerian u-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: vInc_v  !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  type(FPmix_diag_type) :: FPdiag_a ! The Eulerian velocities and the nonlocal stress increments
+                                    ! for the diagnostics
+  type(grid_core_type), pointer :: Gcore ! Persistent copies of the core ocean grid fields
+  type(Box_t) :: bxU0 ! The u-point box of the whole column, [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t) :: bxV0 ! The v-point box of the whole column, [isc:iec, JscB:JecB, 1:nz]
+  type(mech_forcing_container_type) :: forces_a ! Copies of the mechanical forcing fields in forces
+  type(RealArray_t) :: ui_a    ! Zonal velocity after vertvisc [L T-1 ~> m s-1]
+  type(RealArray_t) :: vi_a    ! Meridional velocity after vertvisc [L T-1 ~> m s-1]
+  type(RealArray_t) :: hbl_h_a ! boundary layer depth [H ~> m]
+  type(RealArray_t) :: Us_x_a  ! 3d zonal Stokes drift profile [L T-1 ~> m s-1]
+  type(RealArray_t) :: Us_y_a  ! 3d meridional Stokes drift profile [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: uE_u    !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: vE_v    !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: uInc_u  !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: vInc_v  !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real :: Irho0        !< Inverse of the mean density rescaled to [Z L-1 R-1 ~> m3 kg-1]
 
   call pass_var(hbl_h , G%Domain, halo=1)
 
-  call vertFPmix_TR(ui, vi, uE_u, vE_v, uInc_u, vInc_v, hbl_h, forces, dt, Cemp_NL, G, GV, CS, &
-                    Waves)
+  Gcore => grid_core(G)
+  call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
+  call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
+  call bxV0%set(idxS=[G%isc,G%JscB,1], idxE=[G%iec,G%JecB,GV%ke])
+  call forces_a%build_from(forces)
+  call ui_a%alloc(lb=LBOUND(ui), ub=UBOUND(ui), source=ui)
+  call vi_a%alloc(lb=LBOUND(vi), ub=UBOUND(vi), source=vi)
+  call hbl_h_a%alloc(lb=LBOUND(hbl_h), ub=UBOUND(hbl_h), source=hbl_h)
+  call Us_x_a%alloc(lb=LBOUND(Waves%Us_x), ub=UBOUND(Waves%Us_x), source=Waves%Us_x)
+  call Us_y_a%alloc(lb=LBOUND(Waves%Us_y), ub=UBOUND(Waves%Us_y), source=Waves%Us_y)
+  call FPdiag_a%uE_u_a%alloc(lb=LBOUND(ui), ub=UBOUND(ui), source=0.0)
+  call FPdiag_a%vE_v_a%alloc(lb=LBOUND(vi), ub=UBOUND(vi), source=0.0)
+  call FPdiag_a%uInc_u_a%alloc(lb=LBOUND(ui), ub=UBOUND(ui), source=0.0)
+  call FPdiag_a%vInc_v_a%alloc(lb=LBOUND(vi), ub=UBOUND(vi), source=0.0)
+  Irho0 = 1.0 / GV%Rho0
+
+  call vertFPmix_TR(bxU0, bxV0, ui_a, vi_a, hbl_h_a, forces_a, Us_x_a, Us_y_a, dt, Cemp_NL, &
+                    Irho0, Gcore, CS%coupling_state, FPdiag_a)
+
+  call ui_a%copy2F(ui)
+  call vi_a%copy2F(vi)
 
   ! Compute and store diagnostics, only during the corrector step.
   if (lpost)  then
+    call FPdiag_a%uE_u_a%view(uE_u) ; call FPdiag_a%vE_v_a%view(vE_v)
+    call FPdiag_a%uInc_u_a%view(uInc_u) ; call FPdiag_a%vInc_v_a%view(vInc_v)
     call vertFPmix_diagnostics(uE_u, vE_v, uInc_u, vInc_v, h, forces, G, GV, CS, Waves)
   endif
+
+  call forces_a%free()
+  call ui_a%free() ; call vi_a%free() ; call hbl_h_a%free()
+  call Us_x_a%free() ; call Us_y_a%free()
+  call FPdiag_a%uE_u_a%free() ; call FPdiag_a%vE_v_a%free()
+  call FPdiag_a%uInc_u_a%free() ; call FPdiag_a%vInc_v_a%free()
+  call bxU0%free() ; call bxV0%free()
 
 end subroutine vertFPmix
 
 !> Adds the nonlocal stress increments to ui^n and vi^n, and returns the Eulerian velocities and
 !! the increments for the diagnostics.
-subroutine vertFPmix_TR(ui, vi, uE_u, vE_v, uInc_u, vInc_v, hbl_h, forces, dt, Cemp_NL, G, GV, &
-                        CS, Waves)
-  type(ocean_grid_type),   intent(in)    :: G      !< Ocean grid structure
-  type(verticalGrid_type), intent(in)    :: GV     !< Ocean vertical grid structure
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(inout) :: ui     !< Zonal velocity after vertvisc [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(inout) :: vi     !< Meridional velocity after vertvisc [L T-1 ~> m s-1]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(out)   :: uE_u   !< zonal Eulerian u-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(out)   :: vE_v   !< merid Eulerian v-pts [L T-1 ~> m s-1]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                           intent(out)   :: uInc_u !< zonal Eulerian u-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                           intent(out)   :: vInc_v !< merid Eulerian v-pts [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: hbl_h !<  boundary layer depth [H ~> m]
-  type(mech_forcing),      intent(in) :: forces  !< A structure with the driving mechanical forces
+subroutine vertFPmix_TR(bxU0, bxV0, ui_a, vi_a, hbl_h_a, forces_a, Us_x_a, Us_y_a, dt, Cemp_NL, &
+                        Irho0, Gcore, coupling_state, FPdiag_a)
+  type(Box_t),             intent(in)    :: bxU0   !< The u-point box of the whole column,
+                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),             intent(in)    :: bxV0   !< The v-point box of the whole column,
+                                                   !! [isc:iec, JscB:JecB, 1:nz]
+  type(RealArray_t),       intent(inout) :: ui_a   !< Zonal velocity after vertvisc [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(inout) :: vi_a   !< Meridional velocity after vertvisc
+                                                   !! [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: hbl_h_a !<  boundary layer depth [H ~> m]
+  type(mech_forcing_container_type), &
+                           intent(in)    :: forces_a !< Copies of the driving mechanical forces
+  type(RealArray_t),       intent(in)    :: Us_x_a !< 3d zonal Stokes drift profile [L T-1 ~> m s-1]
+  type(RealArray_t),       intent(in)    :: Us_y_a !< 3d meridional Stokes drift profile
+                                                   !! [L T-1 ~> m s-1]
   real,                    intent(in) :: dt      !< Time increment [T ~> s]
   real,                    intent(in) :: Cemp_NL !< empirical coefficient of non-local momentum mixing [nondim]
-  type(vertvisc_CS),       pointer    :: CS      !< Vertical viscosity control structure
-  type(wave_parameters_CS), &
-                   optional, pointer  :: Waves   !< Container for wave/Stokes information
+  real,                    intent(in)    :: Irho0  !< Inverse of the mean density rescaled to
+                                                   !! [Z L-1 R-1 ~> m3 kg-1]
+  type(grid_core_type),   intent(in)    :: Gcore  !< Persistent copies of the core ocean grid fields
+  type(coupling_state_type), &
+                           intent(in)    :: coupling_state !< The viscous coupling coefficients and
+                                                           !! effective layer thicknesses at
+                                                           !! velocity points
+  type(FPmix_diag_type),   intent(inout) :: FPdiag_a !< The Eulerian velocities and the nonlocal
+                                                     !! stress increments for the diagnostics
 
   ! local variables
   real :: hbl_u   !< boundary layer depth (u-pts) [H ~> m]
   real :: hbl_v   !< boundary layer depth (v-pts) [H ~> m]
   real :: taux_u  !< kinematic zonal wind stress (u-pts) [L2 T-2 ~> m2 s-2]
   real :: tauy_v  !< kinematic merid wind stress (v-pts) [L2 T-2 ~> m2 s-2]
-  real :: Irho0        !< Inverse of the mean density rescaled to [Z L-1 R-1 ~> m3 kg-1]
   real :: tmp_u, tmp_v !< temporary ocean mask weights on u and v points [nondim]
   real :: sigma        !< temporary normalize boundary layer coordinate [nondim]
   real :: Gat1, Gsig, dGdsig !< Shape parameters [nondim]
   real :: depth        !< Cumulative of thicknesses [H ~> m]
   real, dimension(:,:,:), contiguous, pointer :: h_u, h_v ! The effective layer thicknesses at
                                                     ! u- and v-points [H ~> m or kg m-2]
+  real, dimension(:,:,:), contiguous, pointer :: ui     !< Zonal velocity after vertvisc
+                                                        !! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: vi     !< Meridional velocity after vertvisc
+                                                        !! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: uE_u   !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: vE_v   !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: uInc_u !< zonal Eulerian u-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: vInc_v !< merid Eulerian v-pts [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: Us_x ! 3d zonal Stokes drift profile
+                                                    ! [L T-1 ~> m s-1]
+  real, dimension(:,:,:), contiguous, pointer :: Us_y ! 3d meridional Stokes drift profile
+                                                    ! [L T-1 ~> m s-1]
+  real, dimension(:,:), contiguous, pointer :: hbl_h    ! boundary layer depth [H ~> m]
+  real, dimension(:,:), contiguous, pointer :: taux, tauy ! The zonal and meridional wind stresses
+                                                         ! [R L Z T-2 ~> Pa]
+  real, dimension(:,:), contiguous, pointer :: mask2dCu ! 0 for boundary points and 1 for ocean
+                                                        ! points on the u grid [nondim]
+  real, dimension(:,:), contiguous, pointer :: mask2dCv ! 0 for boundary points and 1 for ocean
+                                                        ! points on the v grid [nondim]
+  real, dimension(:,:), contiguous, pointer :: mask2dT ! 0 for land points and 1 for ocean points
+                                                       ! on the h-grid [nondim].
   integer :: k, nz !< vertical indices
-  integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq !< horizontal indices
+  integer :: i, j  !< horizontal indices
 
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+  nz = bxU0%idxE(3)
 
-  call CS%coupling_state%h_u%view(h_u)
-  call CS%coupling_state%h_v%view(h_v)
-
-  Irho0 = 1.0 / GV%Rho0
+  call ui_a%view(ui)
+  call vi_a%view(vi)
+  call hbl_h_a%view(hbl_h)
+  call forces_a%taux_a%view(taux)
+  call forces_a%tauy_a%view(tauy)
+  call Us_x_a%view(Us_x)
+  call Us_y_a%view(Us_y)
+  call Gcore%mask2dCu%view(mask2dCu)
+  call Gcore%mask2dCv%view(mask2dCv)
+  call Gcore%mask2dT%view(mask2dT)
+  call coupling_state%h_u%view(h_u)
+  call coupling_state%h_v%view(h_v)
+  call FPdiag_a%uE_u_a%view(uE_u)
+  call FPdiag_a%vE_v_a%view(vE_v)
+  call FPdiag_a%uInc_u_a%view(uInc_u)
+  call FPdiag_a%vInc_v_a%view(vInc_v)
 
   ! u-points
-  do concurrent (j=js:je, I=Isq:Ieq) &
+  do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1)) &
       DO_LOCALITY(local(k, taux_u, hbl_u, tmp_u, depth, Gat1, sigma, Gsig, dGdsig))
-    taux_u  = forces%taux(I,j) * Irho0
-    if ( (G%mask2dCu(I,j) > 0.5) ) then
+    taux_u  = taux(I,j) * Irho0
+    if ( (mask2dCu(I,j) > 0.5) ) then
       ! h to u-pts
-      tmp_u  = MAX (1.0 ,(G%mask2dT(i,j) + G%mask2dT(i+1,j) ) )
-      hbl_u = ((G%mask2dT(i,j) * hbl_h(i,j)) + (G%mask2dT(i+1,j) * hbl_h(i+1,j))) / tmp_u
+      tmp_u  = MAX (1.0 ,(mask2dT(i,j) + mask2dT(i+1,j) ) )
+      hbl_u = ((mask2dT(i,j) * hbl_h(i,j)) + (mask2dT(i+1,j) * hbl_h(i+1,j))) / tmp_u
       depth   = 0.
       Gat1  = 0.
       do k=1, nz
         ! cell center
         depth = depth + 0.5*h_u(I,j,k)
-        uE_u(I,j,k) = ui(I,j,k) - waves%Us_x(I,j,k)
+        uE_u(I,j,k) = ui(I,j,k) - Us_x(I,j,k)
         if ( depth < hbl_u )     then
           sigma = depth / hbl_u
           ! cell bottom
@@ -774,19 +865,19 @@ subroutine vertFPmix_TR(ui, vi, uE_u, vE_v, uInc_u, vInc_v, hbl_h, forces, dt, C
   enddo
 
   ! v-points
-  do concurrent (J=Jsq:Jeq, i=is:ie) &
+  do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1)) &
       DO_LOCALITY(local(k, tauy_v, hbl_v, tmp_v, depth, Gat1, sigma, Gsig, dGdsig))
-    tauy_v  = forces%tauy(i,J) * Irho0
-    if ( (G%mask2dCv(i,J) > 0.5) ) then
+    tauy_v  = tauy(i,J) * Irho0
+    if ( (mask2dCv(i,J) > 0.5) ) then
       ! h to v-pts
-      tmp_v  = max( 1.0 ,(G%mask2dT(i,j) + G%mask2dT(i,j+1)))
-      hbl_v = (G%mask2dT(i,j) * hbl_h(i,J) + G%mask2dT(i,j+1) * hbl_h(i,j+1)) / tmp_v
+      tmp_v  = max( 1.0 ,(mask2dT(i,j) + mask2dT(i,j+1)))
+      hbl_v = (mask2dT(i,j) * hbl_h(i,J) + mask2dT(i,j+1) * hbl_h(i,j+1)) / tmp_v
       depth = 0.
       Gat1  = 0.
       do k=1, nz
         ! cell center
         depth = depth + 0.5* h_v(i,J,k)
-        vE_v(i,J,k) = vi(i,J,k) - waves%Us_y(i,J,k)
+        vE_v(i,J,k) = vi(i,J,k) - Us_y(i,J,k)
         if ( depth < hbl_v )    then
           sigma = depth / hbl_v
           ! cell bottom
@@ -1443,6 +1534,17 @@ function vertvisc_coef_diag_to_c(coef_diag_a) result(cdesc)
   cdesc%Kv_gl90_u = coef_diag_a%Kv_gl90_u_a%to_c()
   cdesc%Kv_gl90_v = coef_diag_a%Kv_gl90_v_a%to_c()
 end function vertvisc_coef_diag_to_c
+
+!> Converts a FPmix_diag_type to its bind(C) mirror.
+function FPmix_diag_to_c(FPdiag_a) result(cdesc)
+  type(FPmix_diag_type), target, intent(in) :: FPdiag_a !< The Eulerian velocities and the nonlocal
+                                                        !! stress increments
+  type(FPmix_diag_C) :: cdesc !< bind(C) mirror of FPdiag_a
+  cdesc%uE_u = FPdiag_a%uE_u_a%to_c()
+  cdesc%vE_v = FPdiag_a%vE_v_a%to_c()
+  cdesc%uInc_u = FPdiag_a%uInc_u_a%to_c()
+  cdesc%vInc_v = FPdiag_a%vInc_v_a%to_c()
+end function FPmix_diag_to_c
 #endif
 
 !> Records which arrays in a limit_vel_report_type are allocated (with an empty suffix), or the
@@ -1748,6 +1850,38 @@ subroutine record_vertvisc_coef_diag(rec, prefix, coef_diag_a, suffix)
     call rec%add(prefix//"_Kv_gl90_v"//suffix, coef_diag_a%Kv_gl90_v_a)
   endif
 end subroutine record_vertvisc_coef_diag
+
+!> Records which arrays in a FPmix_diag_type are allocated (with an empty suffix), or the values of
+!! the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_FPmix_diag(rec, prefix, FPdiag_a, suffix)
+  type(io_recorder),     intent(inout) :: rec      !< The capture file being written
+  character(len=*),      intent(in)    :: prefix   !< The start of each record name
+  type(FPmix_diag_type), intent(in)    :: FPdiag_a !< The Eulerian velocities and the nonlocal
+                                                   !! stress increments
+  character(len=*),      intent(in)    :: suffix   !< The end of each value record name, or empty to
+                                                   !! record which arrays are allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_uE_u_allocated", FPdiag_a%uE_u_a%associated())
+  elseif (FPdiag_a%uE_u_a%associated()) then
+    call rec%add(prefix//"_uE_u"//suffix, FPdiag_a%uE_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_vE_v_allocated", FPdiag_a%vE_v_a%associated())
+  elseif (FPdiag_a%vE_v_a%associated()) then
+    call rec%add(prefix//"_vE_v"//suffix, FPdiag_a%vE_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_uInc_u_allocated", FPdiag_a%uInc_u_a%associated())
+  elseif (FPdiag_a%uInc_u_a%associated()) then
+    call rec%add(prefix//"_uInc_u"//suffix, FPdiag_a%uInc_u_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_vInc_v_allocated", FPdiag_a%vInc_v_a%associated())
+  elseif (FPdiag_a%vInc_v_a%associated()) then
+    call rec%add(prefix//"_vInc_v"//suffix, FPdiag_a%vInc_v_a)
+  endif
+end subroutine record_FPmix_diag
 
 !> Records the members of a coupling_CS in a capture file, with names starting with
 !! prefix.
