@@ -468,6 +468,16 @@ The PR's commit history (~70 commits) reveals the friction worth flagging:
    Fix: derive the list from the body by grep (including call actuals),
    give nested-optional fields their own null-able channel, and diff
    field sets by script (`generate_cpp_bridge` Steps 2 and 9).
+9. **A shim's `_c` local named like a mirror type.** Fortran ignores
+   case, so naming the C copy of a dummy `<dummy>_c` breaks whenever the
+   module also defines a `bind(C)` mirror called `<dummy>_C`. Real case:
+   in `MOM_vert_friction`, the Wave 1 shims declared
+   `type(coupling_state_C) :: coupling_state_c`, and gfortran rejected
+   it ("The type 'coupling_state_c' cannot be host associated ...
+   blocked by an incompatible object of the same name"). Fix: give such a
+   local a different name (e.g. `coupling_state_cdesc`), and check every
+   new local and dummy case-insensitively against the module's type and
+   procedure names, not only against the routine's own declarations.
 
 ---
 

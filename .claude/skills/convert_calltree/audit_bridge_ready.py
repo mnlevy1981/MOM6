@@ -15,7 +15,7 @@ Checks, per Phase 3 target:
   1. every dummy can cross bind(C) (container/box, non-pointer scalar, grid_core_type,
      a derived type with a bind(C) mirror AND a converter, or the OBC pointer);
   2. no Fortran-only work in the body (diagnostics, halo passes, checksums, reporting,
-     MOM_error, I/O, G%/GV%/US% references, SZ*_ macros);
+     MOM_error, I/O, G%/GV%/US% references, SZ*_ macros, container %alloc/%free);
   3. every do concurrent iterates over a Box_t;
 and, for the per-column primitives:
   4. no tv/VarMix/G/GV/US dummies (OBC pointer allowed).
@@ -113,6 +113,7 @@ for t in TARGETS:
     bad_body = sorted(set(re.findall(FORBIDDEN, code)))
     bad_body += sorted(set('%s%%' % x for x in re.findall(r'(?<![%\w])(G|GV|US)%\w+', code)))
     bad_body += sorted(set(re.findall(r'SZ[IJK]B?_\(\w+\)', code)))
+    bad_body += sorted(set(m + '()' for m in re.findall(r'%(alloc|free)\s*\(', code)))
     heads = re.findall(r'do concurrent \(([^\n]*)', code)
     bad_loops = [h[:60] for h in heads
                  if not all(re.match(r'\s*\w+\s*=\s*\w+%idxS\(\d\):\w+%idxE\(\d\)\s*$', r)

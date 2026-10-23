@@ -410,7 +410,9 @@ sibling call tree (Step 1f):
 2. No Fortran-only work in the body: no `post_*`,
    `query_averaging_enabled`, halo passes, checksums, point-accel
    reporting, `MOM_error`, file I/O, `G%`/`GV%`/`US%` references or
-   `SZ*_` macros.
+   `SZ*_` macros. No container `%alloc`/`%free` either: C++ cannot
+   allocate a Fortran container, so a lazy allocation inside a target
+   (e.g. `vertvisc_coef_TR`'s `a1_shelf_u/v`) moves to the wrapper.
 3. Every `do concurrent` iterates over a `Box_t`.
 4. The per-point kernels (Step 2) take no `tv`/`VarMix`/`G`/`GV`/`US`.
 
