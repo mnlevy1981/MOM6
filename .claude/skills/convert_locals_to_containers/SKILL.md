@@ -168,8 +168,10 @@ passed unchanged.
   body touched; only local declarations and call-site marshalling changed.
 - Every flagged (OMP-directive) local reported with the user's actual
   decision, not silently resolved.
-- **Build:** don't assume a compiler; build both infra layers if one
-  exists, else say so plainly and flag the OMP-directive interaction
+- **Build:** don't compile, build or run tests yourself unless the user
+  explicitly allows it in this conversation; by default that is the
+  user's job (`~/.claude/CLAUDE.md`). Say plainly the build is unrun (both
+  infra layers) and flag the OMP-directive interaction
   specifically as the top thing to confirm once possible — a genuinely
   new mechanism (a `%view` pointer standing in for a plain array under
   an existing device-mapping directive), not just the ordinary

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Bridge-readiness audit for a convert_calltree campaign (Phase 2 exit test, SKILL.md Step 6b).
 
-Usage: audit_bridge_ready.py <file.F90> --targets a,b,... [--primitives c,d,...]
+Usage: audit_bridge_ready.py <file.F90> --targets a,b,... [--primitives c,d,...] [--forbid e,f,...]
 
   --targets     the Phase 3 bridge targets in the file
   --primitives  the per-point kernels the targets call (Step 2)
+  --forbid      extra calls that must not appear in a target's body, e.g. calls into other
+                modules that the plan routes through Fortran helpers (horizontal_viscosity:
+                calc_QG_slopes,calc_QG_Leith_viscosity,thickness_to_dz,barotropic_get_tav,
+                thickness_diffuse_get_KH,ZB2020_copy_gradient_and_thickness,ZB2020_lateral_stress)
 
 Example (vertvisc_family):
   audit_bridge_ready.py src/parameterizations/vertical/MOM_vert_friction.F90 \
@@ -13,8 +17,10 @@ Example (vertvisc_family):
 
 Checks, per Phase 3 target:
   1. every dummy can cross bind(C) (container/box, non-pointer scalar, grid_core_type,
-     a derived type with a bind(C) mirror AND a converter, or the OBC pointer);
-  2. no Fortran-only work in the body (diagnostics, halo passes, checksums, reporting,
+     a derived type with a bind(C) mirror AND a converter, the OBC pointer, or one opaque
+     host-context `type(c_ptr) :: host` dummy that reaches Fortran-only helpers);
+  2. no Fortran-only work in the body (diagnostics, halo passes incl. pass_var/pass_vector,
+     checksums, reporting, any --forbid call,
      MOM_error, I/O, G%/GV%/US% references, SZ*_ macros, container %alloc/%free);
   3. every do concurrent iterates over a Box_t;
 and, for the per-column primitives:
@@ -29,6 +35,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('file')
 ap.add_argument('--targets', required=True)
 ap.add_argument('--primitives', default='')
+ap.add_argument('--forbid', default='')
 opts = ap.parse_args()
 src = open(opts.file).read()
 TARGETS = [t for t in opts.targets.split(',') if t]
@@ -87,6 +94,7 @@ def classify(name, typ):
         if tn in ('realarray_t', 'intarray_t', 'logicalarray_t', 'box_t'): return True, 'container/box'
         if tn == 'grid_core_type': return True, 'grid_core_C'
         if tn == 'ocean_obc_type' and 'pointer' in tl: return True, 'OBC -> c_ptr'
+        if tn == 'c_ptr' and name.lower() == 'host': return True, 'host context -> c_ptr'
         mc = mirror_of(tn)
         if mc and tn in converters: return True, 'mirror %s + %s' % (mc, converters[tn])
         if mc: return False, 'mirror %s but no converter' % mc
@@ -98,8 +106,11 @@ def classify(name, typ):
     return False, 'unrecognized type'
 
 
+EXTRA = [re.escape(x.strip()) for x in opts.forbid.split(',') if x.strip()]
 FORBIDDEN = (r'\b(post_data|post_product\w*|query_averaging_enabled|create_group_pass|do_group_pass|'
-             r'\w*chksum|write_[uv]_accel|MOM_error|MOM_read_data|open|write)\s*\(')
+             r'pass_var|pass_vector|'
+             r'\w*chksum|write_[uv]_accel|MOM_error|MOM_read_data|open|write' +
+             ''.join('|' + x for x in EXTRA) + r')\s*\(')
 
 ok_all = True
 print('%-22s %-6s %-6s %-6s  details' % ('target', 'args', 'body', 'loops'))

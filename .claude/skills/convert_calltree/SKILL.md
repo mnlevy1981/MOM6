@@ -8,6 +8,23 @@ argument-hint: <work-directory> <entry-point-name> [--enable_git_commit] [--disa
 
 # Convert a call-tree entry point to be bridge-ready, end to end
 
+> **STANDING RULE — use the pre-written skills; never re-implement them (user, 2026-10-23).**
+> - Run this skill by invoking it with the Skill tool, at the start of Phase 1, 2 and 3 and on
+>   every resume. Reading `SKILL.md` with Read/cat is not invoking it.
+> - Also invoke `array_container_lessons` (and `cpp_bridge_lessons` before Phase 3) with the
+>   Skill tool before the first MOM6 edit of the session.
+> - Every transformation that a sibling skill performs is done by invoking that skill with the
+>   Skill tool and following its procedure. This covers containerizing, shadows, bundles,
+>   optional/present conversion, locals, hoisting, box iterators and bridges. Never reproduce
+>   one by hand, or by an ad-hoc script that edits the source.
+> - The only code this skill authors itself is Stage 1 (Step 5a): rename + wrapper and the
+>   restructuring sub-steps the plan records. Before starting such work, say in the hand-off which
+>   plan item it is and that no sibling skill covers it. Do it by verbatim line copies proved by
+>   script.
+> - Before each stage, list the skills the plan assigns to it and confirm each was invoked.
+>   Name every invocation in the stage hand-off. If a needed transformation has no skill, stop
+>   and ask; don't improvise one.
+
 ## Why this exists
 
 Making a call tree bridge-ready takes several different targeted
@@ -326,7 +343,9 @@ Stage 1 sub-steps as separate checkpoints), in sequence:
 1. **Do the work** — author code directly (Stage 1) or invoke every
    sibling skill the stage's targets are recorded against, each with
    `--disable_git_commit`. A stage often means several invocations; the
-   checkpoint is per stage, not per invocation.
+   checkpoint is per stage, not per invocation. "Invoke" means the Skill
+   tool, never a hand-written equivalent (see the standing rule at the
+   top). The hand-off lists every skill invoked in the stage.
 2. **Verify** — every invoked skill's own Verify section, plus this
    skill's Step 6 checks scoped to just this stage's files (the
    full-tree sweep is Stage 9's job). If verification finds a problem,
@@ -338,9 +357,11 @@ Stage 1 sub-steps as separate checkpoints), in sequence:
      `ke` clashes with an existing `KE`);
    - every call's argument count and order match its subroutine;
    - every executable line of moved code is present exactly once.
-3. **Build and bit-for-bit test.** Build wherever a compiler is
-   available, or hand the build to the user. Never assume one is
-   missing, and never call an unrun build passed. Every stage must be
+3. **Build and bit-for-bit test — the user's job.** Don't compile,
+   build or run tests yourself, not even a single-file syntax check,
+   unless the user explicitly allows it in this conversation (user rule,
+   `~/.claude/CLAUDE.md`). Otherwise hand the build and the runs to the
+   user, and never call an unrun build passed. Every stage must be
    bit-for-bit identical to the previous stage's output: the default
    test cases, plus the Step 1e override runs covering the code paths
    this stage touched. Name those runs explicitly in the hand-off,
@@ -493,6 +514,9 @@ stripped later.
 
 ## Hard rules
 
+- Never perform a sibling skill's transformation without invoking that
+  skill with the Skill tool, and never run this skill from a read of its
+  file instead of invoking it (standing rule at the top).
 - Never skip the `!!SKILLS: 0.3.2` marker on a file Step 5a edits directly.
 - Never skip the shared-descendant check (1c) or the sibling survey (1f).
 - Never leave a sibling call tree out of the campaign because no test
@@ -526,8 +550,9 @@ stripped later.
   force a container conversion through unreviewed.
 - Never bridge a target before every in-tree callee it still calls is
   already bridged (Step 7's wave order) — leaves first, root last.
-- Do not claim an unrun build passed; never attempt to install a
-  compiler.
+- Don't compile, build or run tests unless the user explicitly allows
+  it in this conversation; by default that is the user's job. Do not
+  claim an unrun build passed; never attempt to install a compiler.
 
 ## Commit gating
 

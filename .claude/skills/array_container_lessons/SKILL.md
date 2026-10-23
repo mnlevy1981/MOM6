@@ -25,6 +25,13 @@ user-invocable: true
 > - Adding a brand-new comment for a brand-new declaration is fine. Editing any existing comment
 >   is not.
 
+> **STANDING RULE — use the pre-written skills (user, 2026-10-23).** Every MOM6 conversion step
+> that a skill in `.claude/skills/` covers is done by invoking that skill with the Skill tool and
+> following its procedure. Never do it by hand or with an ad-hoc editing script. A campaign is
+> driven by invoking `convert_calltree` itself, not by reading its file. Hand-authored code is
+> allowed only where `convert_calltree` Step 5a says so (Stage 1). See the standing rule at the
+> top of `convert_calltree`.
+
 > Invoke once, near the start of a session, before running
 > `convert_array_containers`; it stays available for the rest of the
 > session. Sections are numbered §1–§10 and cited by that number from
@@ -798,9 +805,11 @@ verification is mostly about proving nothing moved:
 3. **Both infra layers.** Must compile under FMS2 *and* TIM — the API
    is identical across them (§4), so a single-layer-only compile means
    something reached outside the shared surface.
-4. **Build.** Don't assume a compiler is present — many developer
-   machines here don't have one. Build where one exists (e.g. Derecho),
-   or say plainly the build is pending. Never call a conversion
+4. **Build — the user's job.** Don't compile, build or run tests
+   yourself, not even a single-file syntax check, unless the user
+   explicitly allows it in this conversation (user rule,
+   `~/.claude/CLAUDE.md`). Say plainly that the build is pending and
+   what the user should build and run. Never call a conversion
    verified on inspection alone.
 5. **Numerics.** Bit-identical to the pre-conversion build.
 

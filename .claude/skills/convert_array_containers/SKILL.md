@@ -559,10 +559,11 @@ section that holds the template or rationale.
      array field's old `%alloc`/`%free` is gone; a promoted scalar
      introduced no container/`%view`/`alloc`/`free`.
 
-   **Build:** never assume a Fortran compiler is present, and never try
-   to install one. Build under both infra layers if one exists; if not,
-   say plainly the build is unrun and pending — never call a conversion
-   verified on inspection alone.
+   **Build:** don't compile, build or run tests yourself unless the user
+   explicitly allows it in this conversation; by default that is the
+   user's job (`~/.claude/CLAUDE.md`). Never try to install a compiler.
+   Say plainly the build is unrun and pending, under both infra layers,
+   and never call a conversion verified on inspection alone.
 
 ### 10. Commit and push to `claude_<function-name>_containers` *(gated by the global git-commit preference, overridable per run — see below)*
    **Decide whether to run this step:**

@@ -304,9 +304,10 @@ remaining exception, called out explicitly in the Step 5 report.
 - No doc comment (`!<`) added, removed, or reworded — this skill never
   touches a dummy declaration, so the count before/after must be
   identical, not just balanced.
-- **Build:** do not assume a Fortran compiler is available; if one is
-  present, build under both infra layers; if not, say plainly the build
-  was not run. A hoist is numerically inert by construction, but that
+- **Build:** don't compile, build or run tests yourself unless the user
+  explicitly allows it in this conversation; by default that is the
+  user's job (`~/.claude/CLAUDE.md`). Say plainly the build was not run
+  and that it needs both infra layers. A hoist is numerically inert by construction, but that
   claim is only as good as the trace in Step 3.
 
 ## Versioning marker
