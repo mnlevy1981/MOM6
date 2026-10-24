@@ -42,7 +42,7 @@ or boxes grown from them. Loop bodies are untouched.
 
 **Out of scope (header left alone):** serial `do` loops (convert them first with
 `convert_serial_loops_to_do_concurrent`); ranges clipped by non-box data (OBC
-segment bounds, a `min`/`max`, a runtime stencil not already folded into a core box). Loop
+segment bounds, a `min`/`max`, a runtime stencil not folded into a core or derived box). Loop
 bodies, index variable names/case/order, `DO_LOCALITY(...)` and `!$omp` directives never change.
 
 ## The core technique
@@ -75,6 +75,11 @@ bodies, index variable names/case/order, `DO_LOCALITY(...)` and `!$omp` directiv
    ```
    Name it `<core>_<p|m|g><dims>` (`p` end, `m` start, `g` both), one group per differing
    dimension (`bxU_pi_mj`), a digit only for `n>1` (`bxQ_p2i`).
+
+   **Offsets that are not constants.** An offset fixed for the whole routine (an argument such as
+   a halo width) folds into a derived box built once, as above; better still, the caller builds
+   that box and passes it in place of the integer. An offset set by an enclosing serial pass loop
+   (`do s=1,0,-1`) folds into a derived box built at the top of each pass and freed at its end.
 
 5. **Rewrite the header only**, keeping index variables, their case and order, and whether `k`
    is present (a 2-D loop uses dims 1–2 of a 3-D box):

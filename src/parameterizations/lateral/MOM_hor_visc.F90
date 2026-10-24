@@ -1252,8 +1252,8 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
     div_xx_dx_a            ! x-derivative of horizontal divergence (d/dx(du/dx + dv/dy)) [L-1 T-1 ~> m-1 s-1]
   type(RealArray_t) :: &
     Ah_sq_a  ! The square of the biharmonic viscosity [L8 T-2 ~> m8 s-2]
-  type(Box_t) :: bxH  ! The h-point iteration box of one tile, [isc:iec, jsc:jec, kstart:kend]
-  type(Box_t) :: bxQ  ! The B-grid-index iteration box of one tile, [IscB:IecB, JscB:JecB, kstart:kend]
+  type(Box_t) :: bxH  ! The h-point iteration box of one tile, [isc:iec, jsc:jec, 1:kmax]
+  type(Box_t) :: bxQ  ! The B-grid-index iteration box of one tile, [IscB:IecB, JscB:JecB, 1:kmax]
 
   nullify(hv_cont, hu_cont)
   if (hv_cont_a%associated()) call hv_cont_a%view(hv_cont)
@@ -1426,18 +1426,18 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
   if (MEKE_a%GME_snk_a%associated()) call MEKE_a%GME_snk_a%view(MEKE_GME_snk)
 
   if (find_FrictWork .and. MEKE_a%mom_src_a%associated()) then
-    do concurrent (j=js:je, i=is:ie)
+    do concurrent (j=bxH0%idxS(2):bxH0%idxE(2), i=bxH0%idxS(1):bxH0%idxE(1))
       MEKE_mom_src(i,j) = 0.
     enddo
 
     if (MEKE_a%mom_src_bh_a%associated()) then
-      do concurrent (j=js:je, i=is:ie)
+      do concurrent (j=bxH0%idxS(2):bxH0%idxE(2), i=bxH0%idxS(1):bxH0%idxE(1))
         MEKE_mom_src_bh(i,j) = 0.
       enddo
     endif
 
     if (MEKE_a%GME_snk_a%associated()) then
-      do concurrent (j=js:je, i=is:ie)
+      do concurrent (j=bxH0%idxS(2):bxH0%idxE(2), i=bxH0%idxS(1):bxH0%idxE(1))
         MEKE_GME_snk(i,j) = 0.
       enddo
     endif
@@ -1457,35 +1457,35 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
   do kstart=1,nz,nkblock
     kend = min(kstart+nkblock-1,nz)
     kmax = kend-kstart+1
-    call bxH%set(idxS=[is,js,kstart], idxE=[ie,je,kend])
-    call bxQ%set(idxS=[Isq,Jsq,kstart], idxE=[Ieq,Jeq,kend])
+    call bxH%set(idxS=[is,js,1], idxE=[ie,je,kmax])
+    call bxQ%set(idxS=[Isq,Jsq,1], idxE=[Ieq,Jeq,kmax])
 
-    call hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_xy, apply_OBC, &
-                         apply_OBC_strain, use_cont_huv, is_Kh, ie_Kh, js_Kh, je_Kh, is_vort, &
-                         ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, hv_cont_a, &
+    call hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, kstart, use_vort_xy, &
+                         apply_OBC, apply_OBC_strain, use_cont_huv, is_Kh, ie_Kh, js_Kh, je_Kh, &
+                         is_vort, ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, hv_cont_a, &
                          u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, &
                          sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
                          dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
 
     if (use_Leith) then
-      call hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh, ie_Kh, js_Kh, &
-                                 je_Kh, Ieq, Jeq, dudx_a, dvdy_a, vort_xy_a, vort_xy_smooth_a, &
+      call hor_visc_Leith_grad_a(bxH, Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh, ie_Kh, &
+                                 js_Kh, je_Kh, dudx_a, dvdy_a, vort_xy_a, vort_xy_smooth_a, &
                                  grad_vort_mag_h_2d_a, grad_div_mag_h_a, grad_vort_mag_q_2d_a, &
                                  grad_div_mag_q_a, Del2vort_q_a, vort_xy_dx_a, vort_xy_dx_smooth_a, &
                                  div_xx_dy_a, vort_xy_dy_a, vort_xy_dy_smooth_a, div_xx_dx_a)
       if (CS%use_QG_Leith_visc) &
         call hor_visc_QG_Leith_host(host, nkblock, kstart, kmax, h_a, dz_a, slope_x_a, slope_y_a, &
                                     div_xx_dx_a, div_xx_dy_a, vort_xy_dx_a, vort_xy_dy_a)
-      call hor_visc_Leith_grad_b(CS, nkblock, kmax, is, js, is_Kh, ie_Kh, js_Kh, je_Kh, Ieq, Jeq, &
+      call hor_visc_Leith_grad_b(bxH, CS, nkblock, kmax, is_Kh, ie_Kh, js_Kh, je_Kh, &
                                  grad_vort_mag_h_a, grad_vort_mag_q_a, vert_vort_mag_smooth_a, &
                                  vort_xy_dx_a, vort_xy_dx_smooth_a, vort_xy_dy_a, &
                                  vort_xy_dy_smooth_a)
     endif ! CS%Leith_Kh
 
-    call hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock, h_neglect, inv_PI3, &
-                             inv_PI6, use_kh_struct, use_MEKE_Ku, rescale_Kh, is_Kh, ie_Kh, js_Kh, &
-                             je_Kh, u_a, v_a, h_a, Kh_h_a, grid_Re_Kh_a, div_xx_h_a, sh_xx_h_a, &
-                             h_u_a, h_v_a, sh_xx_a, str_xx_a, grad_vort_mag_h_a, &
+    call hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock, kstart, h_neglect, &
+                             inv_PI3, inv_PI6, use_kh_struct, use_MEKE_Ku, rescale_Kh, is_Kh, &
+                             ie_Kh, js_Kh, je_Kh, u_a, v_a, h_a, Kh_h_a, grid_Re_Kh_a, div_xx_h_a, &
+                             sh_xx_h_a, h_u_a, h_v_a, sh_xx_a, str_xx_a, grad_vort_mag_h_a, &
                              grad_vort_mag_h_2d_a, grad_div_mag_h_a, dudx_a, dvdy_a, sh_xy_a, &
                              Del2vort_q_a, Ah_a, Kh_a, Shear_mag_a, vert_vort_mag_a, hrat_min_a, &
                              visc_bound_rem_a)
@@ -1510,7 +1510,7 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
       endif ! Smagorinsky_Ah or Leith_Ah or Leith+E
     endif
 
-    call hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, &
+    call hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, kstart, &
                              h_neglect, h_neglect3, apply_OBC, use_kh_struct, use_MEKE_Au, is_Kh, &
                              ie_Kh, js_Kh, je_Kh, u_a, v_a, h_a, Ah_h_a, Kh_h_a, grid_Re_Ah_a, &
                              visc_limit_h_a, visc_limit_h_flag_a, visc_limit_h_frac_a, &
@@ -1518,16 +1518,17 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
                              str_xx_a, bhstr_xx_a, m_leithy_a, dDel2vdx_a, dDel2udy_a, sh_xy_a, &
                              hq_a, Ah_a, Kh_a, Shear_mag_a, hrat_min_a, visc_bound_rem_a)
 
-    call hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkblock, inv_PI3, &
-                           inv_PI6, find_FrictWork, use_kh_struct, use_MEKE_Ku, use_MEKE_Au, &
-                           rescale_Kh, u_a, v_a, sh_xx_bt_a, sh_xy_bt_a, GME_effic_h_a, &
-                           GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, GME_coeff_q_a, &
-                           str_xx_GME_a, str_xy_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, vort_xy_q_a, &
-                           sh_xy_q_a, visc_limit_q_a, visc_limit_q_flag_a, visc_limit_q_frac_a, &
-                           BS_coeff_q_a, sh_xx_a, str_xx_a, dDel2vdx_a, dDel2udy_a, sh_xy_a, &
-                           sh_xy_smooth_a, str_xy_a, bhstr_xy_a, vort_xy_a, grad_vort_mag_q_a, &
-                           grad_vort_mag_q_2d_a, Del2vort_q_a, grad_div_mag_q_a, hq_a, Ah_a, Kh_a, &
-                           Shear_mag_a, vert_vort_mag_a, hrat_min_a, visc_bound_rem_a)
+    call hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkblock, kstart, &
+                           inv_PI3, inv_PI6, find_FrictWork, use_kh_struct, use_MEKE_Ku, &
+                           use_MEKE_Au, rescale_Kh, u_a, v_a, sh_xx_bt_a, sh_xy_bt_a, &
+                           GME_effic_h_a, GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, &
+                           GME_coeff_q_a, str_xx_GME_a, str_xy_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, &
+                           Kh_q_a, vort_xy_q_a, sh_xy_q_a, visc_limit_q_a, visc_limit_q_flag_a, &
+                           visc_limit_q_frac_a, BS_coeff_q_a, sh_xx_a, str_xx_a, dDel2vdx_a, &
+                           dDel2udy_a, sh_xy_a, sh_xy_smooth_a, str_xy_a, bhstr_xy_a, vort_xy_a, &
+                           grad_vort_mag_q_a, grad_vort_mag_q_2d_a, Del2vort_q_a, grad_div_mag_q_a, &
+                           hq_a, Ah_a, Kh_a, Shear_mag_a, vert_vort_mag_a, hrat_min_a, &
+                           visc_bound_rem_a)
 
     if (CS%use_GME) then
       ! Applying GME diagonal term.  This is linear and the arguments can be rescaled.
@@ -1537,7 +1538,7 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
                                     str_xy_GME_a)
     endif
 
-    call hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bxQ, nkblock, &
+    call hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bxQ, nkblock, kstart, &
                              h_neglect, apply_OBC, find_FrictWork, find_FrictWork_bh, &
                              backscat_subround, skeb_use_frict, u_a, v_a, h_a, uh_a, vh_a, diffu_a, &
                              diffv_a, str_xx_GME_a, str_xy_GME_a, FrictWork_a, FrictWork_bh_a, &
@@ -1575,9 +1576,9 @@ end subroutine horizontal_viscosity_TR
 
 !> Calculates the horizontal tension and shearing strain, the thicknesses at velocity points,
 !! the Laplacian of velocity, and the vorticity for one tile of horizontal_viscosity.
-subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_xy, apply_OBC, &
-                           apply_OBC_strain, use_cont_huv, is_Kh, ie_Kh, js_Kh, je_Kh, is_vort, &
-                           ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, hv_cont_a, &
+subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, kstart, use_vort_xy, &
+                           apply_OBC, apply_OBC_strain, use_cont_huv, is_Kh, ie_Kh, js_Kh, je_Kh, &
+                           is_vort, ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, hv_cont_a, &
                            u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, &
                            sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
                            dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
@@ -1587,10 +1588,11 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
                                                      !! viscosity metric and coefficient arrays
   type(ocean_OBC_type), optional, pointer      :: OBC  !< Pointer to an open boundary condition type
   type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
-                                                       !! [isc:iec, jsc:jec, kstart:kend]
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQ  !< The B-grid-index iteration box of this
-                                                       !! tile, [IscB:IecB, JscB:JecB, kstart:kend]
+                                                       !! tile, [IscB:IecB, JscB:JecB, 1:kmax]
   integer,                       intent(in)    :: nkblock !< The effective k-block size [nondim]
+  integer,                       intent(in)    :: kstart  !< The first absolute k-layer of the current k-block
   logical, intent(in)    :: use_vort_xy !< True if vort_xy must be computed
   logical, intent(in)    :: apply_OBC !< If true, open boundary conditions are applied on this PE
   logical, intent(in)    :: apply_OBC_strain !< If true, the specified open boundary strain configuration is applied
@@ -1642,6 +1644,10 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
                                                        !! [T-1 ~> s-1]
 
   ! Local variables
+  type(Box_t) :: bxH_m2ij_p2i_pj ! bxH grown to [is-2:ie+2, js-2:je+1]
+  type(Box_t) :: bxH_m2ij_pi_p2j ! bxH grown to [is-2:ie+1, js-2:je+2]
+  type(Box_t) :: bxH_m2ij_pij ! bxH grown to [is-2:ie+1, js-2:je+1]
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:,:), contiguous, pointer :: vort_xy_smooth, vort_xy, sh_xy_smooth, sh_xy, &
     dudy_smooth, dvdx_smooth, dudy, dvdx, dvdy, dudx, sh_xx_smooth, sh_xx, h_v, Del2v, h_u, Del2u, &
     ShSt, NoSt, v_smooth, u_smooth, hv_cont, hu_cont, h, v, u
@@ -1650,7 +1656,7 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
   real, dimension(:,:), contiguous, pointer :: dx2h, dy2h, dx_dyT, dy_dxT, dx2q, dy2q, dx_dyBu, dy_dxBu, &
     Idx2dyCu, Idxdy2u, Idx2dyCv, Idxdy2v
   real :: dudx_smooth, dvdy_smooth ! components in the horizontal tension from smoothed velocity [T-1 ~> s-1]
-  integer :: i, j, k, kk, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kstart, kmax
+  integer :: i, j, k, kk, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kmax
 
   nullify(hv_cont, hu_cont)
   if (hv_cont_a%associated()) call hv_cont_a%view(hv_cont)
@@ -1685,7 +1691,11 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
 
   is  = bxH%idxS(1) ; ie  = bxH%idxE(1) ; js  = bxH%idxS(2) ; je  = bxH%idxE(2)
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
-  kstart = bxH%idxS(3) ; kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  bxH_m2ij_p2i_pj = bxH%growBy(lo=[2,2,0], hi=[2,1,0])
+  bxH_m2ij_pi_p2j = bxH%growBy(lo=[2,2,0], hi=[1,2,0])
+  bxH_m2ij_pij = bxH%growBy(lo=[2,2,0], hi=[1,1,0])
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
 
   k=kstart
 
@@ -1732,7 +1742,8 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
   endif ! use Leith+E
 
   if (CS%do_normstress) then
-    do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                   i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       NoSt(i,j,k) = sh_xx(i,j,kk)
     enddo
@@ -1753,20 +1764,28 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
       h_v(i,J,kk) = hv_cont(i,J,k)
     enddo
   elseif (CS%use_land_mask) then
-    do concurrent (kk=1:kmax, j=js-2:je+2, I=is-2:Ieq+1) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_m2ij_pi_p2j%idxS(3):bxH_m2ij_pi_p2j%idxE(3), &
+                   j=bxH_m2ij_pi_p2j%idxS(2):bxH_m2ij_pi_p2j%idxE(2), &
+                   I=bxH_m2ij_pi_p2j%idxS(1):bxH_m2ij_pi_p2j%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_u(I,j,kk) = 0.5 * (mask2dT(i,j)*h(i,j,k) + mask2dT(i+1,j)*h(i+1,j,k))
     enddo
-    do concurrent (kk=1:kmax, J=js-2:Jeq+1, i=is-2:ie+2) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_m2ij_p2i_pj%idxS(3):bxH_m2ij_p2i_pj%idxE(3), &
+                   J=bxH_m2ij_p2i_pj%idxS(2):bxH_m2ij_p2i_pj%idxE(2), &
+                   i=bxH_m2ij_p2i_pj%idxS(1):bxH_m2ij_p2i_pj%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_v(i,J,kk) = 0.5 * (mask2dT(i,j)*h(i,j,k) + mask2dT(i,j+1)*h(i,j+1,k))
     enddo
   else
-    do concurrent (kk=1:kmax, j=js-2:je+2, I=is-2:Ieq+1) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_m2ij_pi_p2j%idxS(3):bxH_m2ij_pi_p2j%idxE(3), &
+                   j=bxH_m2ij_pi_p2j%idxS(2):bxH_m2ij_pi_p2j%idxE(2), &
+                   I=bxH_m2ij_pi_p2j%idxS(1):bxH_m2ij_pi_p2j%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_u(I,j,kk) = 0.5 * (h(i,j,k) + h(i+1,j,k))
     enddo
-    do concurrent (kk=1:kmax, J=js-2:Jeq+1, i=is-2:ie+2) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_m2ij_p2i_pj%idxS(3):bxH_m2ij_p2i_pj%idxE(3), &
+                   J=bxH_m2ij_p2i_pj%idxS(2):bxH_m2ij_p2i_pj%idxE(2), &
+                   i=bxH_m2ij_p2i_pj%idxS(1):bxH_m2ij_p2i_pj%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_v(i,J,kk) = 0.5 * (h(i,j,k) + h(i,j+1,k))
     enddo
@@ -1916,13 +1935,15 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
   ! Shearing strain (including no-slip boundary conditions at the 2-D land-sea mask).
   ! dudy and dvdx include modifications at OBCs from above.
   if (CS%no_slip) then
-    do concurrent (kk=1:kmax, J=js-2:Jeq+1, I=is-2:Ieq+1) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_m2ij_pij%idxS(3):bxH_m2ij_pij%idxE(3), J=bxH_m2ij_pij%idxS(2):bxH_m2ij_pij%idxE(2), &
+                   I=bxH_m2ij_pij%idxS(1):bxH_m2ij_pij%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       sh_xy(I,J,kk) = (2.0-mask2dBu(I,J)) * ( dvdx(I,J,kk) + dudy(I,J,kk) )
       if (CS%do_shearstress) ShSt(I,J,k) = sh_xy(I,J,kk)
     enddo
   else
-    do concurrent (kk=1:kmax, J=js-2:Jeq+1, I=is-2:Ieq+1) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_m2ij_pij%idxS(3):bxH_m2ij_pij%idxE(3), J=bxH_m2ij_pij%idxS(2):bxH_m2ij_pij%idxE(2), &
+                   I=bxH_m2ij_pij%idxS(1):bxH_m2ij_pij%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       sh_xy(I,J,kk) = mask2dBu(I,J) * ( dvdx(I,J,kk) + dudy(I,J,kk) )
       if (CS%do_shearstress) ShSt(I,J,k) = sh_xy(I,J,kk)
@@ -1933,11 +1954,13 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
     ! Shearing strain (including no-slip boundary conditions at the 2-D land-sea mask).
     ! dudy_smooth and dvdx_smooth do not (yet) include modifications at OBCs from above.
     if (CS%no_slip) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         sh_xy_smooth(I,J,kk) = (2.0-mask2dBu(I,J)) * ( dvdx_smooth(I,J,kk) + dudy_smooth(I,J,kk) )
       enddo
     else
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         sh_xy_smooth(I,J,kk) = mask2dBu(I,J) * ( dvdx_smooth(I,J,kk) + dudy_smooth(I,J,kk) )
       enddo
     endif
@@ -2004,12 +2027,13 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, use_vort_
     endif
   endif
 
+  call bxH_m2ij_p2i_pj%free() ; call bxH_m2ij_pi_p2j%free() ; call bxH_m2ij_pij%free() ; call bxH_mij%free()
 end subroutine hor_visc_strain
 
 !> Calculates the Laplacian viscosity and stress at h points, and starts the biharmonic
 !! viscosity at h points (background, Smagorinsky and Leith terms) for one tile of
 !! horizontal_viscosity.
-subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock, h_neglect, &
+subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock, kstart, h_neglect, &
                                inv_PI3, inv_PI6, use_kh_struct, use_MEKE_Ku, rescale_Kh, is_Kh, &
                                ie_Kh, js_Kh, je_Kh, u_a, v_a, h_a, Kh_h_a, grid_Re_Kh_a, &
                                div_xx_h_a, sh_xx_h_a, h_u_a, h_v_a, sh_xx_a, str_xx_a, &
@@ -2023,10 +2047,11 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
   type(hv_metrics_CS), intent(in)    :: metrics       !< Persistent copies of the horizontal
                                                      !! viscosity metric and coefficient arrays
   type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
-                                                       !! [isc:iec, jsc:jec, kstart:kend]
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQ  !< The B-grid-index iteration box of this
-                                                       !! tile, [IscB:IecB, JscB:JecB, kstart:kend]
+                                                       !! tile, [IscB:IecB, JscB:JecB, 1:kmax]
   integer,                       intent(in)    :: nkblock !< The effective k-block size [nondim]
+  integer,                       intent(in)    :: kstart  !< The first absolute k-layer of the current k-block
   real,    intent(in)    :: h_neglect !< thickness so small it can be lost in roundoff and so neglected
                                       !! [H ~> m or kg m-2]
   real,    intent(in)    :: inv_PI3 !< Powers of the inverse of pi [nondim]
@@ -2096,7 +2121,7 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
   real :: grad_vort ! Vorticity gradient magnitude [L-1 T-1 ~> m-1 s-1]
   real :: grad_vort_qg ! QG-based vorticity gradient magnitude [L-1 T-1 ~> m-1 s-1]
   real :: grid_Kh   ! Laplacian viscosity bound by grid [L2 T-1 ~> m2 s-1]
-  integer :: i, j, k, kk, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kstart, kmax
+  integer :: i, j, k, kk, Isq, Ieq, Jsq, Jeq, kmax
 
   call visc_bound_rem_a%view(visc_bound_rem) ; call hrat_min_a%view(hrat_min)
   call vert_vort_mag_a%view(vert_vort_mag) ; call Shear_mag_a%view(Shear_mag)
@@ -2128,9 +2153,8 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
   if (VarMix_a%Res_fn_h_a%associated()) call VarMix_a%Res_fn_h_a%view(Res_fn_h)
   if (VarMix_a%BS_struct_a%associated()) call VarMix_a%BS_struct_a%view(BS_struct)
 
-  is  = bxH%idxS(1) ; ie  = bxH%idxE(1) ; js  = bxH%idxS(2) ; je  = bxH%idxE(2)
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
-  kstart = bxH%idxS(3) ; kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  kmax = bxH%idxE(3) - bxH%idxS(3) + 1
 
   if ((CS%Smagorinsky_Kh) .or. (CS%Smagorinsky_Ah)) then
     do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh) DO_LOCALITY(local(sh_xx_sq, sh_xy_sq))
@@ -2271,7 +2295,8 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
     endif
 
     if (CS%do_grid_Re_Kh) then
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k, KE, grid_Kh))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k, KE, grid_Kh))
         k = kstart + kk - 1
         KE = 0.125*(((u(I,j,k)+u(I-1,j,k))**2) + ((v(i,J,k)+v(i,J-1,k))**2))
         grid_Kh = max(Kh(i,j,kk), CS%min_grid_Kh)
@@ -2280,14 +2305,16 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
     endif
 
     if (CS%do_div_xx_h) then
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         div_xx_h(i,j,k) = dudx(i,j,kk) + dvdy(i,j,kk)
       enddo
     endif
 
     if (CS%do_sh_xx_h) then
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         sh_xx_h(i,j,k) = sh_xx(i,j,kk)
       enddo
@@ -2352,13 +2379,13 @@ end subroutine hor_visc_h_coeffs_a
 !! and calculates the gradients of the Laplacian and the thicknesses at q points for one tile
 !! of horizontal_viscosity.
 subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, bxQ, nkblock, &
-                               h_neglect, h_neglect3, apply_OBC, use_kh_struct, use_MEKE_Au, is_Kh, &
-                               ie_Kh, js_Kh, je_Kh, u_a, v_a, h_a, Ah_h_a, Kh_h_a, grid_Re_Ah_a, &
-                               visc_limit_h_a, visc_limit_h_flag_a, visc_limit_h_frac_a, &
-                               BS_coeff_h_a, Del2u_a, h_u_a, Del2v_a, h_v_a, sh_xx_a, &
-                               sh_xx_smooth_a, str_xx_a, bhstr_xx_a, m_leithy_a, dDel2vdx_a, &
-                               dDel2udy_a, sh_xy_a, hq_a, Ah_a, Kh_a, Shear_mag_a, hrat_min_a, &
-                               visc_bound_rem_a)
+                               kstart, h_neglect, h_neglect3, apply_OBC, use_kh_struct, &
+                               use_MEKE_Au, is_Kh, ie_Kh, js_Kh, je_Kh, u_a, v_a, h_a, Ah_h_a, &
+                               Kh_h_a, grid_Re_Ah_a, visc_limit_h_a, visc_limit_h_flag_a, &
+                               visc_limit_h_frac_a, BS_coeff_h_a, Del2u_a, h_u_a, Del2v_a, h_v_a, &
+                               sh_xx_a, sh_xx_smooth_a, str_xx_a, bhstr_xx_a, m_leithy_a, &
+                               dDel2vdx_a, dDel2udy_a, sh_xy_a, hq_a, Ah_a, Kh_a, Shear_mag_a, &
+                               hrat_min_a, visc_bound_rem_a)
   type(hor_visc_MEKE_type),      intent(inout) :: MEKE_a !< MEKE fields
                                                        !! related to Mesoscale Eddy Kinetic Energy.
   type(hor_visc_VarMix_type),    intent(inout) :: VarMix_a !< Variable mixing control structure
@@ -2368,10 +2395,11 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
                                                      !! viscosity metric and coefficient arrays
   type(ocean_OBC_type), optional, pointer      :: OBC  !< Pointer to an open boundary condition type
   type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
-                                                       !! [isc:iec, jsc:jec, kstart:kend]
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQ  !< The B-grid-index iteration box of this
-                                                       !! tile, [IscB:IecB, JscB:JecB, kstart:kend]
+                                                       !! tile, [IscB:IecB, JscB:JecB, 1:kmax]
   integer,                       intent(in)    :: nkblock !< The effective k-block size [nondim]
+  integer,                       intent(in)    :: kstart  !< The first absolute k-layer of the current k-block
   real,    intent(in)    :: h_neglect !< thickness so small it can be lost in roundoff and so neglected
                                       !! [H ~> m or kg m-2]
   real,    intent(in)    :: h_neglect3 !< h_neglect^3 [H3 ~> m3 or kg3 m-6]
@@ -2431,6 +2459,7 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
                                                        !! applied (h or q) [nondim]
 
   ! Local variables
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:,:), contiguous, pointer :: visc_bound_rem, hrat_min, Shear_mag, Kh, Ah, hq, &
     sh_xy, dDel2udy, dDel2vdx, m_leithy, bhstr_xx, str_xx, sh_xx_smooth, sh_xx, h_v, Del2v, h_u, &
     Del2u, BS_coeff_h, visc_limit_h_frac, visc_limit_h_flag, visc_limit_h, grid_Re_Ah, Kh_h, Ah_h, &
@@ -2453,7 +2482,7 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
   real :: d_str     ! Stress tensor update [L2 T-2 ~> m2 s-2]
   real :: grid_Ah   ! Biharmonic viscosity bound by grid [L4 T-1 ~> m4 s-1]
   real :: tmp
-  integer :: i, j, k, kk, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kstart, kmax
+  integer :: i, j, k, kk, n, is, js, Isq, Ieq, Jsq, Jeq, kmax
 
   call visc_bound_rem_a%view(visc_bound_rem) ; call hrat_min_a%view(hrat_min)
   call Shear_mag_a%view(Shear_mag) ; call Kh_a%view(Kh) ; call Ah_a%view(Ah) ; call hq_a%view(hq)
@@ -2483,9 +2512,10 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
   nullify(MEKE_Au)
   if (MEKE_a%Au_a%associated()) call MEKE_a%Au_a%view(MEKE_Au)
 
-  is  = bxH%idxS(1) ; ie  = bxH%idxE(1) ; js  = bxH%idxS(2) ; je  = bxH%idxE(2)
+  is  = bxH%idxS(1) ; js  = bxH%idxS(2) 
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
-  kstart = bxH%idxS(3) ; kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
 
   if (CS%biharmonic) then
 
@@ -2546,7 +2576,8 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
     endif
 
     if (CS%do_grid_Re_Ah) then
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k, KE, grid_Ah))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k, KE, grid_Ah))
         k = kstart + kk - 1
         KE = 0.125 * (((u(I,j,k) + u(I-1,j,k))**2) + ((v(i,J,k) + v(i,J-1,k))**2))
         grid_Ah = max(Ah(i,j,kk), CS%min_grid_Ah)
@@ -2577,7 +2608,8 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
 
   if (CS%biharmonic) then
     ! Gradient of Laplacian, for use in bi-harmonic term
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       dDel2vdx(I,J,kk) = DY_dxBu(I,J)*((Del2v(i+1,J,kk)*IdyCv(i+1,J)) - (Del2v(i,J,kk)*IdyCv(i,J)))
       dDel2udy(I,J,kk) = DX_dyBu(I,J)*((Del2u(I,j+1,kk)*IdxCu(I,j+1)) - (Del2u(I,j,kk)*IdxCu(I,j)))
     enddo
@@ -2608,7 +2640,8 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
   endif
 
   if ((CS%Smagorinsky_Kh) .or. (CS%Smagorinsky_Ah)) then
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(sh_xy_sq, sh_xx_sq))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(sh_xy_sq, sh_xx_sq))
       sh_xy_sq = sh_xy(I,J,kk)**2
       sh_xx_sq = 0.25 * ( ((sh_xx(i,j,kk)**2) + (sh_xx(i+1,j+1,kk)**2)) &
                         + ((sh_xx(i,j+1,kk)**2) + (sh_xx(i+1,j,kk)**2)) )
@@ -2616,7 +2649,8 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
     enddo
   endif
 
-  do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(h2uq, h2vq))
+  do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                 I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(h2uq, h2vq))
     h2uq = 4.0 * (h_u(I,j,kk) * h_u(I,j+1,kk))
     h2vq = 4.0 * (h_v(i,J,kk) * h_v(i+1,J,kk))
     hq(I,J,kk) = (2.0 * (h2uq * h2vq)) &
@@ -2624,7 +2658,8 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
   enddo
 
   if (CS%bound_Ah .or. CS%bound_Kh) then
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(h_min))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(h_min))
       h_min = min(h_u(I,j,kk), h_u(I,j+1,kk), h_v(i,J,kk), h_v(i+1,J,kk))
       hrat_min(I,J,kk) = min(1.0, h_min / (hq(I,J,kk) + h_neglect))
     enddo
@@ -2633,7 +2668,8 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
 
   ! TODO: GPU??  Are h_[uv] on CPU?  update to hrat_min?
   if (CS%no_slip) then
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(hu, hv))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(hu, hv))
       if (CS%no_slip .and. (mask2dBu(I,J) < 0.5)) then
         if ((mask2dCu(I,j) + mask2dCu(I,j+1)) + &
             (mask2dCv(i,J) + mask2dCv(i+1,J)) > 0.0) then
@@ -2656,16 +2692,17 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
     enddo
   endif
 
+  call bxH_mij%free()
 end subroutine hor_visc_h_coeffs_b
 
 !> Calculates the Laplacian and biharmonic viscosities and stresses at q points, adds the
 !! q-point backscatter, and starts the GME stress terms for one tile of horizontal_viscosity.
-subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkblock, inv_PI3, &
-                             inv_PI6, find_FrictWork, use_kh_struct, use_MEKE_Ku, use_MEKE_Au, &
-                             rescale_Kh, u_a, v_a, sh_xx_bt_a, sh_xy_bt_a, GME_effic_h_a, &
-                             GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, GME_coeff_q_a, &
-                             str_xx_GME_a, str_xy_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, &
-                             vort_xy_q_a, sh_xy_q_a, visc_limit_q_a, visc_limit_q_flag_a, &
+subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkblock, kstart, &
+                             inv_PI3, inv_PI6, find_FrictWork, use_kh_struct, use_MEKE_Ku, &
+                             use_MEKE_Au, rescale_Kh, u_a, v_a, sh_xx_bt_a, sh_xy_bt_a, &
+                             GME_effic_h_a, GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, &
+                             GME_coeff_q_a, str_xx_GME_a, str_xy_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, &
+                             Kh_q_a, vort_xy_q_a, sh_xy_q_a, visc_limit_q_a, visc_limit_q_flag_a, &
                              visc_limit_q_frac_a, BS_coeff_q_a, sh_xx_a, str_xx_a, dDel2vdx_a, &
                              dDel2udy_a, sh_xy_a, sh_xy_smooth_a, str_xy_a, bhstr_xy_a, vort_xy_a, &
                              grad_vort_mag_q_a, grad_vort_mag_q_2d_a, Del2vort_q_a, &
@@ -2679,10 +2716,11 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
   type(hv_metrics_CS), intent(in)    :: metrics       !< Persistent copies of the horizontal
                                                      !! viscosity metric and coefficient arrays
   type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
-                                                       !! [isc:iec, jsc:jec, kstart:kend]
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQ  !< The B-grid-index iteration box of this
-                                                       !! tile, [IscB:IecB, JscB:JecB, kstart:kend]
+                                                       !! tile, [IscB:IecB, JscB:JecB, 1:kmax]
   integer,                       intent(in)    :: nkblock !< The effective k-block size [nondim]
+  integer,                       intent(in)    :: kstart  !< The first absolute k-layer of the current k-block
   real,    intent(in)    :: inv_PI3 !< Powers of the inverse of pi [nondim]
   real,    intent(in)    :: inv_PI6 !< Powers of the inverse of pi [nondim]
   logical, intent(in)    :: find_FrictWork !< If true, the work done by lateral friction is calculated
@@ -2766,6 +2804,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
                                                        !! applied (h or q) [nondim]
 
   ! Local variables
+  type(Box_t) :: bxH_m2ij_pij ! bxH grown to [is-2:ie+1, js-2:je+1]
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:), contiguous, pointer :: GME_effic_q, GME_effic_h, sh_xy_bt, sh_xx_bt
   real, dimension(:,:), contiguous, pointer :: mask2dBu
   real, dimension(:,:,:), contiguous, pointer :: visc_bound_rem, hrat_min, vert_vort_mag, &
@@ -2789,7 +2829,7 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
   real :: grad_vort ! Vorticity gradient magnitude [L-1 T-1 ~> m-1 s-1]
   real :: grad_vort_qg ! QG-based vorticity gradient magnitude [L-1 T-1 ~> m-1 s-1]
   real :: tmp
-  integer :: i, j, k, kk, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kstart, kmax
+  integer :: i, j, k, kk, is, js, Isq, Ieq, Jsq, Jeq, kmax
 
   call visc_bound_rem_a%view(visc_bound_rem) ; call hrat_min_a%view(hrat_min)
   call vert_vort_mag_a%view(vert_vort_mag) ; call Shear_mag_a%view(Shear_mag)
@@ -2837,9 +2877,11 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
   if (VarMix_a%Res_fn_q_a%associated()) call VarMix_a%Res_fn_q_a%view(Res_fn_q)
   if (VarMix_a%BS_struct_a%associated()) call VarMix_a%BS_struct_a%view(BS_struct)
 
-  is  = bxH%idxS(1) ; ie  = bxH%idxE(1) ; js  = bxH%idxS(2) ; je  = bxH%idxE(2)
+  is  = bxH%idxS(1) ; js  = bxH%idxS(2) 
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
-  kstart = bxH%idxS(3) ; kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  bxH_m2ij_pij = bxH%growBy(lo=[2,2,0], hi=[1,1,0])
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
 
   !!$omp target update from(sh_xx, sh_xy)
   !!$omp target update from(h_u, h_v, hq)
@@ -2855,30 +2897,35 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if ((CS%Leith_Kh) .or. (CS%Leith_Ah)) then
       if (CS%use_QG_Leith_visc) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(grad_vort, grad_vort_qg))
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(grad_vort, grad_vort_qg))
           grad_vort = grad_vort_mag_q(I,J,kk) + grad_div_mag_q(I,J,kk)
           grad_vort_qg = 3. * grad_vort_mag_q_2d(I,J,kk)
           vert_vort_mag(I,J,kk) = min(grad_vort, grad_vort_qg)
         enddo
       else
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           vert_vort_mag(I,J,kk) = grad_vort_mag_q(I,J,kk) + grad_div_mag_q(I,J,kk)
         enddo
       endif
     endif
 
     ! Static (pre-computed) background viscosity
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       Kh(I,J,kk) = Kh_bg_xy(I,J)
     enddo
 
     if (CS%Smagorinsky_Kh) then
       if (CS%add_LES_viscosity) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Kh(I,J,kk) = Kh(I,J,kk) + Laplac2_const_xy(I,J) * Shear_mag(I,J,kk)
         enddo
       else
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Kh(I,J,kk) = max(Kh(I,J,kk), Laplac2_const_xy(I,J) * Shear_mag(I,J,kk) )
         enddo
       endif
@@ -2886,11 +2933,13 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (CS%Leith_Kh) then
       if (CS%add_LES_viscosity) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Kh(I,J,kk) = Kh(I,J,kk) + Laplac3_const_xy(I,J) * vert_vort_mag(I,J,kk) * inv_PI3 ! Is this right? -AJA
         enddo
       else
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Kh(I,J,kk) = max(Kh(I,J,kk), Laplac3_const_xy(I,J) * vert_vort_mag(I,J,kk) * inv_PI3)
         enddo
       endif
@@ -2899,18 +2948,21 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
     ! All viscosity contributions above are subject to resolution scaling
 
     if (rescale_Kh) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         Kh(I,J,kk) = Res_fn_q(I,J) * Kh(I,J,kk)
       enddo
     endif
 
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       Kh(I,J,kk) = max(Kh(I,J,kk), CS%Kh_bg_min) ! Place a floor on the viscosity, if desired.
     enddo
 
     if (use_MEKE_Ku .and. .not. CS%EY24_EBT_BS) then
       if (use_kh_struct) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k, meke_res_fn))
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k, meke_res_fn))
           k = kstart + kk - 1
           meke_res_fn = 1.
           if (CS%res_scale_MEKE) meke_res_fn = Res_fn_q(I,J)
@@ -2921,7 +2973,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
                                      (MEKE_Ku(i,j+1)*BS_struct(i,j+1,k))) ) * meke_res_fn
         enddo
       else
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(meke_res_fn))
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(meke_res_fn))
           meke_res_fn = 1.
           if (CS%res_scale_MEKE) meke_res_fn = Res_fn_q(I,J)
 
@@ -2935,12 +2988,14 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (CS%anisotropic) then
       ! *Add* the shear component of anisotropic viscosity
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Kh(I,J,kk) = Kh(I,J,kk) + CS%Kh_aniso * n1n2_q(I,J)**2
       enddo
     endif
 
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(Kh_max_here))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(Kh_max_here))
       ! Newer method of bounding for stability
       if ((CS%bound_Kh) .and. (CS%bound_Ah)) then
         visc_bound_rem(I,J,kk) = 1.0
@@ -2958,50 +3013,58 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (CS%use_Leithy) then
       ! Leith+E doesn't recompute Kh at q points, it just interpolates it from h to q points
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         Kh(I,J,kk) = 0.25 * ((Kh_h(i,j,k) + Kh_h(i+1,j+1,k)) + (Kh_h(i,j+1,k) + Kh_h(i+1,j,k)))
       enddo
     endif
 
     if (CS%do_Kh_q .or. CS%debug) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         Kh_q(I,J,k) = Kh(I,J,kk)
       enddo
     endif
 
     if (CS%do_vort_xy_q) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         vort_xy_q(I,J,k) = vort_xy(I,J,kk)
       enddo
     endif
 
     if (CS%do_sh_xy_q) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         sh_xy_q(I,J,k) = sh_xy(I,J,kk)
       enddo
     endif
 
     if (.not. CS%use_Leithy) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         str_xy(I,J,kk) = -Kh(I,J,kk) * sh_xy(I,J,kk)
       enddo
     else
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         str_xy(I,J,kk) = -Kh(I,J,kk) * sh_xy_smooth(I,J,kk)
       enddo
     endif
   else
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       str_xy(I,J,kk) = 0.
     enddo
   endif ! get harmonic coefficient Kh at q points and harmonic part of str_xy
 
   if (CS%anisotropic) then
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(local_strain))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(local_strain))
       ! Horizontal-tension averaged to q-points
       local_strain = 0.25 * ( (sh_xx(i,j,kk) + sh_xx(i+1,j+1,kk)) + (sh_xx(i+1,j,kk) + sh_xx(i,j+1,kk)) )
       ! *Add* the tension contribution to the xy-component of stress
@@ -3013,20 +3076,23 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
     ! Determine the biharmonic viscosity at q points, using the
     ! largest value from several parameterizations. Also get the
     ! biharmonic component of str_xy.
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       Ah(I,J,kk) = Ah_bg_xy(I,J)
     enddo
 
     if (CS%Smagorinsky_Ah .or. CS%Leith_Ah) then
       if (CS%Smagorinsky_Ah) then
         if (CS%bound_Coriolis) then
-          do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(AhSm))
+          do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                         I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(AhSm))
             AhSm = Shear_mag(I,J,kk) * (Biharm_const_xy(I,J) &
                 + Biharm_const2_xy(I,J) * Shear_mag(I,J,kk))
             Ah(I,J,kk) = max(Ah(I,J,kk), AhSm)
           enddo
         else
-          do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(AhSm))
+          do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                         I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(AhSm))
             AhSm = Biharm_const_xy(I,J) * Shear_mag(I,J,kk)
             Ah(I,J,kk) = max(Ah(I,J,kk), AhSm)
           enddo
@@ -3034,7 +3100,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
       endif
 
       if (CS%Leith_Ah) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(AhLth))
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(AhLth))
           AhLth = Biharm6_const_xy(I,J) * abs(Del2vort_q(I,J,kk)) * inv_PI6
           Ah(I,J,kk) = max(Ah(I,J,kk), AhLth)
         enddo
@@ -3043,7 +3110,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (use_MEKE_Au) then
       ! *Add* the MEKE contribution
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         Ah(I,J,kk) = Ah(I,J,kk) + 0.25 * ( &
             (MEKE_Au(i,j) + MEKE_Au(i+1,j+1)) + (MEKE_Au(i+1,j) + MEKE_Au(i,j+1)) )
       enddo
@@ -3051,7 +3119,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     ! XXX: It is just overwrites the values!
     if (CS%Re_Ah > 0.0) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k, KE))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k, KE))
         k = kstart + kk - 1
         KE = 0.125 * (((u(I,j,k) + u(I,j+1,k))**2) + ((v(i,J,k) + v(i+1,J,k))**2))
         Ah(I,J,kk) = sqrt(KE) * Re_Ah_const_xy(I,J)
@@ -3060,18 +3129,21 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (CS%bound_Ah) then
       if (CS%bound_Kh) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Ah(I,J,kk) = min(Ah(I,J,kk), visc_bound_rem(I,J,kk) * hrat_min(I,J,kk) * Ah_Max_xy(I,J))
         enddo
       else
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1))
           Ah(I,J,kk) = min(Ah(I,J,kk), hrat_min(I,J,kk) * Ah_Max_xy(I,J))
         enddo
       endif
     endif
 
     if (CS%EY24_EBT_BS) then
-        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k, tmp))
+        do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                       I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k, tmp))
           k = kstart + kk - 1
           tmp = CS%KS_coef *hrat_min(I,J,kk) * Ah_Max_xy_KS(I,J)
           visc_limit_q(I,J,k) = tmp
@@ -3084,21 +3156,24 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     ! Leith+E doesn't recompute Ah at q points, it just interpolates it from h to q points
     if (CS%use_Leithy) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         Ah(I,J,kk) = 0.25 * ((Ah_h(i,j,k) + Ah_h(i+1,j+1,k)) + (Ah_h(i,j+1,k) + Ah_h(i+1,j,k)))
       enddo
     endif
 
     if (CS%do_Ah_q .or. CS%debug) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         Ah_q(I,J,k) = Ah(I,J,kk)
       enddo
     endif
 
     ! Again, need to initialize str_xy as if its biharmonic
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(d_str))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(d_str))
       d_str = Ah(I,J,kk) * (dDel2vdx(I,J,kk) + dDel2udy(I,J,kk))
 
       str_xy(I,J,kk) = str_xy(I,J,kk) + d_str
@@ -3110,8 +3185,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
   ! Backscatter using MEKE
   if (CS%EY24_EBT_BS) then
-    call hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, kstart, kmax, is, js, &
-                                Ieq, Jeq, visc_limit_q_flag_a, sh_xy_a, str_xy_a, BS_coeff_q_a)
+    call hor_visc_backscatter_q(bxH, CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, kstart, &
+                                visc_limit_q_flag_a, sh_xy_a, str_xy_a, BS_coeff_q_a)
   endif ! Backscatter
 
   if (CS%use_GME) then
@@ -3128,7 +3203,8 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
     enddo
 
     ! The wider halo here is to permit one pass of smoothing without a halo update.
-    do concurrent (kk=1:kmax, J=js-2:je+1, I=is-2:ie+1) DO_LOCALITY(local(k, GME_coeff))
+    do concurrent (kk=bxH_m2ij_pij%idxS(3):bxH_m2ij_pij%idxE(3), J=bxH_m2ij_pij%idxS(2):bxH_m2ij_pij%idxE(2), &
+                   I=bxH_m2ij_pij%idxS(1):bxH_m2ij_pij%idxE(1)) DO_LOCALITY(local(k, GME_coeff))
       k = kstart + kk - 1
       GME_coeff = GME_effic_q(I,J) * 0.25 * &
           ((KH_u_GME(I,j,k)+KH_u_GME(I,j+1,k)) + (KH_v_GME(i,J,k)+KH_v_GME(i+1,J,k)))
@@ -3139,12 +3215,13 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
     enddo
   endif
 
+  call bxH_m2ij_pij%free() ; call bxH_mij%free()
 end subroutine hor_visc_q_coeffs
 
 !> Converts the stresses to layer-integrated form, takes their divergence to get the
 !! viscous accelerations, and accumulates the frictional work for one tile of
 !! horizontal_viscosity.
-subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bxQ, nkblock, &
+subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bxQ, nkblock, kstart, &
                                h_neglect, apply_OBC, find_FrictWork, find_FrictWork_bh, &
                                backscat_subround, skeb_use_frict, u_a, v_a, h_a, uh_a, vh_a, &
                                diffu_a, diffv_a, str_xx_GME_a, str_xy_GME_a, FrictWork_a, &
@@ -3164,10 +3241,11 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   type(ocean_OBC_type), optional, pointer      :: OBC  !< Pointer to an open boundary condition type
   type(hor_visc_STOCH_type), intent(inout)           :: STOCH_a !< Stochastic control structure
   type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
-                                                       !! [isc:iec, jsc:jec, kstart:kend]
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQ  !< The B-grid-index iteration box of this
-                                                       !! tile, [IscB:IecB, JscB:JecB, kstart:kend]
+                                                       !! tile, [IscB:IecB, JscB:JecB, 1:kmax]
   integer,                       intent(in)    :: nkblock !< The effective k-block size [nondim]
+  integer,                       intent(in)    :: kstart  !< The first absolute k-layer of the current k-block
   real,    intent(in)    :: h_neglect !< thickness so small it can be lost in roundoff and so neglected
                                       !! [H ~> m or kg m-2]
   logical, intent(in)    :: apply_OBC !< If true, open boundary conditions are applied on this PE
@@ -3219,6 +3297,7 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
                                            !! 4.
 
   ! Local variables
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:,:), contiguous, pointer :: hq, bhstr_xy, str_xy, sh_xy, bhstr_xx, str_xx, &
     sh_xx, h_v, h_u, visc_limit_h_flag, FrictWork_GME, FrictWork_bh, FrictWork, str_xy_GME, &
     str_xx_GME, diffv, diffu, vh, uh, h, v, u
@@ -3231,7 +3310,7 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   real :: RoScl     ! The scaling function for MEKE source term [nondim]
   real :: FatH      ! abs(f) at h-point for MEKE source term [T-1 ~> s-1]
   real :: Sh_F_pow  ! The ratio of shear over the absolute value of f raised to some power and rescaled [nondim]
-  integer :: i, j, k, kk, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kstart, kmax
+  integer :: i, j, k, kk, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, kmax
 
   call hq_a%view(hq) ; call bhstr_xy_a%view(bhstr_xy) ; call str_xy_a%view(str_xy)
   call sh_xy_a%view(sh_xy) ; call bhstr_xx_a%view(bhstr_xx) ; call str_xx_a%view(str_xx)
@@ -3263,7 +3342,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
 
   is  = bxH%idxS(1) ; ie  = bxH%idxE(1) ; js  = bxH%idxS(2) ; je  = bxH%idxE(2)
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
-  kstart = bxH%idxS(3) ; kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  kmax = bxH%idxE(3) - bxH%idxS(3) + 1
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
 
   if (CS%use_GME) then
 
@@ -3275,11 +3355,13 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
 
     ! This adds in GME and changes the units of str_xx from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
     if (CS%no_slip) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         str_xy(I,J,kk) = (str_xy(I,J,kk) + str_xy_GME(I,J,kk)) * (hq(I,J,kk) * reduction_xy(I,J))
       enddo
     else
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         str_xy(I,J,kk) = (str_xy(I,J,kk) + str_xy_GME(I,J,kk)) * (hq(I,J,kk) * mask2dBu(I,J) * reduction_xy(I,J))
       enddo
     endif
@@ -3292,11 +3374,13 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
 
     ! This changes the units of str_xy from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
     if (CS%no_slip) then
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         str_xy(I,J,kk) = str_xy(I,J,kk) * (hq(I,J,kk) * reduction_xy(I,J))
       enddo
     else
-      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+      do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                     I=bxH_mij%idxS(1):bxH_mij%idxE(1))
         str_xy(I,J,kk) = str_xy(I,J,kk) * (hq(I,J,kk) * mask2dBu(I,J) * reduction_xy(I,J))
       enddo
     endif
@@ -3352,7 +3436,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
     if (CS%FrictWork_bug) then
       ! Diagnose   str_xx*d_x u - str_yy*d_y v + str_xy*(d_y u + d_x v)
       ! This is the old formulation that includes energy diffusion
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         FrictWork(i,j,k) = H_to_RZ * ( &
                 ((str_xx(i,j,kk) * (u(I,j,k)-u(I-1,j,k))*IdxT(i,j))    &
@@ -3371,7 +3456,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
                       + ((v(i+1,J-1,k)-v(i,J-1,k))*IdxBu(I,J-1)))) ) ) )
       enddo
     else
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         FrictWork(i,j,k) = H_to_RZ * IareaT(i,j) * ( &
           ((str_xx(i,j,kk)*dy2h(i,j) * ( &
@@ -3405,7 +3491,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
     endif
 
     if (CS%EY24_EBT_BS) then
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         FrictWork(i,j,k) = (1. - visc_limit_h_flag(i,j,k)) * FrictWork(i,j,k)
       enddo
@@ -3416,7 +3503,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
     if (CS%FrictWork_bug) then
       ! Diagnose   bhstr_xx*d_x u - bhstr_yy*d_y v + bhstr_xy*(d_y u + d_x v)
       ! This is the old formulation that includes energy diffusion !cyc
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         FrictWork_bh(i,j,k) = H_to_RZ * ( &
                 ((bhstr_xx(i,j,kk) * (u(I,j,k)-u(I-1,j,k))*IdxT(i,j))  &
@@ -3435,7 +3523,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
                     + ((v(i+1,J-1,k)-v(i,J-1,k))*IdxBu(I,J-1)))) ) ) )
       enddo
     else
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         ! Diagnose   bhstr_xx*d_x u - bhstr_yy*d_y v + bhstr_xy*(d_y u + d_x v)
         FrictWork_bh(i,j,k) = H_to_RZ * IareaT(i,j) * ( &
@@ -3469,7 +3558,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
     endif
 
     if (CS%EY24_EBT_BS) then
-      do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+      do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
         k = kstart + kk - 1
         FrictWork_bh(i,j,k) = (1. - visc_limit_h_flag(i,j,k)) * FrictWork_bh(i,j,k)
       enddo
@@ -3477,7 +3567,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   endif
 
   if (CS%use_GME) then
-    if (CS%FrictWork_bug) then ; do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+    if (CS%FrictWork_bug) then ; do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                                                i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
     ! Diagnose   str_xx_GME*d_x u - str_yy_GME*d_y v + str_xy_GME*(d_y u + d_x v)
     ! This is the old formulation that includes energy diffusion
@@ -3497,7 +3588,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
                        (((u(I,j,k)-u(I,j-1,k))*IdyBu(I,J-1))        &
                       + ((v(i+1,J-1,k)-v(i,J-1,k))*IdxBu(I,J-1)))) ) ) )
       enddo
-    else ; do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+    else ; do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                          i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       FrictWork_GME(i,j,k) = H_to_RZ * IareaT(i,j) * ( &
           ((str_xx_GME(i,j,kk)*dy2h(i,j) * ( &
@@ -3528,7 +3620,7 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
                                   - (vh(i,J-1,k)*IareaCv(i,J-1)/(h_v(i,J-1,kk)+h_neglect)))) )) ) )) )
     enddo ; endif
     if (find_FrictWork .and. MEKE_a%mom_src_a%associated() .and. MEKE_a%GME_snk_a%associated()) then
-      do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k))
+      do concurrent (j=bxH%idxS(2):bxH%idxE(2), i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(kk, k))
         do kk=1,kmax
         k = kstart+kk-1
         MEKE_GME_snk(i,j) = MEKE_GME_snk(i,j) + FrictWork_GME(i,j,k)
@@ -3536,7 +3628,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
     endif
   endif
 
-  if (skeb_use_frict) then ; do concurrent (kk=1:kmax, j=js:je, i=is:ie) DO_LOCALITY(local(k))
+  if (skeb_use_frict) then ; do concurrent (kk=bxH%idxS(3):bxH%idxE(3), j=bxH%idxS(2):bxH%idxE(2), &
+                                            i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(k))
     k = kstart + kk - 1
     ! Note that the sign convention is FrictWork < 0 means energy dissipation.
     skeb_diss(i,j,k) = skeb_diss(i,j,k) - STOCH_a%skeb_frict_coef * &
@@ -3548,7 +3641,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   ! energy loss seen as a reduction in the (biharmonic) frictional source term.
   if (find_FrictWork .and. MEKE_a%mom_src_a%associated()) then
     if (MEKE_a%backscatter_Ro_c /= 0.) then
-      do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k, FatH, Shear_mag_bc, RoScl, Sh_F_pow))
+      do concurrent (j=bxH%idxS(2):bxH%idxE(2), &
+                     i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(kk, k, FatH, Shear_mag_bc, RoScl, Sh_F_pow))
         do kk=1,kmax
         k = kstart + kk - 1
         FatH = 0.25*( (abs(CoriolisBu(I-1,J-1)) + abs(CoriolisBu(I,J))) + &
@@ -3581,14 +3675,14 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
               + (FrictWork_bh(i,j,k) - RoScl * FrictWork_bh(i,j,k))
       enddo ; enddo
     else
-      do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k))
+      do concurrent (j=bxH%idxS(2):bxH%idxE(2), i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(kk, k))
         do kk=1,kmax
         k = kstart + kk - 1
         MEKE_mom_src(i,j) = MEKE_mom_src(i,j) + FrictWork(i,j,k)
       enddo ; enddo
 
       if (MEKE_a%mom_src_bh_a%associated()) then
-        do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k))
+        do concurrent (j=bxH%idxS(2):bxH%idxE(2), i=bxH%idxS(1):bxH%idxE(1)) DO_LOCALITY(local(kk, k))
           do kk=1,kmax
           k = kstart + kk - 1
           MEKE_mom_src_bh(i,j) = MEKE_mom_src_bh(i,j) + FrictWork_bh(i,j,k)
@@ -3598,6 +3692,7 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
 
   endif ! find_FrictWork and associated(mom_src)
 
+  call bxH_mij%free()
 end subroutine hor_visc_stress_div
 
 
@@ -3605,11 +3700,13 @@ end subroutine hor_visc_stress_div
 !! Laplacian of vorticity, that are used within horizontal_viscosity by the Leith,
 !! modified Leith, Leith+E, and QG Leith viscosity schemes. The caller must only
 !! invoke this routine when CS%Leith_Kh, CS%Leith_Ah, or CS%use_Leithy is true.
-subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh, ie_Kh, js_Kh, &
-                                 je_Kh, Ieq, Jeq, dudx_a, dvdy_a, vort_xy_a, vort_xy_smooth_a, &
+subroutine hor_visc_Leith_grad_a(bxH, Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh, ie_Kh, &
+                                 js_Kh, je_Kh, dudx_a, dvdy_a, vort_xy_a, vort_xy_smooth_a, &
                                  grad_vort_mag_h_2d_a, grad_div_mag_h_a, grad_vort_mag_q_2d_a, &
                                  grad_div_mag_q_a, Del2vort_q_a, vort_xy_dx_a, vort_xy_dx_smooth_a, &
                                  div_xx_dy_a, vort_xy_dy_a, vort_xy_dy_smooth_a, div_xx_dx_a)
+  type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(grid_core_type), intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(hv_opts_CS),    intent(in)    :: CS    !< Options used by the horizontal viscosity kernels
   integer,                       intent(in)    :: nkblock !< The k-block size used to size the following arrays [nondim]
@@ -3622,8 +3719,6 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
   integer,                       intent(in)    :: ie_Kh  !< End i-loop index for the thickness point viscosities
   integer,                       intent(in)    :: js_Kh  !< Start j-loop index for the thickness point viscosities
   integer,                       intent(in)    :: je_Kh  !< End j-loop index for the thickness point viscosities
-  integer,                       intent(in)    :: Ieq    !< The last i-index at q-points
-  integer,                       intent(in)    :: Jeq    !< The last j-index at q-points
   type(RealArray_t), intent(in)    :: dudx_a !< x-derivative of the horizontal tension [T-1 ~> s-1]
   type(RealArray_t), intent(in)    :: dvdy_a !< y-derivative of the horizontal tension [T-1 ~> s-1]
   type(RealArray_t), intent(in)    :: vort_xy_a !< Vertical vorticity (dv/dx - du/dy) including
@@ -3653,6 +3748,9 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
   type(RealArray_t), intent(inout) :: div_xx_dx_a !< x-derivative of horizontal divergence (d/dx(du/dx +
                                                   !! dv/dy)) [L-1 T-1 ~> m-1 s-1]
   ! Local variables
+  type(Box_t) :: bxH_m2i_mj_pij ! bxH grown to [is-2:ie+1, js-1:je+1]
+  type(Box_t) :: bxH_mi_m2j_pij ! bxH grown to [is-1:ie+1, js-2:je+1]
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:,:), contiguous, pointer :: div_xx_dx, vort_xy_dy_smooth, vort_xy_dy, &
     div_xx_dy, vort_xy_dx_smooth, vort_xy_dx, Del2vort_q, grad_div_mag_q, grad_vort_mag_q_2d, &
     grad_div_mag_h, grad_vort_mag_h_2d, vort_xy_smooth, vort_xy, dvdy, dudx
@@ -3671,6 +3769,9 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
   call grad_vort_mag_q_2d_a%view(grad_vort_mag_q_2d) ; call grad_div_mag_h_a%view(grad_div_mag_h)
   call grad_vort_mag_h_2d_a%view(grad_vort_mag_h_2d) ; call vort_xy_smooth_a%view(vort_xy_smooth)
   call vort_xy_a%view(vort_xy) ; call dvdy_a%view(dvdy) ; call dudx_a%view(dudx)
+  bxH_m2i_mj_pij = bxH%growBy(lo=[2,1,0], hi=[1,1,0])
+  bxH_mi_m2j_pij = bxH%growBy(lo=[1,2,0], hi=[1,1,0])
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
   call Gcore%dyBu%view(dyBu) ; call Gcore%IdxBu%view(IdxBu) ; call Gcore%IdyCu%view(IdyCu)
   call Gcore%dxBu%view(dxBu) ; call Gcore%IdyBu%view(IdyBu) ; call Gcore%IdxCv%view(IdxCv)
   call Gcore%IdyCv%view(IdyCv) ; call Gcore%IdxCu%view(IdxCu) ; call Gcore%dF_dx%view(dF_dx)
@@ -3733,7 +3834,8 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
       grad_div_mag_h(i,j,kk) = sqrt(((0.5*(div_xx_dx(I,j,kk) + div_xx_dx(I-1,j,kk)))**2) + &
                                  ((0.5*(div_xx_dy(i,J,kk) + div_xx_dy(i,J-1,kk)))**2))
     enddo
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       grad_div_mag_q(I,J,kk) = sqrt(((0.5*(div_xx_dx(I,j,kk) + div_xx_dx(I,j+1,kk)))**2) + &
                                  ((0.5*(div_xx_dy(i,J,kk) + div_xx_dy(i+1,J,kk)))**2))
     enddo
@@ -3749,7 +3851,8 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
     do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
       grad_div_mag_h(i,j,kk) = 0.0
     enddo
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       grad_div_mag_q(I,J,kk) = 0.0
     enddo
 
@@ -3757,10 +3860,12 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
 
   ! Add in beta for the Leith viscosity
   if (CS%use_beta_in_Leith) then
-    do concurrent (kk=1:kmax, J=js-2:Jeq+1, i=is-1:ie+1)
+    do concurrent (kk=bxH_mi_m2j_pij%idxS(3):bxH_mi_m2j_pij%idxE(3), J=bxH_mi_m2j_pij%idxS(2):bxH_mi_m2j_pij%idxE(2), &
+                   i=bxH_mi_m2j_pij%idxS(1):bxH_mi_m2j_pij%idxE(1))
       vort_xy_dx(i,J,kk) = vort_xy_dx(i,J,kk) + 0.5 * ( dF_dx(i,j) + dF_dx(i,j+1))
     enddo
-    do concurrent (kk=1:kmax, j=js-1:je+1, I=is-2:Ieq+1)
+    do concurrent (kk=bxH_m2i_mj_pij%idxS(3):bxH_m2i_mj_pij%idxE(3), j=bxH_m2i_mj_pij%idxS(2):bxH_m2i_mj_pij%idxE(2), &
+                   I=bxH_m2i_mj_pij%idxS(1):bxH_m2i_mj_pij%idxE(1))
       vort_xy_dy(I,j,kk) = vort_xy_dy(I,j,kk) + 0.5 * ( dF_dy(i,j) + dF_dy(i+1,j))
     enddo
   endif ! CS%use_beta_in_Leith
@@ -3771,31 +3876,31 @@ subroutine hor_visc_Leith_grad_a(Gcore, CS, nkblock, kmax, is, ie, js, je, is_Kh
       grad_vort_mag_h_2d(i,j,kk) = SQRT(((0.5*(vort_xy_dx(i,J,kk) + vort_xy_dx(i,J-1,kk)))**2) + &
                                      ((0.5*(vort_xy_dy(I,j,kk) + vort_xy_dy(I-1,j,kk)))**2) )
     enddo
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1))
       grad_vort_mag_q_2d(I,J,kk) = SQRT(((0.5*(vort_xy_dx(i,J,kk) + vort_xy_dx(i+1,J,kk)))**2) + &
                                      ((0.5*(vort_xy_dy(I,j,kk) + vort_xy_dy(I,j+1,kk)))**2) )
     enddo
   endif
 
+  call bxH_m2i_mj_pij%free() ; call bxH_mi_m2j_pij%free() ; call bxH_mij%free()
 end subroutine hor_visc_Leith_grad_a
 
 !> Calculates the magnitudes of the vorticity gradients used within horizontal_viscosity by the
 !! Leith viscosity schemes, after any QG Leith contribution has been added.
-subroutine hor_visc_Leith_grad_b(CS, nkblock, kmax, is, js, is_Kh, ie_Kh, js_Kh, je_Kh, Ieq, Jeq, &
+subroutine hor_visc_Leith_grad_b(bxH, CS, nkblock, kmax, is_Kh, ie_Kh, js_Kh, je_Kh, &
                                  grad_vort_mag_h_a, grad_vort_mag_q_a, vert_vort_mag_smooth_a, &
                                  vort_xy_dx_a, vort_xy_dx_smooth_a, vort_xy_dy_a, &
                                  vort_xy_dy_smooth_a)
+  type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(hv_opts_CS),    intent(in)    :: CS    !< Options used by the horizontal viscosity kernels
   integer,                       intent(in)    :: nkblock !< The k-block size used to size the following arrays [nondim]
   integer,                       intent(in)    :: kmax   !< The number of active k-layers in the current k-block
-  integer,                       intent(in)    :: is     !< Start i-loop index for the h-point viscosities
-  integer,                       intent(in)    :: js     !< Start j-loop index for the h-point viscosities
   integer,                       intent(in)    :: is_Kh  !< Start i-loop index for the thickness point viscosities
   integer,                       intent(in)    :: ie_Kh  !< End i-loop index for the thickness point viscosities
   integer,                       intent(in)    :: js_Kh  !< Start j-loop index for the thickness point viscosities
   integer,                       intent(in)    :: je_Kh  !< End j-loop index for the thickness point viscosities
-  integer,                       intent(in)    :: Ieq    !< The last i-index at q-points
-  integer,                       intent(in)    :: Jeq    !< The last j-index at q-points
   type(RealArray_t), intent(inout) :: grad_vort_mag_h_a !< Magnitude of vorticity gradient at
                                                         !! h-points [L-1 T-1 ~> m-1 s-1]
   type(RealArray_t), intent(inout) :: grad_vort_mag_q_a !< Magnitude of vorticity gradient at
@@ -3811,6 +3916,7 @@ subroutine hor_visc_Leith_grad_b(CS, nkblock, kmax, is, js, is_Kh, ie_Kh, js_Kh,
   type(RealArray_t), intent(inout) :: vort_xy_dy_smooth_a !< y-derivative of smoothed vertical vorticity
                                                           !! [L-1 T-1 ~> m-1 s-1]
   ! Local variables
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:,:), contiguous, pointer :: vort_xy_dy_smooth, vort_xy_dy, vort_xy_dx_smooth, &
     vort_xy_dx, vert_vort_mag_smooth, grad_vort_mag_q, grad_vort_mag_h
   integer :: i, j, kk
@@ -3819,12 +3925,14 @@ subroutine hor_visc_Leith_grad_b(CS, nkblock, kmax, is, js, is_Kh, ie_Kh, js_Kh,
   call vort_xy_dx_smooth_a%view(vort_xy_dx_smooth) ; call vort_xy_dx_a%view(vort_xy_dx)
   call vert_vort_mag_smooth_a%view(vert_vort_mag_smooth)
   call grad_vort_mag_q_a%view(grad_vort_mag_q) ; call grad_vort_mag_h_a%view(grad_vort_mag_h)
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
 
   do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
     grad_vort_mag_h(i,j,kk) = SQRT(((0.5*(vort_xy_dx(i,J,kk) + vort_xy_dx(i,J-1,kk)))**2) + &
                                 ((0.5*(vort_xy_dy(I,j,kk) + vort_xy_dy(I-1,j,kk)))**2) )
   enddo
-  do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+  do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                 I=bxH_mij%idxS(1):bxH_mij%idxE(1))
     grad_vort_mag_q(I,J,kk) = SQRT(((0.5*(vort_xy_dx(i,J,kk) + vort_xy_dx(i+1,J,kk)))**2) + &
                                 ((0.5*(vort_xy_dy(I,j,kk) + vort_xy_dy(I,j+1,kk)))**2) )
   enddo
@@ -3839,6 +3947,7 @@ subroutine hor_visc_Leith_grad_b(CS, nkblock, kmax, is, js, is_Kh, ie_Kh, js_Kh,
   endif ! Leithy
 
 
+  call bxH_mij%free()
 end subroutine hor_visc_Leith_grad_b
 
 !> Adds the QG Leith contribution to the vorticity gradients for each layer of one tile.
@@ -3963,9 +4072,10 @@ end subroutine hor_visc_backscatter_h
 !> Adds the MEKE-based (EY24_EBT_BS) backscatter contribution to the cross term of
 !! the stress tensor at q-points. The caller must only invoke this routine when
 !! CS%EY24_EBT_BS is true.
-subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, kstart, kmax, is, &
-                                  js, Ieq, Jeq, visc_limit_q_flag_a, sh_xy_a, str_xy_a, &
-                                  BS_coeff_q_a)
+subroutine hor_visc_backscatter_q(bxH, CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, kstart, &
+                                  visc_limit_q_flag_a, sh_xy_a, str_xy_a, BS_coeff_q_a)
+  type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
+                                                       !! [isc:iec, jsc:jec, 1:kmax]
   type(hv_opts_CS),    intent(in)    :: CS    !< Options used by the horizontal viscosity kernels
   type(hor_visc_MEKE_type), intent(in)    :: MEKE_a !< MEKE fields related to Mesoscale Eddy Kinetic Energy.
   type(hor_visc_VarMix_type), intent(in)    :: VarMix_a !< Variable mixing control structure
@@ -3973,11 +4083,6 @@ subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
                                                  !! with VarMix%BS_struct
   integer,                 intent(in)    :: nkblock !< The k-block size used to size the following arrays [nondim]
   integer,                 intent(in)    :: kstart  !< The first absolute k-layer of the current k-block
-  integer,                 intent(in)    :: kmax    !< The number of active k-layers in the current k-block
-  integer,                 intent(in)    :: is  !< Start i-loop index for the q-point stress tensor
-  integer,                 intent(in)    :: js  !< Start j-loop index for the q-point stress tensor
-  integer,                 intent(in)    :: Ieq !< End i-loop index for the q-point stress tensor
-  integer,                 intent(in)    :: Jeq !< End j-loop index for the q-point stress tensor
   type(RealArray_t), intent(in)    :: visc_limit_q_flag_a !< determines whether backscatter is shut off [nondim]
   type(RealArray_t), intent(in)    :: sh_xy_a !< horizontal shearing strain (du/dy + dv/dx) including
                                               !! metric terms [T-1 ~> s-1]
@@ -3986,6 +4091,7 @@ subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
   type(RealArray_t), intent(inout) :: BS_coeff_q_a !< A diagnostic array of the backscatter
                                                    !! coefficient [L2 T-1 ~> m2 s-1]
   ! Local variables
+  type(Box_t) :: bxH_mij ! bxH grown to [is-1:ie, js-1:je]
   real, dimension(:,:,:), contiguous, pointer :: BS_coeff_q, str_xy, sh_xy, visc_limit_q_flag
   real, dimension(:,:), contiguous, pointer :: MEKE_Ku
   real, dimension(:,:,:), contiguous, pointer :: BS_struct
@@ -3996,12 +4102,14 @@ subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
 
   call BS_coeff_q_a%view(BS_coeff_q) ; call str_xy_a%view(str_xy) ; call sh_xy_a%view(sh_xy)
   call visc_limit_q_flag_a%view(visc_limit_q_flag)
+  bxH_mij = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
 
   nullify(MEKE_Ku, BS_struct)
   if (MEKE_a%Ku_a%associated()) call MEKE_a%Ku_a%view(MEKE_Ku)
   if (VarMix_a%BS_struct_a%associated()) call VarMix_a%BS_struct_a%view(BS_struct)
 
-  do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+  do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                 I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
     k = kstart + kk - 1
     if (visc_limit_q_flag(I,J,k) > 0) then
       Kh_BS(I,J,kk) = 0.
@@ -4018,21 +4126,25 @@ subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
     endif
   enddo
 
-  do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+  do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                 I=bxH_mij%idxS(1):bxH_mij%idxE(1))
     str_xy_BS(I,J,kk) = -Kh_BS(I,J,kk) * (sh_xy(I,J,kk))
   enddo
 
   if (CS%do_BS_coeff_q) then
-    do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
+    do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                   I=bxH_mij%idxS(1):bxH_mij%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       BS_coeff_q(I,J,k) = Kh_BS(I,J,kk)
     enddo
   endif
 
-  do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
+  do concurrent (kk=bxH_mij%idxS(3):bxH_mij%idxE(3), J=bxH_mij%idxS(2):bxH_mij%idxE(2), &
+                 I=bxH_mij%idxS(1):bxH_mij%idxE(1))
     str_xy(I,J,kk) = str_xy(I,J,kk) + str_xy_BS(I,J,kk)
   enddo
 
+  call bxH_mij%free()
 end subroutine hor_visc_backscatter_q
 
 !> Computes the Leith+E antisymmetric-viscosity ratio m_leithy, before any smoothing. The
@@ -4435,6 +4547,8 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
   type(RealArray_t), intent(inout) :: GME_effic_q_a !< The filtered efficiency of the
                                                     !! GME terms at q points [nondim]
   ! Local variables
+  type(Box_t) :: bxH0_g2ij ! bxH0 grown to [is-2:ie+2, js-2:je+2]
+  type(Box_t) :: bxH0_m2ij_pij ! bxH0 grown to [is-2:ie+1, js-2:je+1]
   real, dimension(:,:), contiguous, pointer :: GME_effic_q, GME_effic_h, sh_xy_bt, sh_xx_bt, &
     dudy_bt, dvdx_bt, dvdy_bt, dudx_bt, vbtav, ubtav
   real, dimension(:,:), contiguous, pointer :: IdyCu, IdxCv, IdyCv, IdxCu, mask2dBu, mask2dCu, &
@@ -4449,7 +4563,7 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
   real :: boundary_mask_q ! A mask that zeroes out cells with at least one land edge [nondim]
   real :: h_arith_q  ! The arithmetic mean total thickness at q points [H ~> m or kg m-2]
   real :: I_GME_h0   ! The inverse of GME tapering scale [H-1 ~> m-1 or m2 kg-1]
-  integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: i, j, k, Isq, Ieq, Jsq, Jeq, nz
 
   call GME_effic_q_a%view(GME_effic_q) ; call GME_effic_h_a%view(GME_effic_h)
   call sh_xy_bt_a%view(sh_xy_bt) ; call sh_xx_bt_a%view(sh_xx_bt) ; call dudy_bt_a%view(dudy_bt)
@@ -4466,11 +4580,13 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
   if (metrics%dx_dyBu%associated()) call metrics%dx_dyBu%view(dx_dyBu)
   if (metrics%dy_dxBu%associated()) call metrics%dy_dxBu%view(dy_dxBu)
 
-  is  = bxH0%idxS(1)  ; ie  = bxH0%idxE(1)  ; js  = bxH0%idxS(2)  ; je  = bxH0%idxE(2) ; nz = bxH0%idxE(3)
+  nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
+  bxH0_g2ij = bxH0%growBy(lo=[2,2,0], hi=[2,2,0])
+  bxH0_m2ij_pij = bxH0%growBy(lo=[2,2,0], hi=[1,1,0])
 
   ! Calculate the barotropic horizontal tension
-  do concurrent (j=js-2:je+2, i=is-2:ie+2)
+  do concurrent (j=bxH0_g2ij%idxS(2):bxH0_g2ij%idxE(2), i=bxH0_g2ij%idxS(1):bxH0_g2ij%idxE(1))
     dudx_bt(i,j) = DY_dxT(i,j)*((IdyCu(I,j) * ubtav(I,j)) - &
                                    (IdyCu(I-1,j) * ubtav(I-1,j)))
     dvdy_bt(i,j) = DX_dyT(i,j)*((IdxCv(i,J) * vbtav(i,J)) - &
@@ -4489,19 +4605,19 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
   enddo
 
   if (CS%no_slip) then
-    do concurrent (J=js-2:je+1, I=is-2:ie+1)
+    do concurrent (J=bxH0_m2ij_pij%idxS(2):bxH0_m2ij_pij%idxE(2), I=bxH0_m2ij_pij%idxS(1):bxH0_m2ij_pij%idxE(1))
       sh_xy_bt(I,J) = (2.0-mask2dBu(I,J)) * ( dvdx_bt(I,J) + dudy_bt(I,J) )
     enddo
   else
-    do concurrent (J=js-2:je+1, I=is-2:ie+1)
+    do concurrent (J=bxH0_m2ij_pij%idxS(2):bxH0_m2ij_pij%idxE(2), I=bxH0_m2ij_pij%idxS(1):bxH0_m2ij_pij%idxE(1))
       sh_xy_bt(I,J) = mask2dBu(I,J) * ( dvdx_bt(I,J) + dudy_bt(I,J) )
     enddo
   endif
 
-  do concurrent (j=js-2:je+2, i=is-2:ie+2)
+  do concurrent (j=bxH0_g2ij%idxS(2):bxH0_g2ij%idxE(2), i=bxH0_g2ij%idxS(1):bxH0_g2ij%idxE(1))
     htot(i,j) = 0.0
   enddo
-  do concurrent (j=js-2:je+2, i=is-2:ie+2) DO_LOCALITY(local(k))
+  do concurrent (j=bxH0_g2ij%idxS(2):bxH0_g2ij%idxE(2), i=bxH0_g2ij%idxS(1):bxH0_g2ij%idxE(1)) DO_LOCALITY(local(k))
     do k=1,nz
     htot(i,j) = htot(i,j) + h(i,j,k)
   enddo ; enddo
@@ -4521,7 +4637,9 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
     endif
   enddo
 
-  do concurrent (J=js-2:je+1, I=is-2:ie+1) DO_LOCALITY(local(boundary_mask_q, grad_vel_mag_bt_q, h_arith_q))
+  do concurrent (J=bxH0_m2ij_pij%idxS(2):bxH0_m2ij_pij%idxE(2), &
+                 I=bxH0_m2ij_pij%idxS(1):bxH0_m2ij_pij%idxE(1)) &
+                 DO_LOCALITY(local(boundary_mask_q, grad_vel_mag_bt_q, h_arith_q))
     boundary_mask_q = (mask2dCv(i,J) * mask2dCv(i+1,J)) * (mask2dCu(I,j) * mask2dCu(I,j+1))
     grad_vel_mag_bt_q = mask2dBu(I,J) * boundary_mask_q * (dvdx_bt(I,J)**2 + dudy_bt(I,J)**2 + &
           (0.25*((dudx_bt(i,j)+dudx_bt(i+1,j+1)) + (dudx_bt(i,j+1)+dudx_bt(i+1,j))))**2 + &
@@ -4536,6 +4654,7 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
     endif
   enddo
 
+  call bxH0_g2ij%free() ; call bxH0_m2ij_pij%free()
 end subroutine hor_visc_GME_bt
 
 !> Allocates space for and calculates static variables used by horizontal_viscosity.
