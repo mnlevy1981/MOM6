@@ -175,6 +175,11 @@ else
 endif
 ```
 
+If the pointer dummy is also `optional` (MOM6's `OBC` often is), `associated()` on an absent one is
+illegal: set a logical once at the shim's top, `OBC_associated = .false. ; if (present(OBC))
+OBC_associated = associated(OBC)`, and use it for both the `c_loc` test and the capture record
+`_OBC_associated`.
+
 ### 3.3 The interface block
 
 One block per kernel at the top of the host module, every dummy doc-commented:
