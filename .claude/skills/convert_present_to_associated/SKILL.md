@@ -1,7 +1,7 @@
 ---
 name: convert_present_to_associated
 version: "0.4.0"
-description: Convert an optional container dummy (RealArray_t/IntArray_t/LogicalArray_t) from `optional`/`present()` to a non-optional container tested with `x%associated()`, for bind(C) bridge-readiness (C has nullable pointers, not optional arguments). The unit is an argument name across its whole by-value forwarding chain, not one subroutine. Requires the argument to already be a container everywhere in that chain (run convert_array_containers first). Adds no bind(C) bridge -- that is generate_cpp_bridge's job.
+description: Remove `optional` dummies for bind(C) bridge-readiness (C has nullable pointers, not optional arguments). An optional container dummy (RealArray_t/IntArray_t/LogicalArray_t) becomes non-optional and is tested with `x%associated()`; an optional scalar becomes mandatory, with every caller that omitted it passing the value absence used to mean. The unit is an argument name across its whole by-value forwarding chain, not one subroutine. An array argument must already be a container everywhere in that chain (run convert_array_containers first). Adds no bind(C) bridge -- that is generate_cpp_bridge's job.
 user-invocable: true
 argument-hint: <work-directory> <dummy-argument-name>[,<dummy-argument-name>...] [<seed-function-name>]
 ---
@@ -23,9 +23,10 @@ If the arguments are empty, `help`, `--help` or `-h`, print this and stop:
 ```
 Usage: /convert_present_to_associated <work-directory> <dummy-argument-name>[,<dummy-argument-name>...] [<seed-function-name>]
 
-Drop `optional` from an already-containerized dummy across its whole
-forwarding chain, replace present(x) with x%associated(), and give every
-caller that omitted it an unallocated placeholder container.
+Drop `optional` from a dummy across its whole forwarding chain. A container
+dummy is tested with x%associated() and callers that omitted it pass an
+unallocated placeholder; a scalar dummy becomes mandatory and callers that
+omitted it pass its absent-default explicitly.
 ```
 
 ## Step 0 — scope: one subroutine, or the whole forwarding chain
@@ -47,7 +48,7 @@ carries its own signal and ends the chain). Build the set by closure:
 
 ## Hard precondition
 
-Every member's argument is already a container. A `present()`-linked group (`present(a) .and.
+An array argument is already a container in every member (a scalar needs nothing). A `present()`-linked group (`present(a) .and.
 present(b)`, or all-or-nothing handling) converts together, never one member alone.
 
 ## Steps
@@ -67,10 +68,27 @@ present(b)`, or all-or-nothing handling) converts together, never one member alo
    whichever branch runs.
 5. **Leave `%to_c()` alone**; it is already null-safe.
 
+## Optional scalar dummies
+
+An optional `real`/`integer`/`logical` scalar can't cross `bind(C)` either, and has no
+"unassociated" state, so it becomes **mandatory** and its absent meaning moves to the callers.
+Step 0's closure applies unchanged (a caller forwarding its own same-named optional joins the set).
+
+1. **Find the absent-default:** the single value the body uses when `present(x)` is false,
+   typically `x_val = <default> ; if (present(x)) x_val = x`. If absence selects behaviour no
+   single value expresses, stop and ask.
+2. **Drop `optional`.** Replace only the fallback: the default-then-override lines become
+   `x_val = x`; the rest of the body is unchanged.
+3. **Every boundary call site that omitted it passes the default explicitly** (by keyword if the
+   call already uses keywords); call sites that passed a value keep it.
+4. An existing doc comment that describes the absent case ("If present and false, …") is left
+   verbatim and reported to the user (lessons, comment STANDING RULE).
+
 ## Verify
 
 Scripted:
 - No `present(<name>)` or `optional … <name>` left repo-wide for any argument in the set.
+- Scalars: every call that omitted the argument now passes the recorded absent-default.
 - Every placeholder declared within its call's enclosing subroutine; no actual repeated in one call.
 - Every guarded-`%view` pointer nullified first; no `%associated()` inside an OpenMP construct.
 - Doc comments verbatim; line limit (lessons §7).
@@ -89,6 +107,7 @@ Exactly one `!!SKILLS: 0.4.0` line per touched Fortran file, after the license h
 ## Hard rules
 
 - Never convert a raw array, one member of a linked group, or a subroutine without the closure.
+- A scalar's absent-default is one value read from the body, never guessed; otherwise ask.
 - Callee and callers change in the same pass.
 - Placeholders scoped by line range, never shared across two definable dummies of one call.
 - `%associated()` is `pure`; nullify and OpenMP hazards checked at every rewritten guard.
