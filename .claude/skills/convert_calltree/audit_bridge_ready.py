@@ -134,7 +134,8 @@ for t in TARGETS:
             bad_body.append('%s%%...%%%s()' % (base, op))
     bad_body = sorted(set(bad_body))
     heads = re.findall(r'do concurrent \(([^\n]*)', code)
-    bad_loops = [h[:60] for h in heads
+    # A loop clipped by OBC segment bounds runs only with OBC active, which the C++ aborts on.
+    bad_loops = [h[:60] for h in heads if 'OBC%' not in h
                  if not all(re.match(r'\s*\w+\s*=\s*\w+%idxS\(\d\):\w+%idxE\(\d\)\s*$', r)
                             for r in re.split(r',(?![^()]*\))', h.split(')')[0] if False else
                                               re.sub(r'\)\s*(DO_LOCALITY.*)?$', '', h))

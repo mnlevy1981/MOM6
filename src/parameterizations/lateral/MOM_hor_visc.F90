@@ -1426,20 +1426,20 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
   if (MEKE_a%GME_snk_a%associated()) call MEKE_a%GME_snk_a%view(MEKE_GME_snk)
 
   if (find_FrictWork .and. MEKE_a%mom_src_a%associated()) then
-    do j=js,je ; do i=is,ie
+    do concurrent (j=js:je, i=is:ie)
       MEKE_mom_src(i,j) = 0.
-    enddo ; enddo
+    enddo
 
     if (MEKE_a%mom_src_bh_a%associated()) then
-      do j=js,je ; do i=is,ie
+      do concurrent (j=js:je, i=is:ie)
         MEKE_mom_src_bh(i,j) = 0.
-      enddo ; enddo
+      enddo
     endif
 
     if (MEKE_a%GME_snk_a%associated()) then
-      do j=js,je ; do i=is,ie
+      do concurrent (j=js:je, i=is:ie)
         MEKE_GME_snk(i,j) = 0.
-      enddo ; enddo
+      enddo
     endif
   endif
 
@@ -2192,9 +2192,9 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
     ! All viscosity contributions above are subject to resolution scaling
 
     if (rescale_Kh) then
-      do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+      do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
         Kh(i,j,kk) = Res_fn_h(i,j) * Kh(i,j,kk)
-      enddo ; enddo ; enddo
+      enddo
     endif
 
     ! Place a floor on the viscosity, if desired.
@@ -2206,25 +2206,25 @@ subroutine hor_visc_h_coeffs_a(MEKE_a, VarMix_a, CS, metrics, bxH, bxQ, nkblock,
       ! *Add* the MEKE contribution (which might be negative)
       if (use_kh_struct) then
         if (CS%res_scale_MEKE) then
-          do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+          do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh) DO_LOCALITY(local(k))
             k = kstart + kk - 1
             Kh(i,j,kk) = Kh(i,j,kk) + MEKE_Ku(i,j) * Res_fn_h(i,j) * BS_struct(i,j,k)
-          enddo ; enddo ; enddo
+          enddo
         else
-          do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+          do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh) DO_LOCALITY(local(k))
             k = kstart + kk - 1
             Kh(i,j,kk) = Kh(i,j,kk) + MEKE_Ku(i,j) * BS_struct(i,j,k)
-          enddo ; enddo ; enddo
+          enddo
         endif
       else
         if (CS%res_scale_MEKE) then
-          do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+          do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
             Kh(i,j,kk) = Kh(i,j,kk) + MEKE_Ku(i,j) * Res_fn_h(i,j)
-          enddo ; enddo ; enddo
+          enddo
         else
-          do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+          do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
             Kh(i,j,kk) = Kh(i,j,kk) + MEKE_Ku(i,j)
-          enddo ; enddo ; enddo
+          enddo
         endif
       endif
     endif
@@ -2491,17 +2491,17 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
 
     if (use_MEKE_Au) then
       ! *Add* the MEKE contribution
-      do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+      do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
         Ah(i,j,kk) = Ah(i,j,kk) + MEKE_Au(i,j)
-      enddo ; enddo ; enddo
+      enddo
     endif
 
     if (CS%Re_Ah > 0.0) then
-      do kk=1,kmax ; do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
+      do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh) DO_LOCALITY(local(k, KE))
         k = kstart + kk - 1
         KE = 0.125*(((u(I,j,k)+u(I-1,j,k))**2) + ((v(i,J,k)+v(i,J-1,k))**2))
         Ah(i,j,kk) = sqrt(KE) * Re_Ah_const_xx(i,j)
-      enddo ; enddo ; enddo
+      enddo
     endif
 
     if (CS%bound_Ah) then
@@ -2899,9 +2899,9 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
     ! All viscosity contributions above are subject to resolution scaling
 
     if (rescale_Kh) then
-      do kk=1,kmax ; do J=js-1,Jeq ; do I=is-1,Ieq
+      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
         Kh(I,J,kk) = Res_fn_q(I,J) * Kh(I,J,kk)
-      enddo ; enddo ; enddo
+      enddo
     endif
 
     do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
@@ -2910,7 +2910,7 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (use_MEKE_Ku .and. .not. CS%EY24_EBT_BS) then
       if (use_kh_struct) then
-        do kk=1,kmax ; do J=js-1,Jeq ; do I=is-1,Ieq
+        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k, meke_res_fn))
           k = kstart + kk - 1
           meke_res_fn = 1.
           if (CS%res_scale_MEKE) meke_res_fn = Res_fn_q(I,J)
@@ -2919,9 +2919,9 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
                                      (MEKE_Ku(i+1,j+1)*BS_struct(i+1,j+1,k))) + &
                                      ((MEKE_Ku(i+1,j)*BS_struct(i+1,j,k)) + &
                                      (MEKE_Ku(i,j+1)*BS_struct(i,j+1,k))) ) * meke_res_fn
-        enddo ; enddo ; enddo
+        enddo
       else
-        do kk=1,kmax ; do J=js-1,Jeq ; do I=is-1,Ieq
+        do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(meke_res_fn))
           meke_res_fn = 1.
           if (CS%res_scale_MEKE) meke_res_fn = Res_fn_q(I,J)
 
@@ -2929,7 +2929,7 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
               (MEKE_Ku(i,j) + MEKE_Ku(i+1,j+1)) + &
                                      (MEKE_Ku(i+1,j) + &
                                       MEKE_Ku(i,j+1)) ) * meke_res_fn
-        enddo ; enddo ; enddo
+        enddo
       endif
     endif
 
@@ -3043,10 +3043,10 @@ subroutine hor_visc_q_coeffs(MEKE_a, VarMix_a, Gcore, CS, metrics, bxH, bxQ, nkb
 
     if (use_MEKE_Au) then
       ! *Add* the MEKE contribution
-      do kk=1,kmax ; do J=js-1,Jeq ; do I=is-1,Ieq
+      do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
         Ah(I,J,kk) = Ah(I,J,kk) + 0.25 * ( &
             (MEKE_Au(i,j) + MEKE_Au(i+1,j+1)) + (MEKE_Au(i+1,j) + MEKE_Au(i,j+1)) )
-      enddo ; enddo ; enddo
+      enddo
     endif
 
     ! XXX: It is just overwrites the values!
@@ -3528,10 +3528,11 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
                                   - (vh(i,J-1,k)*IareaCv(i,J-1)/(h_v(i,J-1,kk)+h_neglect)))) )) ) )) )
     enddo ; endif
     if (find_FrictWork .and. MEKE_a%mom_src_a%associated() .and. MEKE_a%GME_snk_a%associated()) then
-      do kk=1,kmax ; do j=js,je ; do i=is,ie
+      do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k))
+        do kk=1,kmax
         k = kstart+kk-1
         MEKE_GME_snk(i,j) = MEKE_GME_snk(i,j) + FrictWork_GME(i,j,k)
-      enddo ; enddo ; enddo
+      enddo ; enddo
     endif
   endif
 
@@ -3547,7 +3548,8 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   ! energy loss seen as a reduction in the (biharmonic) frictional source term.
   if (find_FrictWork .and. MEKE_a%mom_src_a%associated()) then
     if (MEKE_a%backscatter_Ro_c /= 0.) then
-      do kk=1,kmax ; do j=js,je ; do i=is,ie
+      do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k, FatH, Shear_mag_bc, RoScl, Sh_F_pow))
+        do kk=1,kmax
         k = kstart + kk - 1
         FatH = 0.25*( (abs(CoriolisBu(I-1,J-1)) + abs(CoriolisBu(I,J))) + &
                       (abs(CoriolisBu(I-1,J)) + abs(CoriolisBu(I,J-1))) )
@@ -3577,18 +3579,20 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
         if (MEKE_a%mom_src_bh_a%associated()) &
           MEKE_mom_src_bh(i,j) = MEKE_mom_src_bh(i,j) &
               + (FrictWork_bh(i,j,k) - RoScl * FrictWork_bh(i,j,k))
-      enddo ; enddo ; enddo
+      enddo ; enddo
     else
-      do kk=1,kmax ; do j=js,je ; do i=is,ie
+      do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k))
+        do kk=1,kmax
         k = kstart + kk - 1
         MEKE_mom_src(i,j) = MEKE_mom_src(i,j) + FrictWork(i,j,k)
-      enddo ; enddo ; enddo
+      enddo ; enddo
 
       if (MEKE_a%mom_src_bh_a%associated()) then
-        do kk=1,kmax ; do j=js,je ; do i=is,ie
+        do concurrent (j=js:je, i=is:ie) DO_LOCALITY(local(kk, k))
+          do kk=1,kmax
           k = kstart + kk - 1
           MEKE_mom_src_bh(i,j) = MEKE_mom_src_bh(i,j) + FrictWork_bh(i,j,k)
-        enddo ; enddo ; enddo
+        enddo ; enddo
       endif
     endif ! MEKE_a%backscatter_Ro_c
 
@@ -3926,7 +3930,7 @@ subroutine hor_visc_backscatter_h(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
   if (MEKE_a%Ku_a%associated()) call MEKE_a%Ku_a%view(MEKE_Ku)
   if (VarMix_a%BS_struct_a%associated()) call VarMix_a%BS_struct_a%view(BS_struct)
 
-  do kk=1,kmax ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+  do concurrent (kk=1:kmax, j=Jsq:Jeq+1, i=Isq:Ieq+1) DO_LOCALITY(local(k))
     k = kstart + kk - 1
     if (visc_limit_h_flag(i,j,k) > 0) then
       Kh_BS(i,j,kk) = 0.
@@ -3937,7 +3941,7 @@ subroutine hor_visc_backscatter_h(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
         Kh_BS(i,j,kk) = MEKE_Ku(i,j)
       endif
     endif
-  enddo ; enddo ; enddo
+  enddo
 
   do concurrent (kk=1:kmax, j=Jsq:Jeq+1, i=Isq:Ieq+1)
     str_xx_BS(i,j,kk) = -Kh_BS(i,j,kk) * sh_xx(i,j,kk)
@@ -3997,7 +4001,7 @@ subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
   if (MEKE_a%Ku_a%associated()) call MEKE_a%Ku_a%view(MEKE_Ku)
   if (VarMix_a%BS_struct_a%associated()) call VarMix_a%BS_struct_a%view(BS_struct)
 
-  do kk=1,kmax ; do J=js-1,Jeq ; do I=is-1,Ieq
+  do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq) DO_LOCALITY(local(k))
     k = kstart + kk - 1
     if (visc_limit_q_flag(I,J,k) > 0) then
       Kh_BS(I,J,kk) = 0.
@@ -4012,7 +4016,7 @@ subroutine hor_visc_backscatter_q(CS, MEKE_a, VarMix_a, use_kh_struct, nkblock, 
                             (MEKE_Ku(i+1,j) + MEKE_Ku(i,j+1)) )
       endif
     endif
-  enddo ; enddo ; enddo
+  enddo
 
   do concurrent (kk=1:kmax, J=js-1:Jeq, I=is-1:Ieq)
     str_xy_BS(I,J,kk) = -Kh_BS(I,J,kk) * (sh_xy(I,J,kk))
@@ -4072,7 +4076,7 @@ subroutine hor_visc_Leithy_m(Gcore, CS, metrics, nkblock, kmax, is_Kh, ie_Kh, js
 
   ! Get m_leithy
   if (CS%smooth_Ah) then
-    do kk=1,kmax
+    do concurrent (kk=1:kmax)
       m_leithy(:,:,kk) = 0.0 ! This is here to initialize domain edge halo values.
     enddo
   endif
@@ -4141,7 +4145,7 @@ subroutine hor_visc_Leithy_Ah(CS, metrics, nkblock, kmax, is_Kh, ie_Kh, js_Kh, j
   enddo
   if (CS%smooth_Ah) then
     ! Smooth Ah before applying upper bound.  Square Ah, then smooth, then take its square root.
-    do kk=1,kmax
+    do concurrent (kk=1:kmax)
       Ah_sq(:,:,kk) = 0.0 ! This is here to initialize domain edge halo values.
     enddo
     do concurrent (kk=1:kmax, j=js_Kh:je_Kh, i=is_Kh:ie_Kh)
@@ -4466,43 +4470,44 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
 
   ! Calculate the barotropic horizontal tension
-  do j=js-2,je+2 ; do i=is-2,ie+2
+  do concurrent (j=js-2:je+2, i=is-2:ie+2)
     dudx_bt(i,j) = DY_dxT(i,j)*((IdyCu(I,j) * ubtav(I,j)) - &
                                    (IdyCu(I-1,j) * ubtav(I-1,j)))
     dvdy_bt(i,j) = DX_dyT(i,j)*((IdxCv(i,J) * vbtav(i,J)) - &
                                    (IdxCv(i,J-1) * vbtav(i,J-1)))
-  enddo ; enddo
-  do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+  enddo
+  do concurrent (j=Jsq-1:Jeq+2, i=Isq-1:Ieq+2)
     sh_xx_bt(i,j) = dudx_bt(i,j) - dvdy_bt(i,j)
-  enddo ; enddo
+  enddo
 
   ! Components for the barotropic shearing strain
-  do J=Jsq-2,Jeq+2 ; do I=Isq-2,Ieq+2
+  do concurrent (J=Jsq-2:Jeq+2, I=Isq-2:Ieq+2)
     dvdx_bt(I,J) = DY_dxBu(I,J)*((vbtav(i+1,J)*IdyCv(i+1,J)) &
                                   - (vbtav(i,J)*IdyCv(i,J)))
     dudy_bt(I,J) = DX_dyBu(I,J)*((ubtav(I,j+1)*IdxCu(I,j+1)) &
                                   - (ubtav(I,j)*IdxCu(I,j)))
-  enddo ; enddo
+  enddo
 
   if (CS%no_slip) then
-    do J=js-2,je+1 ; do I=is-2,ie+1
+    do concurrent (J=js-2:je+1, I=is-2:ie+1)
       sh_xy_bt(I,J) = (2.0-mask2dBu(I,J)) * ( dvdx_bt(I,J) + dudy_bt(I,J) )
-    enddo ; enddo
+    enddo
   else
-    do J=js-2,je+1 ; do I=is-2,ie+1
+    do concurrent (J=js-2:je+1, I=is-2:ie+1)
       sh_xy_bt(I,J) = mask2dBu(I,J) * ( dvdx_bt(I,J) + dudy_bt(I,J) )
-    enddo ; enddo
+    enddo
   endif
 
-  do j=js-2,je+2 ; do i=is-2,ie+2
+  do concurrent (j=js-2:je+2, i=is-2:ie+2)
     htot(i,j) = 0.0
-  enddo ; enddo
-  do k=1,nz ; do j=js-2,je+2 ; do i=is-2,ie+2
+  enddo
+  do concurrent (j=js-2:je+2, i=is-2:ie+2) DO_LOCALITY(local(k))
+    do k=1,nz
     htot(i,j) = htot(i,j) + h(i,j,k)
-  enddo ; enddo ; enddo
+  enddo ; enddo
 
   I_GME_h0 = 1.0 / CS%GME_h0
-  do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+  do concurrent (j=Jsq-1:Jeq+2, i=Isq-1:Ieq+2) DO_LOCALITY(local(boundary_mask_h, grad_vel_mag_bt_h))
     boundary_mask_h = (mask2dCu(I,j) * mask2dCu(I-1,j)) * (mask2dCv(i,J) * mask2dCv(i,J-1))
     grad_vel_mag_bt_h = mask2dT(I,J) * boundary_mask_h * (dudx_bt(i,j)**2 + dvdy_bt(i,j)**2 + &
           (0.25*((dvdx_bt(I,J)+dvdx_bt(I-1,J-1)) + (dvdx_bt(I,J-1)+dvdx_bt(I-1,J))))**2 + &
@@ -4514,9 +4519,9 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
     else
       GME_effic_h(i,j) = 0.0
     endif
-  enddo ; enddo
+  enddo
 
-  do J=js-2,je+1 ; do I=is-2,ie+1
+  do concurrent (J=js-2:je+1, I=is-2:ie+1) DO_LOCALITY(local(boundary_mask_q, grad_vel_mag_bt_q, h_arith_q))
     boundary_mask_q = (mask2dCv(i,J) * mask2dCv(i+1,J)) * (mask2dCu(I,j) * mask2dCu(I,j+1))
     grad_vel_mag_bt_q = mask2dBu(I,J) * boundary_mask_q * (dvdx_bt(I,J)**2 + dudy_bt(I,J)**2 + &
           (0.25*((dudx_bt(i,j)+dudx_bt(i+1,j+1)) + (dudx_bt(i,j+1)+dudx_bt(i+1,j))))**2 + &
@@ -4529,7 +4534,7 @@ subroutine hor_visc_GME_bt(Gcore, bxH0, bxQ0, CS, metrics, h_a, ubtav_a, vbtav_a
     else
       GME_effic_q(I,J) = 0.0
     endif
-  enddo ; enddo
+  enddo
 
 end subroutine hor_visc_GME_bt
 
@@ -5774,7 +5779,7 @@ subroutine smooth_GME_h_pass(Gcore, bxH0, bxQ0, GME_flux_h_a, xh)
 
     GME_flux_h_original(:,:) = GME_flux_h(:,:)
     ! apply smoothing on GME
-    do j=Jsq-xh,Jeq+1+xh ; do i=Isq-xh,Ieq+1+xh
+    do concurrent (j=Jsq-xh:Jeq+1+xh, i=Isq-xh:Ieq+1+xh) DO_LOCALITY(local(ww, we, ws, wn, wc))
       ! skip land points
       if (mask2dT(i,j)==0.) cycle
       ! compute weights
@@ -5786,7 +5791,7 @@ subroutine smooth_GME_h_pass(Gcore, bxH0, bxQ0, GME_flux_h_a, xh)
       GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
                        + ((ww * GME_flux_h_original(i-1,j) + we * GME_flux_h_original(i+1,j)) &
                         + (ws * GME_flux_h_original(i,j-1) + wn * GME_flux_h_original(i,j+1)))
-    enddo ; enddo
+    enddo
 
 end subroutine smooth_GME_h_pass
 
@@ -5819,7 +5824,7 @@ subroutine smooth_GME_q_pass(Gcore, bxH0, bxQ0, GME_flux_q_a, xq)
 
     GME_flux_q_original(:,:) = GME_flux_q(:,:)
     ! apply smoothing on GME
-    do J=js-1-xq,je+xq ; do I=is-1-xq,ie+xq
+    do concurrent (J=js-1-xq:je+xq, I=is-1-xq:ie+xq) DO_LOCALITY(local(ww, we, ws, wn, wc))
       ! skip land points
       if (mask2dBu(I,J)==0.) cycle
       ! compute weights
@@ -5831,7 +5836,7 @@ subroutine smooth_GME_q_pass(Gcore, bxH0, bxQ0, GME_flux_q_a, xq)
       GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
                        + ((ww * GME_flux_q_original(I-1,J) + we * GME_flux_q_original(I+1,J)) &
                         + (ws * GME_flux_q_original(I,J-1) + wn * GME_flux_q_original(I,J+1)))
-    enddo ; enddo
+    enddo
 
 end subroutine smooth_GME_q_pass
 
@@ -5944,7 +5949,8 @@ subroutine smooth_x9_h(Gcore, bxH0, field_h_a, zero_land)
   do s=1,0,-1
     fh_prev(:,:) = field_h(:,:)
     ! apply smoothing on field_h using rotationally symmetric expressions.
-    do j=js-s,je+s ; do i=is-s,ie+s ; if (mask2dT(i,j) > 0.0) then
+    do concurrent (j=js-s:je+s, i=is-s:ie+s) DO_LOCALITY(local(Iwts))
+      if (mask2dT(i,j) > 0.0) then
       Iwts = 0.0625
       if (.not. zero_land_val) &
         Iwts = 1.0 / ( (4.0*mask2dT(i,j) + &
@@ -5957,7 +5963,7 @@ subroutine smooth_x9_h(Gcore, bxH0, field_h_a, zero_land)
                                     (mask2dT(i,j-1) * fh_prev(i,j-1) + mask2dT(i,j+1) * fh_prev(i,j+1))) &
                               + ((mask2dT(i-1,j-1) * fh_prev(i-1,j-1) + mask2dT(i+1,j+1) * fh_prev(i+1,j+1)) + &
                                  (mask2dT(i-1,j+1) * fh_prev(i-1,j+1) + mask2dT(i+1,j-1) * fh_prev(i-1,j-1))) ))
-    endif ; enddo ; enddo
+    endif ; enddo
   enddo
 
 end subroutine smooth_x9_h
@@ -6002,7 +6008,8 @@ subroutine smooth_x9_uv(Gcore, bxH0, bxQ0, field_u_a, field_v_a, zero_land)
   do s=1,0,-1
     fu_prev(:,:) = field_u(:,:)
     ! apply smoothing on field_u using the original non-rotationally symmetric expressions.
-    do j=js-s,je+s ; do I=Isq-s,Ieq+s ; if (mask2dCu(I,j) > 0.0) then
+    do concurrent (j=js-s:je+s, I=Isq-s:Ieq+s) DO_LOCALITY(local(Iwts))
+      if (mask2dCu(I,j) > 0.0) then
       Iwts = 0.0625
       if (.not. zero_land_val) &
         Iwts = 1.0 / ( (4.0*mask2dCu(I,j) + &
@@ -6015,11 +6022,12 @@ subroutine smooth_x9_uv(Gcore, bxH0, bxQ0, field_u_a, field_v_a, zero_land)
                                     (mask2dCu(I,j-1) * fu_prev(I,j-1) + mask2dCu(I,j+1) * fu_prev(I,j+1))) &
                               + ((mask2dCu(I-1,j-1) * fu_prev(I-1,j-1) + mask2dCu(I+1,j+1) * fu_prev(I+1,j+1)) + &
                                  (mask2dCu(I-1,j+1) * fu_prev(I-1,j+1) + mask2dCu(I+1,j-1) * fu_prev(I-1,j-1))) ))
-    endif ; enddo ; enddo
+    endif ; enddo
 
     fv_prev(:,:) = field_v(:,:)
     ! apply smoothing on field_v using the original non-rotationally symmetric expressions.
-    do J=Jsq-s,Jeq+s ; do i=is-s,ie+s ; if (mask2dCv(i,J) > 0.0) then
+    do concurrent (J=Jsq-s:Jeq+s, i=is-s:ie+s) DO_LOCALITY(local(Iwts))
+      if (mask2dCv(i,J) > 0.0) then
       Iwts = 0.0625
       if (.not. zero_land_val) &
         Iwts = 1.0 / ( (4.0*mask2dCv(i,J) + &
@@ -6032,7 +6040,7 @@ subroutine smooth_x9_uv(Gcore, bxH0, bxQ0, field_u_a, field_v_a, zero_land)
                                     (mask2dCv(i,J-1) * fv_prev(i,J-1) + mask2dCv(i,J+1) * fv_prev(i,J+1))) &
                               + ((mask2dCv(i-1,J-1) * fv_prev(i-1,J-1) + mask2dCv(i+1,J+1) * fv_prev(i+1,J+1)) + &
                                  (mask2dCv(i-1,J+1) * fv_prev(i-1,J+1) + mask2dCv(i+1,J-1) * fv_prev(i-1,J-1))) ))
-    endif ; enddo ; enddo
+    endif ; enddo
   enddo
 
 end subroutine smooth_x9_uv

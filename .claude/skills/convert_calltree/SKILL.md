@@ -191,7 +191,8 @@ direction rule; record any deviation the survey justifies.
    (item 4).
 9. **`hoist_container_marshalling`**, once, at the tree's root.
 10. **`convert_loops_to_box_iterators`**, once the tree is stable; one bit-for-bit checkpoint
-    per core box.
+    per core box. Serial loop nests nobody has converted go first through
+    `convert_serial_loops_to_do_concurrent`, as their own checkpoint.
 
 **Phase 3 execution order** is computed from 1b's call graph over every subroutine except the
 wrapper and the per-point kernels (a subroutine calling only per-point kernels is a leaf): a
@@ -269,7 +270,8 @@ means, for every Phase 3 target in the tree and in every sibling call tree:
    Fortran container, so lazy allocation of persistent or bridge-crossing data moves to the
    wrapper. Local scratch containers inside the Fortran implementation are fine (e.g. allocated
    once per call and `%rebound` per tile): the C++ side does its own tiling and scratch.
-3. Every `do concurrent` iterates over a `Box_t`.
+3. Every `do concurrent` iterates over a `Box_t`, except a loop whose range is clipped by OBC
+   segment data: it runs only with OBC active, which the C++ side aborts on (item 1).
 4. Per-point kernels take no `tv`/`VarMix`/`G`/`GV`/`US`.
 
 Run it as the scripted audit `audit_bridge_ready.py` (this skill's directory). Every gap becomes

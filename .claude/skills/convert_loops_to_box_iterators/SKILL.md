@@ -40,13 +40,20 @@ or boxes grown from them. Loop bodies are untouched.
 
 **In scope:** `do concurrent` headers whose every range is a box bound plus a constant offset.
 
-**Out of scope (header left alone):** serial `do` loops; ranges clipped by non-box data (OBC
+**Out of scope (header left alone):** serial `do` loops (convert them first with
+`convert_serial_loops_to_do_concurrent`); ranges clipped by non-box data (OBC
 segment bounds, a `min`/`max`, a runtime stencil not already folded into a core box). Loop
 bodies, index variable names/case/order, `DO_LOCALITY(...)` and `!$omp` directives never change.
 
 ## The core technique
 
-1. **Resolve every bound to its box** (via the extraction lines, the root's `%set` calls and the
+1. **Tile-relative indices.** A loop over a tile-relative index (`kk=1:kmax`, because the scratch
+   it uses is indexed that way) iterates a box in the same index space: the root sets the tile
+   boxes' range for that dimension to `1:kmax` and passes the tile offset (`kstart`) to each
+   kernel as a plain argument, so the body's `k = kstart + kk - 1` is unchanged. Never re-index
+   scratch or rewrite bodies to fit a box.
+
+   **Resolve every bound to its box** (via the extraction lines, the root's `%set` calls and the
    `G` fields behind them) and write each range as `core ± offset` per dimension.
 
 2. **Prove it equal in both memory modes.** `IscB`/`JscB` are `isc`/`jsc` non-symmetric but
@@ -91,7 +98,12 @@ bodies, index variable names/case/order, `DO_LOCALITY(...)` and `!$omp` directiv
    run to the named core boxes.
 2. Invoke `array_container_lessons` if not yet loaded this session.
 3. Each subroutine found exactly once; each already has box iteration (box dummies, or a tile
-   loop that builds them). If not, stop: it needs the box/tile conversion first.
+   loop that builds them), **or receives its bounds as integer dummies from a caller that has
+   it**. Such a routine takes the caller's core boxes instead (technique 3, updating every call
+   site) and its integer bound dummies are dropped once unused (technique 6). A bound the caller
+   chooses at run time (e.g. `is_Kh` = `Isq` or `is-1` by option) is a scheme-specific core box
+   the root sets from those scalars, never a derived box. Anything else: stop, it needs the
+   box/tile conversion first.
 
 ### 1. Inventory and reduce
 
