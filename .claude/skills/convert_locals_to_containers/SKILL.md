@@ -90,7 +90,7 @@ pass the `%view` pointer `<name>`, unchanged.
   passes it directly.
 - **Comments:** every local's plain-comment text survives verbatim; no comment line edited.
 - **Diff scope:** only local declarations and call-site marshalling changed.
-- **Format:** every added line within 100 columns.
+- **Format:** line limit (lessons §7).
 - **Flagged locals:** each reported with the decision applied (plan or user).
 - **Build:** don't compile, build or run tests unless the user explicitly allows it in this
   conversation (`~/.claude/CLAUDE.md`). Say the build is unrun, for both infra layers, and name a

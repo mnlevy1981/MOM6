@@ -75,7 +75,7 @@ bodies, index variable names/case/order, `DO_LOCALITY(...)` and `!$omp` directiv
    do concurrent (k=bxQ_pij%idxS(3):bxQ_pij%idxE(3), j=bxQ_pij%idxS(2):bxQ_pij%idxE(2), &
                   I=bxQ_pij%idxS(1):bxQ_pij%idxE(1)) DO_LOCALITY(local(hArea_q))
    ```
-   Past 100 columns, move the `DO_LOCALITY` tail to a third line after `) &`. A loop that runs
+   Past the line limit (lessons §7), move the `DO_LOCALITY` tail to a third line after `) &`. A loop that runs
    before the tile loop needs its core box allocated and set there (move the `safe_alloc` up,
    don't duplicate it); the tile loop re-`set`s it as before.
 

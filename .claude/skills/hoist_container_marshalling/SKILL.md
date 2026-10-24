@@ -144,7 +144,7 @@ Every early return must still reach the frees (lessons §9 #15).
 - **Diff scope:** no loop body, callee, or `cpu_clock` call touched; only marshalling and branch
   structure.
 - **Comments:** `!<` count identical before/after; no comment line edited.
-- **Format:** every added line within 100 columns (lessons §7).
+- **Format:** line limit (lessons §7).
 - **Build:** don't compile, build or run tests unless the user explicitly allows it in this
   conversation (`~/.claude/CLAUDE.md`). Say the build is unrun, for both infra layers.
 

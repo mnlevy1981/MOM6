@@ -673,70 +673,71 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   ! Local variables
   type(RealArray_t) :: u_layer_a ! One layer of the smoothed zonal velocity [L T-1 ~> m s-1]
   type(RealArray_t) :: v_layer_a ! One layer of the smoothed meridional velocity [L T-1 ~> m s-1]
-  type(RealArray_t) :: u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, hu_cont_a, hv_cont_a, &
-    u_smooth_a, v_smooth_a, dz_a, slope_x_a, slope_y_a, sh_xx_bt_a, sh_xy_bt_a, GME_effic_h_a, &
-    GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, GME_coeff_q_a, str_xx_GME_a, &
-    str_xy_GME_a, NoSt_a, ShSt_a, FrictWork_a, FrictWork_bh_a, FrictWork_GME_a, Ah_h_a, Ah_q_a, &
-    Kh_h_a, Kh_q_a, grid_Re_Kh_a, grid_Re_Ah_a, div_xx_h_a, sh_xx_h_a, vort_xy_q_a, sh_xy_q_a, &
-    visc_limit_h_a, visc_limit_q_a, visc_limit_h_flag_a, visc_limit_q_flag_a, visc_limit_h_frac_a, &
-    visc_limit_q_frac_a, BS_coeff_h_a, BS_coeff_q_a
+  type(RealArray_t) :: u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, hu_cont_a, hv_cont_a
+  real, dimension(:,:), contiguous, pointer :: sh_xx_bt, sh_xy_bt, GME_effic_h, GME_effic_q
+  real, dimension(:,:,:), contiguous, pointer :: u_smooth, v_smooth, dz, slope_x, slope_y, &
+    KH_u_GME, KH_v_GME, GME_coeff_h, GME_coeff_q, str_xx_GME, str_xy_GME, NoSt, ShSt, FrictWork, &
+    FrictWork_bh, FrictWork_GME, Ah_h, Ah_q, Kh_h, Kh_q, grid_Re_Kh, grid_Re_Ah, div_xx_h, &
+    sh_xx_h, vort_xy_q, sh_xy_q, visc_limit_h, visc_limit_q, visc_limit_h_flag, visc_limit_q_flag, &
+    visc_limit_h_frac, visc_limit_q_frac, BS_coeff_h, BS_coeff_q
   real, dimension(SZI_(G),SZJB_(G)) :: &
     dudx_bt, dvdy_bt ! components in the barotropic horizontal tension [T-1 ~> s-1]
-  real, dimension(SZI_(G),SZJ_(G)) :: &
-    sh_xx_bt      ! barotropic horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
+  type(RealArray_t) :: &
+    sh_xx_bt_a    ! barotropic horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
+  type(RealArray_t) :: &
+    str_xx_GME_a ! smoothed diagonal term in the stress tensor from GME [L2 T-2 ~> m2 s-2]
   real, dimension(SZI_(G),SZJ_(G),nkblock) :: &
-    str_xx_GME, & ! smoothed diagonal term in the stress tensor from GME [L2 T-2 ~> m2 s-2]
     FrictWorkIntz, & ! depth integrated energy dissipated by lateral friction [R Z L2 T-3 ~> W m-2]
     FrictWorkIntz_bh   ! depth integrated energy dissipated by biharmonic lateral friction [R Z L2 T-3 ~> W m-2]
-  real, dimension(SZI_(G),SZJ_(G)) :: &
-    GME_effic_h   ! The filtered efficiency of the GME terms at h points [nondim]
+  type(RealArray_t) :: &
+    GME_effic_h_a ! The filtered efficiency of the GME terms at h points [nondim]
   real, dimension(SZIB_(G),SZJB_(G)) :: &
     dvdx_bt, dudy_bt   ! components in the barotropic shearing strain [T-1 ~> s-1]
-  real, dimension(SZIB_(G),SZJB_(G)) :: &
-    sh_xy_bt      ! barotropic horizontal shearing strain (du/dy + dv/dx) inc. metric terms [T-1 ~> s-1]
-  real, dimension(SZIB_(G),SZJB_(G),nkblock) :: &
-    str_xy_GME    ! smoothed cross term in the stress tensor from GME [L2 T-2 ~> m2 s-2]
-  real, dimension(SZIB_(G),SZJB_(G)) :: &
-    GME_effic_q   ! The filtered efficiency of the GME terms at q points [nondim]
-  real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
-    Ah_q, &      ! biharmonic viscosity at corner points [L4 T-1 ~> m4 s-1]
-    Kh_q, &      ! Laplacian viscosity at corner points [L2 T-1 ~> m2 s-1]
-    vort_xy_q, & ! vertical vorticity at corner points [T-1 ~> s-1]
-    sh_xy_q,   & ! horizontal shearing strain at corner points [T-1 ~> s-1]
-    GME_coeff_q, &  !< GME coeff. at q-points [L2 T-1 ~> m2 s-1]
-    visc_limit_q, &  ! used to stabilize the EY24_EBT_BS backscatter [nondim]
-    visc_limit_q_flag, & ! determines whether backscatter is shut off [nondim]
-    visc_limit_q_frac, & ! determines how close backscatter is to shutting off [nondim]
-    BS_coeff_q, &  ! A diagnostic array of the backscatter coefficient [L2 T-1 ~> m2 s-1]
-    ShSt         ! A diagnostic array of shear stress [T-1 ~> s-1].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)+1) :: &
-    KH_u_GME, &  !< Isopycnal height diffusivities in u-columns [L2 T-1 ~> m2 s-1]
-    slope_x      !< Isopycnal slope in i-direction [Z L-1 ~> nondim]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)+1) :: &
-    KH_v_GME, &  !< Isopycnal height diffusivities in v-columns [L2 T-1 ~> m2 s-1]
-    slope_y      !< Isopycnal slope in j-direction [Z L-1 ~> nondim]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
-    Ah_h, &          ! biharmonic viscosity at thickness points [L4 T-1 ~> m4 s-1]
-    Kh_h, &          ! Laplacian viscosity at thickness points [L2 T-1 ~> m2 s-1]
-    dz, &            ! Height change across layers [Z ~> m]
-    FrictWork, &     ! work done by MKE dissipation mechanisms [R Z L2 T-3 ~> W m-2]
-    FrictWork_bh, &  ! work done by the biharmonic MKE dissipation mechanisms [R Z L2 T-3 ~> W m-2]
-    FrictWork_GME, & ! work done by GME [R Z L2 T-3 ~> W m-2]
-    div_xx_h,      & ! horizontal divergence [T-1 ~> s-1]
-    sh_xx_h,       & ! horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
-    NoSt, &          ! A diagnostic array of normal stress [T-1 ~> s-1].
-    BS_coeff_h       ! A diagnostic array of the backscatter coefficient [L2 T-1 ~> m2 s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
-    grid_Re_Kh, &    ! Grid Reynolds number for Laplacian horizontal viscosity at h points [nondim]
-    grid_Re_Ah, &    ! Grid Reynolds number for Biharmonic horizontal viscosity at h points [nondim]
-    GME_coeff_h, &   ! GME coefficient at h-points [L2 T-1 ~> m2 s-1]
-    visc_limit_h, &  ! Used to stabilize the EY24_EBT_BS backscatter [nondim]
-    visc_limit_h_flag, & ! determines whether backscatter is shut off [nondim]
-    visc_limit_h_frac    ! determines how close backscatter is to shutting off [nondim]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
-    u_smooth         ! Zonal velocity, smoothed with a spatial low-pass filter [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
-    v_smooth         ! Meridional velocity, smoothed with a spatial low-pass filter [L T-1 ~> m s-1]
+  type(RealArray_t) :: &
+    sh_xy_bt_a    ! barotropic horizontal shearing strain (du/dy + dv/dx) inc. metric terms [T-1 ~> s-1]
+  type(RealArray_t) :: &
+    str_xy_GME_a  ! smoothed cross term in the stress tensor from GME [L2 T-2 ~> m2 s-2]
+  type(RealArray_t) :: &
+    GME_effic_q_a ! The filtered efficiency of the GME terms at q points [nondim]
+  type(RealArray_t) :: &
+    Ah_q_a, &      ! biharmonic viscosity at corner points [L4 T-1 ~> m4 s-1]
+    Kh_q_a, &      ! Laplacian viscosity at corner points [L2 T-1 ~> m2 s-1]
+    vort_xy_q_a, & ! vertical vorticity at corner points [T-1 ~> s-1]
+    sh_xy_q_a,   & ! horizontal shearing strain at corner points [T-1 ~> s-1]
+    GME_coeff_q_a, &  !< GME coeff. at q-points [L2 T-1 ~> m2 s-1]
+    visc_limit_q_a, &  ! used to stabilize the EY24_EBT_BS backscatter [nondim]
+    visc_limit_q_flag_a, & ! determines whether backscatter is shut off [nondim]
+    visc_limit_q_frac_a, & ! determines how close backscatter is to shutting off [nondim]
+    BS_coeff_q_a, &  ! A diagnostic array of the backscatter coefficient [L2 T-1 ~> m2 s-1]
+    ShSt_a       ! A diagnostic array of shear stress [T-1 ~> s-1].
+  type(RealArray_t) :: &
+    KH_u_GME_a, &  !< Isopycnal height diffusivities in u-columns [L2 T-1 ~> m2 s-1]
+    slope_x_a    !< Isopycnal slope in i-direction [Z L-1 ~> nondim]
+  type(RealArray_t) :: &
+    KH_v_GME_a, &  !< Isopycnal height diffusivities in v-columns [L2 T-1 ~> m2 s-1]
+    slope_y_a    !< Isopycnal slope in j-direction [Z L-1 ~> nondim]
+  type(RealArray_t) :: &
+    Ah_h_a, &          ! biharmonic viscosity at thickness points [L4 T-1 ~> m4 s-1]
+    Kh_h_a, &          ! Laplacian viscosity at thickness points [L2 T-1 ~> m2 s-1]
+    dz_a, &            ! Height change across layers [Z ~> m]
+    FrictWork_a, &     ! work done by MKE dissipation mechanisms [R Z L2 T-3 ~> W m-2]
+    FrictWork_bh_a, &  ! work done by the biharmonic MKE dissipation mechanisms [R Z L2 T-3 ~> W m-2]
+    FrictWork_GME_a, & ! work done by GME [R Z L2 T-3 ~> W m-2]
+    div_xx_h_a,      & ! horizontal divergence [T-1 ~> s-1]
+    sh_xx_h_a,       & ! horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
+    NoSt_a, &          ! A diagnostic array of normal stress [T-1 ~> s-1].
+    BS_coeff_h_a     ! A diagnostic array of the backscatter coefficient [L2 T-1 ~> m2 s-1]
+  type(RealArray_t) :: &
+    grid_Re_Kh_a, &    ! Grid Reynolds number for Laplacian horizontal viscosity at h points [nondim]
+    grid_Re_Ah_a, &    ! Grid Reynolds number for Biharmonic horizontal viscosity at h points [nondim]
+    GME_coeff_h_a, &   ! GME coefficient at h-points [L2 T-1 ~> m2 s-1]
+    visc_limit_h_a, &  ! Used to stabilize the EY24_EBT_BS backscatter [nondim]
+    visc_limit_h_flag_a, & ! determines whether backscatter is shut off [nondim]
+    visc_limit_h_frac_a  ! determines how close backscatter is to shutting off [nondim]
+  type(RealArray_t) :: &
+    u_smooth_a       ! Zonal velocity, smoothed with a spatial low-pass filter [L T-1 ~> m s-1]
+  type(RealArray_t) :: &
+    v_smooth_a       ! Meridional velocity, smoothed with a spatial low-pass filter [L T-1 ~> m s-1]
   logical :: rescale_Kh
   logical :: use_cont_huv
   integer :: is, ie, js, je, nz
@@ -783,6 +784,66 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   call bxH0%safe_alloc(ndims=3) ; call bxQ0%safe_alloc(ndims=3)
   call bxH0%set(idxS=[G%isc,G%jsc,1], idxE=[G%iec,G%jec,nz])
   call bxQ0%set(idxS=[G%IscB,G%JscB,1], idxE=[G%IecB,G%JecB,nz])
+  call u_smooth_a%alloc(lb=[LBOUND(u,1),LBOUND(h,2),1], ub=[UBOUND(u,1),UBOUND(h,2),SZK_(GV)])
+  call v_smooth_a%alloc(lb=[LBOUND(h,1),LBOUND(v,2),1], ub=[UBOUND(h,1),UBOUND(v,2),SZK_(GV)])
+  call dz_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call slope_x_a%alloc(lb=[LBOUND(u,1),LBOUND(h,2),1], ub=[UBOUND(u,1),UBOUND(h,2),SZK_(GV)+1])
+  call slope_y_a%alloc(lb=[LBOUND(h,1),LBOUND(v,2),1], ub=[UBOUND(h,1),UBOUND(v,2),SZK_(GV)+1])
+  call sh_xx_bt_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2)], ub=[UBOUND(h,1),UBOUND(h,2)])
+  call sh_xy_bt_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2)], ub=[UBOUND(u,1),UBOUND(v,2)])
+  call GME_effic_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2)], ub=[UBOUND(h,1),UBOUND(h,2)])
+  call GME_effic_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2)], ub=[UBOUND(u,1),UBOUND(v,2)])
+  call KH_u_GME_a%alloc(lb=[LBOUND(u,1),LBOUND(h,2),1], ub=[UBOUND(u,1),UBOUND(h,2),SZK_(GV)+1])
+  call KH_v_GME_a%alloc(lb=[LBOUND(h,1),LBOUND(v,2),1], ub=[UBOUND(h,1),UBOUND(v,2),SZK_(GV)+1])
+  call GME_coeff_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(G)])
+  call GME_coeff_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call str_xx_GME_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),nkblock])
+  call str_xy_GME_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),nkblock])
+  call NoSt_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call ShSt_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call FrictWork_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call FrictWork_bh_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call FrictWork_GME_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call Ah_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call Ah_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call Kh_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call Kh_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call grid_Re_Kh_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(G)])
+  call grid_Re_Ah_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(G)])
+  call div_xx_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call sh_xx_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call vort_xy_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call sh_xy_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call visc_limit_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(G)])
+  call visc_limit_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call visc_limit_h_flag_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], &
+                                 ub=[UBOUND(h,1),UBOUND(h,2),SZK_(G)])
+  call visc_limit_q_flag_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], &
+                                 ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call visc_limit_h_frac_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], &
+                                 ub=[UBOUND(h,1),UBOUND(h,2),SZK_(G)])
+  call visc_limit_q_frac_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], &
+                                 ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call BS_coeff_h_a%alloc(lb=[LBOUND(h,1),LBOUND(h,2),1], ub=[UBOUND(h,1),UBOUND(h,2),SZK_(GV)])
+  call BS_coeff_q_a%alloc(lb=[LBOUND(u,1),LBOUND(v,2),1], ub=[UBOUND(u,1),UBOUND(v,2),SZK_(GV)])
+  call u_smooth_a%view(u_smooth) ; call v_smooth_a%view(v_smooth) ; call dz_a%view(dz)
+  call slope_x_a%view(slope_x) ; call slope_y_a%view(slope_y) ; call sh_xx_bt_a%view(sh_xx_bt)
+  call sh_xy_bt_a%view(sh_xy_bt) ; call GME_effic_h_a%view(GME_effic_h)
+  call GME_effic_q_a%view(GME_effic_q) ; call KH_u_GME_a%view(KH_u_GME)
+  call KH_v_GME_a%view(KH_v_GME) ; call GME_coeff_h_a%view(GME_coeff_h)
+  call GME_coeff_q_a%view(GME_coeff_q) ; call str_xx_GME_a%view(str_xx_GME)
+  call str_xy_GME_a%view(str_xy_GME) ; call NoSt_a%view(NoSt) ; call ShSt_a%view(ShSt)
+  call FrictWork_a%view(FrictWork) ; call FrictWork_bh_a%view(FrictWork_bh)
+  call FrictWork_GME_a%view(FrictWork_GME) ; call Ah_h_a%view(Ah_h) ; call Ah_q_a%view(Ah_q)
+  call Kh_h_a%view(Kh_h) ; call Kh_q_a%view(Kh_q) ; call grid_Re_Kh_a%view(grid_Re_Kh)
+  call grid_Re_Ah_a%view(grid_Re_Ah) ; call div_xx_h_a%view(div_xx_h)
+  call sh_xx_h_a%view(sh_xx_h) ; call vort_xy_q_a%view(vort_xy_q) ; call sh_xy_q_a%view(sh_xy_q)
+  call visc_limit_h_a%view(visc_limit_h) ; call visc_limit_q_a%view(visc_limit_q)
+  call visc_limit_h_flag_a%view(visc_limit_h_flag)
+  call visc_limit_q_flag_a%view(visc_limit_q_flag)
+  call visc_limit_h_frac_a%view(visc_limit_h_frac)
+  call visc_limit_q_frac_a%view(visc_limit_q_frac) ; call BS_coeff_h_a%view(BS_coeff_h)
+  call BS_coeff_q_a%view(BS_coeff_q)
 
   if (CS%hv_opts_CS%use_GME) then
     call hor_visc_GME_setup(G, GV, US, CS, Gcore, bxH0, bxQ0, h, BT, TD, nkblock, dudx_bt, dvdy_bt, &
@@ -800,18 +861,17 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   if (CS%hv_opts_CS%use_Leithy) then
     ! Smooth the velocity. Right now it happens twice. In the future
     ! one might make the number of smoothing cycles a user-specified parameter
+    call u_layer_a%alloc(lb=[LBOUND(u_smooth,1),LBOUND(u_smooth,2)], ub=[UBOUND(u_smooth,1),UBOUND(u_smooth,2)])
+    call v_layer_a%alloc(lb=[LBOUND(v_smooth,1),LBOUND(v_smooth,2)], ub=[UBOUND(v_smooth,1),UBOUND(v_smooth,2)])
     do k=1,nz
       ! One call applies the filter twice
       u_smooth(:,:,k) = u(:,:,k)
       v_smooth(:,:,k) = v(:,:,k)
-      call u_layer_a%alloc(lb=[LBOUND(u_smooth,1),LBOUND(u_smooth,2)], ub=[UBOUND(u_smooth,1),UBOUND(u_smooth,2)], &
-                           source=u_smooth(:,:,k))
-      call v_layer_a%alloc(lb=[LBOUND(v_smooth,1),LBOUND(v_smooth,2)], ub=[UBOUND(v_smooth,1),UBOUND(v_smooth,2)], &
-                           source=v_smooth(:,:,k))
+      call u_layer_a%copy2Array(u_smooth(:,:,k)) ; call v_layer_a%copy2Array(v_smooth(:,:,k))
       call smooth_x9_uv(Gcore, bxH0, bxQ0, u_layer_a, v_layer_a, zero_land=.false.)
       call u_layer_a%copy2F(u_smooth(:,:,k)) ; call v_layer_a%copy2F(v_smooth(:,:,k))
-      call u_layer_a%free() ; call v_layer_a%free()
     enddo
+    call u_layer_a%free() ; call v_layer_a%free()
     call pass_vector(u_smooth, v_smooth, G%Domain)
   endif
 
@@ -848,82 +908,6 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   if (present(hv_cont)) &
     call hv_cont_a%alloc(lb=LBOUND(hv_cont), ub=UBOUND(hv_cont), &
                          source=hv_cont)
-  call u_smooth_a%alloc(lb=LBOUND(u_smooth), ub=UBOUND(u_smooth), &
-                        source=u_smooth)
-  call v_smooth_a%alloc(lb=LBOUND(v_smooth), ub=UBOUND(v_smooth), &
-                        source=v_smooth)
-  call dz_a%alloc(lb=LBOUND(dz), ub=UBOUND(dz), &
-                  source=dz)
-  call slope_x_a%alloc(lb=LBOUND(slope_x), ub=UBOUND(slope_x), &
-                       source=slope_x)
-  call slope_y_a%alloc(lb=LBOUND(slope_y), ub=UBOUND(slope_y), &
-                       source=slope_y)
-  call sh_xx_bt_a%alloc(lb=LBOUND(sh_xx_bt), ub=UBOUND(sh_xx_bt), &
-                        source=sh_xx_bt)
-  call sh_xy_bt_a%alloc(lb=LBOUND(sh_xy_bt), ub=UBOUND(sh_xy_bt), &
-                        source=sh_xy_bt)
-  call GME_effic_h_a%alloc(lb=LBOUND(GME_effic_h), ub=UBOUND(GME_effic_h), &
-                           source=GME_effic_h)
-  call GME_effic_q_a%alloc(lb=LBOUND(GME_effic_q), ub=UBOUND(GME_effic_q), &
-                           source=GME_effic_q)
-  call KH_u_GME_a%alloc(lb=LBOUND(KH_u_GME), ub=UBOUND(KH_u_GME), &
-                        source=KH_u_GME)
-  call KH_v_GME_a%alloc(lb=LBOUND(KH_v_GME), ub=UBOUND(KH_v_GME), &
-                        source=KH_v_GME)
-  call GME_coeff_h_a%alloc(lb=LBOUND(GME_coeff_h), ub=UBOUND(GME_coeff_h), &
-                           source=GME_coeff_h)
-  call GME_coeff_q_a%alloc(lb=LBOUND(GME_coeff_q), ub=UBOUND(GME_coeff_q), &
-                           source=GME_coeff_q)
-  call str_xx_GME_a%alloc(lb=LBOUND(str_xx_GME), ub=UBOUND(str_xx_GME), &
-                          source=str_xx_GME)
-  call str_xy_GME_a%alloc(lb=LBOUND(str_xy_GME), ub=UBOUND(str_xy_GME), &
-                          source=str_xy_GME)
-  call NoSt_a%alloc(lb=LBOUND(NoSt), ub=UBOUND(NoSt), &
-                    source=NoSt)
-  call ShSt_a%alloc(lb=LBOUND(ShSt), ub=UBOUND(ShSt), &
-                    source=ShSt)
-  call FrictWork_a%alloc(lb=LBOUND(FrictWork), ub=UBOUND(FrictWork), &
-                         source=FrictWork)
-  call FrictWork_bh_a%alloc(lb=LBOUND(FrictWork_bh), ub=UBOUND(FrictWork_bh), &
-                            source=FrictWork_bh)
-  call FrictWork_GME_a%alloc(lb=LBOUND(FrictWork_GME), ub=UBOUND(FrictWork_GME), &
-                             source=FrictWork_GME)
-  call Ah_h_a%alloc(lb=LBOUND(Ah_h), ub=UBOUND(Ah_h), &
-                    source=Ah_h)
-  call Ah_q_a%alloc(lb=LBOUND(Ah_q), ub=UBOUND(Ah_q), &
-                    source=Ah_q)
-  call Kh_h_a%alloc(lb=LBOUND(Kh_h), ub=UBOUND(Kh_h), &
-                    source=Kh_h)
-  call Kh_q_a%alloc(lb=LBOUND(Kh_q), ub=UBOUND(Kh_q), &
-                    source=Kh_q)
-  call grid_Re_Kh_a%alloc(lb=LBOUND(grid_Re_Kh), ub=UBOUND(grid_Re_Kh), &
-                          source=grid_Re_Kh)
-  call grid_Re_Ah_a%alloc(lb=LBOUND(grid_Re_Ah), ub=UBOUND(grid_Re_Ah), &
-                          source=grid_Re_Ah)
-  call div_xx_h_a%alloc(lb=LBOUND(div_xx_h), ub=UBOUND(div_xx_h), &
-                        source=div_xx_h)
-  call sh_xx_h_a%alloc(lb=LBOUND(sh_xx_h), ub=UBOUND(sh_xx_h), &
-                       source=sh_xx_h)
-  call vort_xy_q_a%alloc(lb=LBOUND(vort_xy_q), ub=UBOUND(vort_xy_q), &
-                         source=vort_xy_q)
-  call sh_xy_q_a%alloc(lb=LBOUND(sh_xy_q), ub=UBOUND(sh_xy_q), &
-                       source=sh_xy_q)
-  call visc_limit_h_a%alloc(lb=LBOUND(visc_limit_h), ub=UBOUND(visc_limit_h), &
-                            source=visc_limit_h)
-  call visc_limit_q_a%alloc(lb=LBOUND(visc_limit_q), ub=UBOUND(visc_limit_q), &
-                            source=visc_limit_q)
-  call visc_limit_h_flag_a%alloc(lb=LBOUND(visc_limit_h_flag), ub=UBOUND(visc_limit_h_flag), &
-                                 source=visc_limit_h_flag)
-  call visc_limit_q_flag_a%alloc(lb=LBOUND(visc_limit_q_flag), ub=UBOUND(visc_limit_q_flag), &
-                                 source=visc_limit_q_flag)
-  call visc_limit_h_frac_a%alloc(lb=LBOUND(visc_limit_h_frac), ub=UBOUND(visc_limit_h_frac), &
-                                 source=visc_limit_h_frac)
-  call visc_limit_q_frac_a%alloc(lb=LBOUND(visc_limit_q_frac), ub=UBOUND(visc_limit_q_frac), &
-                                 source=visc_limit_q_frac)
-  call BS_coeff_h_a%alloc(lb=LBOUND(BS_coeff_h), ub=UBOUND(BS_coeff_h), &
-                          source=BS_coeff_h)
-  call BS_coeff_q_a%alloc(lb=LBOUND(BS_coeff_q), ub=UBOUND(BS_coeff_q), &
-                          source=BS_coeff_q)
   call horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, MEKE_a, &
                                VarMix_a, Gcore, CS%hv_opts_CS, CS%hv_metrics_CS, nkblock, OBC, &
                                hu_cont_a, hv_cont_a, STOCH_a, u_smooth_a, v_smooth_a, dz_a, &
@@ -936,38 +920,11 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                                visc_limit_q_flag_a, visc_limit_h_frac_a, visc_limit_q_frac_a, &
                                BS_coeff_h_a, BS_coeff_q_a, GV%H_subroundoff, GV%H_to_RZ, US%s_to_T, &
                                c_loc(host_ctx))
-  call diffu_a%copy2F(diffu) ; call diffv_a%copy2F(diffv) ; call slope_x_a%copy2F(slope_x)
-  call slope_y_a%copy2F(slope_y) ; call GME_coeff_h_a%copy2F(GME_coeff_h)
-  call GME_coeff_q_a%copy2F(GME_coeff_q) ; call str_xx_GME_a%copy2F(str_xx_GME)
-  call str_xy_GME_a%copy2F(str_xy_GME) ; call NoSt_a%copy2F(NoSt) ; call ShSt_a%copy2F(ShSt)
-  call FrictWork_a%copy2F(FrictWork) ; call FrictWork_bh_a%copy2F(FrictWork_bh)
-  call FrictWork_GME_a%copy2F(FrictWork_GME) ; call Ah_h_a%copy2F(Ah_h)
-  call Ah_q_a%copy2F(Ah_q) ; call Kh_h_a%copy2F(Kh_h) ; call Kh_q_a%copy2F(Kh_q)
-  call grid_Re_Kh_a%copy2F(grid_Re_Kh) ; call grid_Re_Ah_a%copy2F(grid_Re_Ah)
-  call div_xx_h_a%copy2F(div_xx_h) ; call sh_xx_h_a%copy2F(sh_xx_h)
-  call vort_xy_q_a%copy2F(vort_xy_q) ; call sh_xy_q_a%copy2F(sh_xy_q)
-  call visc_limit_h_a%copy2F(visc_limit_h) ; call visc_limit_q_a%copy2F(visc_limit_q)
-  call visc_limit_h_flag_a%copy2F(visc_limit_h_flag)
-  call visc_limit_q_flag_a%copy2F(visc_limit_q_flag)
-  call visc_limit_h_frac_a%copy2F(visc_limit_h_frac)
-  call visc_limit_q_frac_a%copy2F(visc_limit_q_frac) ; call BS_coeff_h_a%copy2F(BS_coeff_h)
-  call BS_coeff_q_a%copy2F(BS_coeff_q)
+  call diffu_a%copy2F(diffu) ; call diffv_a%copy2F(diffv)
   if (present(hu_cont)) call hu_cont_a%copy2F(hu_cont)
   if (present(hv_cont)) call hv_cont_a%copy2F(hv_cont)
   call u_a%free() ; call v_a%free() ; call h_a%free() ; call uh_a%free() ; call vh_a%free()
   call diffu_a%free() ; call diffv_a%free() ; call hu_cont_a%free() ; call hv_cont_a%free()
-  call u_smooth_a%free() ; call v_smooth_a%free() ; call dz_a%free() ; call slope_x_a%free()
-  call slope_y_a%free() ; call sh_xx_bt_a%free() ; call sh_xy_bt_a%free()
-  call GME_effic_h_a%free() ; call GME_effic_q_a%free() ; call KH_u_GME_a%free()
-  call KH_v_GME_a%free() ; call GME_coeff_h_a%free() ; call GME_coeff_q_a%free()
-  call str_xx_GME_a%free() ; call str_xy_GME_a%free() ; call NoSt_a%free() ; call ShSt_a%free()
-  call FrictWork_a%free() ; call FrictWork_bh_a%free() ; call FrictWork_GME_a%free()
-  call Ah_h_a%free() ; call Ah_q_a%free() ; call Kh_h_a%free() ; call Kh_q_a%free()
-  call grid_Re_Kh_a%free() ; call grid_Re_Ah_a%free() ; call div_xx_h_a%free()
-  call sh_xx_h_a%free() ; call vort_xy_q_a%free() ; call sh_xy_q_a%free()
-  call visc_limit_h_a%free() ; call visc_limit_q_a%free() ; call visc_limit_h_flag_a%free()
-  call visc_limit_q_flag_a%free() ; call visc_limit_h_frac_a%free()
-  call visc_limit_q_frac_a%free() ; call BS_coeff_h_a%free() ; call BS_coeff_q_a%free()
   call bxH0%free() ; call bxQ0%free()
   call MEKE_a%copy_back(MEKE) ; call VarMix_a%free()
   if (present(STOCH)) call STOCH_a%copy_back(STOCH)
@@ -1069,6 +1026,19 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                                CS%dx2h, CS%dy2h, CS%dx2q, CS%dy2q)
   endif
 
+  call u_smooth_a%free() ; call v_smooth_a%free() ; call dz_a%free() ; call slope_x_a%free()
+  call slope_y_a%free() ; call sh_xx_bt_a%free() ; call sh_xy_bt_a%free()
+  call GME_effic_h_a%free() ; call GME_effic_q_a%free() ; call KH_u_GME_a%free()
+  call KH_v_GME_a%free() ; call GME_coeff_h_a%free() ; call GME_coeff_q_a%free()
+  call str_xx_GME_a%free() ; call str_xy_GME_a%free() ; call NoSt_a%free() ; call ShSt_a%free()
+  call FrictWork_a%free() ; call FrictWork_bh_a%free() ; call FrictWork_GME_a%free()
+  call Ah_h_a%free() ; call Ah_q_a%free() ; call Kh_h_a%free() ; call Kh_q_a%free()
+  call grid_Re_Kh_a%free() ; call grid_Re_Ah_a%free() ; call div_xx_h_a%free()
+  call sh_xx_h_a%free() ; call vort_xy_q_a%free() ; call sh_xy_q_a%free()
+  call visc_limit_h_a%free() ; call visc_limit_q_a%free() ; call visc_limit_h_flag_a%free()
+  call visc_limit_q_flag_a%free() ; call visc_limit_h_frac_a%free()
+  call visc_limit_q_frac_a%free() ; call BS_coeff_h_a%free() ; call BS_coeff_q_a%free()
+
 end subroutine horizontal_viscosity
 
 !> The tree root of horizontal_viscosity: calculates the acceleration due to the horizontal
@@ -1118,7 +1088,7 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
   type(ocean_OBC_type), optional, pointer      :: OBC  !< Pointer to an open boundary condition type
   type(RealArray_t), intent(inout) :: hu_cont_a !< Layer thickness at u-points [H ~> m or kg m-2].
   type(RealArray_t), intent(inout) :: hv_cont_a !< Layer thickness at v-points [H ~> m or kg m-2].
-  type(hor_visc_STOCH_type), intent(inout), optional :: STOCH_a !< Stochastic control structure
+  type(hor_visc_STOCH_type), intent(inout)           :: STOCH_a !< Stochastic control structure
   type(RealArray_t), intent(in)    :: u_smooth_a !< Zonal velocity, smoothed with a spatial low-pass filter
                                                  !! [L T-1 ~> m s-1]
   type(RealArray_t), intent(in)    :: v_smooth_a !< Meridional velocity, smoothed with a spatial low-pass
@@ -1332,8 +1302,7 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
     visc_limit_q_frac(:,:,:) = 0.
   endif
 
-  skeb_use_frict = .false.
-  if (present(STOCH_a)) skeb_use_frict = STOCH_a%skeb_use_frict
+  skeb_use_frict = STOCH_a%skeb_use_frict
 
   call h_u_a%alloc(lb=[u_a%lb(1),h_a%lb(2),1], ub=[u_a%ub(1),h_a%ub(2),nkblock])
   call Del2u_a%alloc(lb=[u_a%lb(1),h_a%lb(2),1], ub=[u_a%ub(1),h_a%ub(2),nkblock])
@@ -3193,7 +3162,7 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   type(hv_metrics_CS), intent(in)    :: metrics       !< Persistent copies of the horizontal
                                                      !! viscosity metric and coefficient arrays
   type(ocean_OBC_type), optional, pointer      :: OBC  !< Pointer to an open boundary condition type
-  type(hor_visc_STOCH_type), intent(inout), optional :: STOCH_a !< Stochastic control structure
+  type(hor_visc_STOCH_type), intent(inout)           :: STOCH_a !< Stochastic control structure
   type(Box_t),                   intent(in)    :: bxH  !< The h-point iteration box of this tile,
                                                        !! [isc:iec, jsc:jec, kstart:kend]
   type(Box_t),                   intent(in)    :: bxQ  !< The B-grid-index iteration box of this
@@ -3290,9 +3259,7 @@ subroutine hor_visc_stress_div(MEKE_a, Gcore, CS, metrics, OBC, STOCH_a, bxH, bx
   if (MEKE_a%mom_src_a%associated()) call MEKE_a%mom_src_a%view(MEKE_mom_src)
   if (MEKE_a%mom_src_bh_a%associated()) call MEKE_a%mom_src_bh_a%view(MEKE_mom_src_bh)
   if (MEKE_a%GME_snk_a%associated()) call MEKE_a%GME_snk_a%view(MEKE_GME_snk)
-  if (present(STOCH_a)) then
-    if (STOCH_a%skeb_diss_a%associated()) call STOCH_a%skeb_diss_a%view(skeb_diss)
-  endif
+  if (STOCH_a%skeb_diss_a%associated()) call STOCH_a%skeb_diss_a%view(skeb_diss)
 
   is  = bxH%idxS(1) ; ie  = bxH%idxE(1) ; js  = bxH%idxS(2) ; je  = bxH%idxE(2)
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
@@ -5953,7 +5920,7 @@ subroutine smooth_x9_h(Gcore, bxH0, field_h_a, zero_land)
   type(Box_t),          intent(in)    :: bxH0  !< The h-point box of the whole column,
                                                !! [isc:iec, jsc:jec, 1:nz]
   type(RealArray_t), intent(inout) :: field_h_a !< h-point field to be smoothed [arbitrary]
-  logical,                optional, intent(in)    :: zero_land !< If present and false, return the average
+  logical,                intent(in)              :: zero_land !< If present and false, return the average
                                                                !! of the surrounding ocean points when
                                                                !! smoothing, otherwise use a value of 0 for
                                                                !! land points and include them in the averages.
@@ -5972,7 +5939,7 @@ subroutine smooth_x9_h(Gcore, bxH0, field_h_a, zero_land)
 
   is  = bxH0%idxS(1)  ; ie  = bxH0%idxE(1)  ; js  = bxH0%idxS(2)  ; je  = bxH0%idxE(2)
 
-  zero_land_val = .true. ; if (present(zero_land)) zero_land_val = zero_land
+  zero_land_val = zero_land
 
   do s=1,0,-1
     fh_prev(:,:) = field_h(:,:)
@@ -6008,7 +5975,7 @@ subroutine smooth_x9_uv(Gcore, bxH0, bxQ0, field_u_a, field_v_a, zero_land)
                                                !! [IscB:IecB, JscB:JecB, 1:nz]
   type(RealArray_t), intent(inout) :: field_u_a !< u-point field to be smoothed [arbitrary]
   type(RealArray_t), intent(inout) :: field_v_a !< v-point field to be smoothed [arbitrary]
-  logical,                 optional, intent(in)    :: zero_land !< If present and false, return the average
+  logical,                 intent(in)              :: zero_land !< If present and false, return the average
                                                                 !! of the surrounding ocean points when
                                                                 !! smoothing, otherwise use a value of 0 for
                                                                 !! land points and include them in the averages.
@@ -6030,7 +5997,7 @@ subroutine smooth_x9_uv(Gcore, bxH0, bxQ0, field_u_a, field_v_a, zero_land)
   is  = bxH0%idxS(1)  ; ie  = bxH0%idxE(1)  ; js  = bxH0%idxS(2)  ; je  = bxH0%idxE(2)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
 
-  zero_land_val = .true. ; if (present(zero_land)) zero_land_val = zero_land
+  zero_land_val = zero_land
 
   do s=1,0,-1
     fu_prev(:,:) = field_u(:,:)

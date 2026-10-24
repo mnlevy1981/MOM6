@@ -1,7 +1,7 @@
 ---
 name: convert_present_to_associated
 version: "0.4.0"
-description: Remove `optional` dummies for bind(C) bridge-readiness (C has nullable pointers, not optional arguments). An optional container dummy (RealArray_t/IntArray_t/LogicalArray_t) becomes non-optional and is tested with `x%associated()`; an optional scalar becomes mandatory, with every caller that omitted it passing the value absence used to mean. The unit is an argument name across its whole by-value forwarding chain, not one subroutine. An array argument must already be a container everywhere in that chain (run convert_array_containers first). Adds no bind(C) bridge -- that is generate_cpp_bridge's job.
+description: Remove `optional` dummies for bind(C) bridge-readiness (C has nullable pointers, not optional arguments). An optional container dummy (RealArray_t/IntArray_t/LogicalArray_t) or container group (shadow/bundle type) becomes non-optional and is tested with `%associated()`; an optional scalar becomes mandatory, with every caller that omitted it passing the value absence used to mean. The unit is an argument name across its whole by-value forwarding chain, not one subroutine. An array argument must already be a container everywhere in that chain (run convert_array_containers first). Adds no bind(C) bridge -- that is generate_cpp_bridge's job.
 user-invocable: true
 argument-hint: <work-directory> <dummy-argument-name>[,<dummy-argument-name>...] [<seed-function-name>]
 ---
@@ -48,7 +48,7 @@ carries its own signal and ends the chain). Build the set by closure:
 
 ## Hard precondition
 
-An array argument is already a container in every member (a scalar needs nothing). A `present()`-linked group (`present(a) .and.
+An array argument is already a container in every member (a scalar or derived type needs nothing). A `present()`-linked group (`present(a) .and.
 present(b)`, or all-or-nothing handling) converts together, never one member alone.
 
 ## Steps
@@ -84,6 +84,18 @@ Step 0's closure applies unchanged (a caller forwarding its own same-named optio
 4. An existing doc comment that describes the absent case ("If present and false, …") is left
    verbatim and reported to the user (lessons, comment STANDING RULE).
 
+## Optional derived-type dummies (shadows, bundles)
+
+A derived type grouping containers and scalars (a `create_shadow_container_type` shadow, a
+bundle) is handled like a container: **drop `optional`**; the caller always passes an instance,
+and a caller that omitted it passes a never-built instance (its containers unassociated, its
+scalars at their default component values). Each `present(x)` guard becomes the presence test of
+what it protects:
+- around a container field's use: that field's `%associated()`, or nothing where an inner guard
+  already tests the field (keep the `nullify`, lessons §9 #16);
+- around a scalar field's read: no test, provided the type's default component value equals the
+  old absent-default; otherwise stop and ask. A default-then-override pair becomes the plain read.
+
 ## Verify
 
 Scripted:
@@ -108,6 +120,7 @@ Exactly one `!!SKILLS: 0.4.0` line per touched Fortran file, after the license h
 
 - Never convert a raw array, one member of a linked group, or a subroutine without the closure.
 - A scalar's absent-default is one value read from the body, never guessed; otherwise ask.
+- A derived type's scalar field read unguarded only if its default component value is the absent-default.
 - Callee and callers change in the same pass.
 - Placeholders scoped by line range, never shared across two definable dummies of one call.
 - `%associated()` is `pure`; nullify and OpenMP hazards checked at every rewritten guard.
