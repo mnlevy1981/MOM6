@@ -404,7 +404,9 @@ as they are.
 
 **Line limit.** Keep every added or changed line within the file's established width and never
 over 132 characters for code (MOM6 CI, `.testing/trailer.py`). Wrap with `&` or `!!`; never
-shorten a comment, or drop or rename an argument, to fit.
+shorten a comment, or drop or rename an argument, to fit. The same CI check rejects trailing
+whitespace on any line; removing a statement from a `;`-joined line is the usual way to leave
+some. Every skill's format check covers both (`grep -nE '[[:space:]]+$'` must find nothing).
 
 **No commentary about the conversion.** Never add comments such as `! Containers for X` or
 `! Must be nullified`; the diff is mechanism, not narration.

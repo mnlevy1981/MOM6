@@ -2578,7 +2578,7 @@ subroutine hor_visc_h_coeffs_b(MEKE_a, VarMix_a, Gcore, CS, metrics, OBC, bxH, b
   nullify(MEKE_Au)
   if (MEKE_a%Au_a%associated()) call MEKE_a%Au_a%view(MEKE_Au)
 
-  is  = bxH%idxS(1) ; js  = bxH%idxS(2) 
+  is  = bxH%idxS(1) ; js  = bxH%idxS(2)
   Ieq = bxQ%idxE(1) ; Jeq = bxQ%idxE(2)
   kmax = bxH%idxE(3) - bxH%idxS(3) + 1
   bxQ_pij = bxQ%growBy(lo=[0,0,0], hi=[1,1,0])
