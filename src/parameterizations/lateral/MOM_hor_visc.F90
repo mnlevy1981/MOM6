@@ -6629,6 +6629,73 @@ function hv_opts_CS_to_c(opts) result(cdesc)
   cdesc%do_BS_coeff_q = opts%do_BS_coeff_q
 end function hv_opts_CS_to_c
 
+!> Records the scalars of a hv_opts_CS in a capture file.
+subroutine record_hv_opts_CS(rec, prefix, opts)
+  type(io_recorder), intent(inout) :: rec    !< The capture file being written
+  character(len=*),  intent(in)    :: prefix !< The start of each record name
+  type(hv_opts_CS),  intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_Laplacian", opts%Laplacian)
+  call rec%add(prefix//"_biharmonic", opts%biharmonic)
+  call rec%add(prefix//"_debug", opts%debug)
+  call rec%add(prefix//"_no_slip", opts%no_slip)
+  call rec%add(prefix//"_bound_Kh", opts%bound_Kh)
+  call rec%add(prefix//"_EY24_EBT_BS", opts%EY24_EBT_BS)
+  call rec%add(prefix//"_bound_Ah", opts%bound_Ah)
+  call rec%add(prefix//"_Re_Ah", opts%Re_Ah)
+  call rec%add(prefix//"_KS_coef", opts%KS_coef)
+  call rec%add(prefix//"_backscatter_underbound", opts%backscatter_underbound)
+  call rec%add(prefix//"_Smagorinsky_Kh", opts%Smagorinsky_Kh)
+  call rec%add(prefix//"_Smagorinsky_Ah", opts%Smagorinsky_Ah)
+  call rec%add(prefix//"_Leith_Kh", opts%Leith_Kh)
+  call rec%add(prefix//"_Modified_Leith", opts%Modified_Leith)
+  call rec%add(prefix//"_use_beta_in_Leith", opts%use_beta_in_Leith)
+  call rec%add(prefix//"_Leith_Ah", opts%Leith_Ah)
+  call rec%add(prefix//"_use_Leithy", opts%use_Leithy)
+  call rec%add(prefix//"_c_K", opts%c_K)
+  call rec%add(prefix//"_smooth_Ah", opts%smooth_Ah)
+  call rec%add(prefix//"_use_QG_Leith_visc", opts%use_QG_Leith_visc)
+  call rec%add(prefix//"_bound_Coriolis", opts%bound_Coriolis)
+  call rec%add(prefix//"_Kh_bg_min", opts%Kh_bg_min)
+  call rec%add(prefix//"_FrictWork_bug", opts%FrictWork_bug)
+  call rec%add(prefix//"_OBC_strain_bug", opts%OBC_strain_bug)
+  call rec%add(prefix//"_use_land_mask", opts%use_land_mask)
+  call rec%add(prefix//"_anisotropic", opts%anisotropic)
+  call rec%add(prefix//"_add_LES_viscosity", opts%add_LES_viscosity)
+  call rec%add(prefix//"_Kh_aniso", opts%Kh_aniso)
+  call rec%add(prefix//"_res_scale_MEKE", opts%res_scale_MEKE)
+  call rec%add(prefix//"_use_GME", opts%use_GME)
+  call rec%add(prefix//"_answer_date", opts%answer_date)
+  call rec%add(prefix//"_GME_h0", opts%GME_h0)
+  call rec%add(prefix//"_GME_efficiency", opts%GME_efficiency)
+  call rec%add(prefix//"_GME_limiter", opts%GME_limiter)
+  call rec%add(prefix//"_min_grid_Kh", opts%min_grid_Kh)
+  call rec%add(prefix//"_min_grid_Ah", opts%min_grid_Ah)
+  call rec%add(prefix//"_use_cont_thick", opts%use_cont_thick)
+  call rec%add(prefix//"_use_ZB2020", opts%use_ZB2020)
+  call rec%add(prefix//"_use_circulation", opts%use_circulation)
+  call rec%add(prefix//"_do_grid_Re_Ah", opts%do_grid_Re_Ah)
+  call rec%add(prefix//"_do_grid_Re_Kh", opts%do_grid_Re_Kh)
+  call rec%add(prefix//"_do_Ah_h", opts%do_Ah_h)
+  call rec%add(prefix//"_do_Ah_q", opts%do_Ah_q)
+  call rec%add(prefix//"_do_Kh_h", opts%do_Kh_h)
+  call rec%add(prefix//"_do_Kh_q", opts%do_Kh_q)
+  call rec%add(prefix//"_do_GME_coeff_h", opts%do_GME_coeff_h)
+  call rec%add(prefix//"_do_GME_coeff_q", opts%do_GME_coeff_q)
+  call rec%add(prefix//"_do_vort_xy_q", opts%do_vort_xy_q)
+  call rec%add(prefix//"_do_div_xx_h", opts%do_div_xx_h)
+  call rec%add(prefix//"_do_sh_xy_q", opts%do_sh_xy_q)
+  call rec%add(prefix//"_do_sh_xx_h", opts%do_sh_xx_h)
+  call rec%add(prefix//"_do_FrictWork", opts%do_FrictWork)
+  call rec%add(prefix//"_do_FrictWorkIntz", opts%do_FrictWorkIntz)
+  call rec%add(prefix//"_do_FrictWork_bh", opts%do_FrictWork_bh)
+  call rec%add(prefix//"_do_FrictWorkIntz_bh", opts%do_FrictWorkIntz_bh)
+  call rec%add(prefix//"_do_normstress", opts%do_normstress)
+  call rec%add(prefix//"_do_shearstress", opts%do_shearstress)
+  call rec%add(prefix//"_do_BS_coeff_h", opts%do_BS_coeff_h)
+  call rec%add(prefix//"_do_BS_coeff_q", opts%do_BS_coeff_q)
+end subroutine record_hv_opts_CS
+
 !> Converts a hv_metrics_CS to its bind(C) mirror.
 #ifdef _TIM
 function hv_metrics_CS_to_c(metrics) result(cdesc)
@@ -6680,6 +6747,237 @@ function hv_metrics_CS_to_c(metrics) result(cdesc)
   cdesc%Re_Ah_const_xy = metrics%Re_Ah_const_xy%to_c()
 end function hv_metrics_CS_to_c
 #endif
+
+!> Records the containers of a hv_metrics_CS in a capture file.
+subroutine record_hv_metrics_CS(rec, prefix, metrics, suffix)
+  type(io_recorder),   intent(inout) :: rec     !< The capture file being written
+  character(len=*),    intent(in)    :: prefix  !< The start of each record name
+  type(hv_metrics_CS), intent(in)    :: metrics !< Metric and coefficient arrays to record
+  character(len=*),    intent(in)    :: suffix  !< The end of each value record name, or empty to
+                                                !! record which arrays are allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kh_bg_xx_allocated", metrics%Kh_bg_xx%associated())
+  elseif (metrics%Kh_bg_xx%associated()) then
+    call rec%add(prefix//"_Kh_bg_xx"//suffix, metrics%Kh_bg_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ah_bg_xx_allocated", metrics%Ah_bg_xx%associated())
+  elseif (metrics%Ah_bg_xx%associated()) then
+    call rec%add(prefix//"_Ah_bg_xx"//suffix, metrics%Ah_bg_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_reduction_xx_allocated", metrics%reduction_xx%associated())
+  elseif (metrics%reduction_xx%associated()) then
+    call rec%add(prefix//"_reduction_xx"//suffix, metrics%reduction_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kh_Max_xx_allocated", metrics%Kh_Max_xx%associated())
+  elseif (metrics%Kh_Max_xx%associated()) then
+    call rec%add(prefix//"_Kh_Max_xx"//suffix, metrics%Kh_Max_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ah_Max_xx_allocated", metrics%Ah_Max_xx%associated())
+  elseif (metrics%Ah_Max_xx%associated()) then
+    call rec%add(prefix//"_Ah_Max_xx"//suffix, metrics%Ah_Max_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ah_Max_xx_KS_allocated", metrics%Ah_Max_xx_KS%associated())
+  elseif (metrics%Ah_Max_xx_KS%associated()) then
+    call rec%add(prefix//"_Ah_Max_xx_KS"//suffix, metrics%Ah_Max_xx_KS)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_n1n2_h_allocated", metrics%n1n2_h%associated())
+  elseif (metrics%n1n2_h%associated()) then
+    call rec%add(prefix//"_n1n2_h"//suffix, metrics%n1n2_h)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_n1n1_m_n2n2_h_allocated", metrics%n1n1_m_n2n2_h%associated())
+  elseif (metrics%n1n1_m_n2n2_h%associated()) then
+    call rec%add(prefix//"_n1n1_m_n2n2_h"//suffix, metrics%n1n1_m_n2n2_h)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_grid_sp_h2_allocated", metrics%grid_sp_h2%associated())
+  elseif (metrics%grid_sp_h2%associated()) then
+    call rec%add(prefix//"_grid_sp_h2"//suffix, metrics%grid_sp_h2)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_grid_sp_h3_allocated", metrics%grid_sp_h3%associated())
+  elseif (metrics%grid_sp_h3%associated()) then
+    call rec%add(prefix//"_grid_sp_h3"//suffix, metrics%grid_sp_h3)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kh_bg_xy_allocated", metrics%Kh_bg_xy%associated())
+  elseif (metrics%Kh_bg_xy%associated()) then
+    call rec%add(prefix//"_Kh_bg_xy"//suffix, metrics%Kh_bg_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ah_bg_xy_allocated", metrics%Ah_bg_xy%associated())
+  elseif (metrics%Ah_bg_xy%associated()) then
+    call rec%add(prefix//"_Ah_bg_xy"//suffix, metrics%Ah_bg_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_reduction_xy_allocated", metrics%reduction_xy%associated())
+  elseif (metrics%reduction_xy%associated()) then
+    call rec%add(prefix//"_reduction_xy"//suffix, metrics%reduction_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Kh_Max_xy_allocated", metrics%Kh_Max_xy%associated())
+  elseif (metrics%Kh_Max_xy%associated()) then
+    call rec%add(prefix//"_Kh_Max_xy"//suffix, metrics%Kh_Max_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ah_Max_xy_allocated", metrics%Ah_Max_xy%associated())
+  elseif (metrics%Ah_Max_xy%associated()) then
+    call rec%add(prefix//"_Ah_Max_xy"//suffix, metrics%Ah_Max_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Ah_Max_xy_KS_allocated", metrics%Ah_Max_xy_KS%associated())
+  elseif (metrics%Ah_Max_xy_KS%associated()) then
+    call rec%add(prefix//"_Ah_Max_xy_KS"//suffix, metrics%Ah_Max_xy_KS)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_n1n2_q_allocated", metrics%n1n2_q%associated())
+  elseif (metrics%n1n2_q%associated()) then
+    call rec%add(prefix//"_n1n2_q"//suffix, metrics%n1n2_q)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_n1n1_m_n2n2_q_allocated", metrics%n1n1_m_n2n2_q%associated())
+  elseif (metrics%n1n1_m_n2n2_q%associated()) then
+    call rec%add(prefix//"_n1n1_m_n2n2_q"//suffix, metrics%n1n1_m_n2n2_q)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dx2h_allocated", metrics%dx2h%associated())
+  elseif (metrics%dx2h%associated()) then
+    call rec%add(prefix//"_dx2h"//suffix, metrics%dx2h)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dy2h_allocated", metrics%dy2h%associated())
+  elseif (metrics%dy2h%associated()) then
+    call rec%add(prefix//"_dy2h"//suffix, metrics%dy2h)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dx_dyT_allocated", metrics%dx_dyT%associated())
+  elseif (metrics%dx_dyT%associated()) then
+    call rec%add(prefix//"_dx_dyT"//suffix, metrics%dx_dyT)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dy_dxT_allocated", metrics%dy_dxT%associated())
+  elseif (metrics%dy_dxT%associated()) then
+    call rec%add(prefix//"_dy_dxT"//suffix, metrics%dy_dxT)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_m_const_leithy_allocated", metrics%m_const_leithy%associated())
+  elseif (metrics%m_const_leithy%associated()) then
+    call rec%add(prefix//"_m_const_leithy"//suffix, metrics%m_const_leithy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_m_leithy_max_allocated", metrics%m_leithy_max%associated())
+  elseif (metrics%m_leithy_max%associated()) then
+    call rec%add(prefix//"_m_leithy_max"//suffix, metrics%m_leithy_max)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dx2q_allocated", metrics%dx2q%associated())
+  elseif (metrics%dx2q%associated()) then
+    call rec%add(prefix//"_dx2q"//suffix, metrics%dx2q)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dy2q_allocated", metrics%dy2q%associated())
+  elseif (metrics%dy2q%associated()) then
+    call rec%add(prefix//"_dy2q"//suffix, metrics%dy2q)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dx_dyBu_allocated", metrics%dx_dyBu%associated())
+  elseif (metrics%dx_dyBu%associated()) then
+    call rec%add(prefix//"_dx_dyBu"//suffix, metrics%dx_dyBu)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_dy_dxBu_allocated", metrics%dy_dxBu%associated())
+  elseif (metrics%dy_dxBu%associated()) then
+    call rec%add(prefix//"_dy_dxBu"//suffix, metrics%dy_dxBu)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Idx2dyCu_allocated", metrics%Idx2dyCu%associated())
+  elseif (metrics%Idx2dyCu%associated()) then
+    call rec%add(prefix//"_Idx2dyCu"//suffix, metrics%Idx2dyCu)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Idxdy2u_allocated", metrics%Idxdy2u%associated())
+  elseif (metrics%Idxdy2u%associated()) then
+    call rec%add(prefix//"_Idxdy2u"//suffix, metrics%Idxdy2u)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Idx2dyCv_allocated", metrics%Idx2dyCv%associated())
+  elseif (metrics%Idx2dyCv%associated()) then
+    call rec%add(prefix//"_Idx2dyCv"//suffix, metrics%Idx2dyCv)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Idxdy2v_allocated", metrics%Idxdy2v%associated())
+  elseif (metrics%Idxdy2v%associated()) then
+    call rec%add(prefix//"_Idxdy2v"//suffix, metrics%Idxdy2v)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Laplac2_const_xx_allocated", metrics%Laplac2_const_xx%associated())
+  elseif (metrics%Laplac2_const_xx%associated()) then
+    call rec%add(prefix//"_Laplac2_const_xx"//suffix, metrics%Laplac2_const_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Biharm6_const_xx_allocated", metrics%Biharm6_const_xx%associated())
+  elseif (metrics%Biharm6_const_xx%associated()) then
+    call rec%add(prefix//"_Biharm6_const_xx"//suffix, metrics%Biharm6_const_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Laplac3_const_xx_allocated", metrics%Laplac3_const_xx%associated())
+  elseif (metrics%Laplac3_const_xx%associated()) then
+    call rec%add(prefix//"_Laplac3_const_xx"//suffix, metrics%Laplac3_const_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Biharm_const_xx_allocated", metrics%Biharm_const_xx%associated())
+  elseif (metrics%Biharm_const_xx%associated()) then
+    call rec%add(prefix//"_Biharm_const_xx"//suffix, metrics%Biharm_const_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Biharm_const2_xx_allocated", metrics%Biharm_const2_xx%associated())
+  elseif (metrics%Biharm_const2_xx%associated()) then
+    call rec%add(prefix//"_Biharm_const2_xx"//suffix, metrics%Biharm_const2_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Re_Ah_const_xx_allocated", metrics%Re_Ah_const_xx%associated())
+  elseif (metrics%Re_Ah_const_xx%associated()) then
+    call rec%add(prefix//"_Re_Ah_const_xx"//suffix, metrics%Re_Ah_const_xx)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Laplac2_const_xy_allocated", metrics%Laplac2_const_xy%associated())
+  elseif (metrics%Laplac2_const_xy%associated()) then
+    call rec%add(prefix//"_Laplac2_const_xy"//suffix, metrics%Laplac2_const_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Biharm6_const_xy_allocated", metrics%Biharm6_const_xy%associated())
+  elseif (metrics%Biharm6_const_xy%associated()) then
+    call rec%add(prefix//"_Biharm6_const_xy"//suffix, metrics%Biharm6_const_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Laplac3_const_xy_allocated", metrics%Laplac3_const_xy%associated())
+  elseif (metrics%Laplac3_const_xy%associated()) then
+    call rec%add(prefix//"_Laplac3_const_xy"//suffix, metrics%Laplac3_const_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Biharm_const_xy_allocated", metrics%Biharm_const_xy%associated())
+  elseif (metrics%Biharm_const_xy%associated()) then
+    call rec%add(prefix//"_Biharm_const_xy"//suffix, metrics%Biharm_const_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Biharm_const2_xy_allocated", metrics%Biharm_const2_xy%associated())
+  elseif (metrics%Biharm_const2_xy%associated()) then
+    call rec%add(prefix//"_Biharm_const2_xy"//suffix, metrics%Biharm_const2_xy)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Re_Ah_const_xy_allocated", metrics%Re_Ah_const_xy%associated())
+  elseif (metrics%Re_Ah_const_xy%associated()) then
+    call rec%add(prefix//"_Re_Ah_const_xy"//suffix, metrics%Re_Ah_const_xy)
+  endif
+end subroutine record_hv_metrics_CS
+
 !> \namespace mom_hor_visc
 !!
 !! \section section_horizontal_viscosity Horizontal viscosity in MOM

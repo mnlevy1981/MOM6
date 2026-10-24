@@ -16,9 +16,10 @@ Example (vertvisc_family):
       --primitives find_coupling_coef_k,find_coupling_coef,find_coupling_coef_gl90
 
 Checks, per Phase 3 target:
-  1. every dummy can cross bind(C) (container/box, non-pointer scalar, grid_core_type,
-     a derived type with a bind(C) mirror AND a converter, the OBC pointer, or one opaque
-     host-context `type(c_ptr) :: host` dummy that reaches Fortran-only helpers);
+  1. every dummy can cross bind(C) (container/box, non-pointer scalar, grid_core_type/grid_OBC_type,
+     a derived type with a bind(C) mirror, a converter AND a record_* capture helper, all three
+     covering every field of the type, the OBC pointer, or one opaque host-context
+     `type(c_ptr) :: host` dummy that reaches Fortran-only helpers);
   2. no Fortran-only work in the body (diagnostics, halo passes incl. pass_var/pass_vector,
      checksums, reporting, any --forbid call, %alloc/%free/%rebound of a dummy or a component of one
      (local scratch containers are allowed),
@@ -47,6 +48,38 @@ converters = {}
 for m in re.finditer(r'^function (\w+_to_c)\((\w+)\) result\(\w+\)\n((?:.*\n){1,3})', src, re.M):
     t = re.search(r'type\((\w+)\)', m.group(3))
     if t: converters[t.group(1).lower()] = m.group(1)
+recorders = {}
+for m in re.finditer(r'^subroutine (record_\w+)\((.*?)\)\s*$(.*?)^end subroutine \1', src, re.M | re.S):
+    args = [a.strip().lower() for a in m.group(2).split(',')]
+    for d in re.finditer(r'type\((\w+)\)[^:\n]*::\s*(\w+)', m.group(3)):
+        if d.group(2).lower() in args[1:]:
+            recorders.setdefault(d.group(1).lower(), (m.group(1), d.group(2), m.group(3)))
+
+
+def type_fields(tn):
+    """Component names of derived type tn, lowercased, with a container's `_a` suffix dropped."""
+    m = re.search(r'^type\b[^\n]*::\s*' + tn + r'\b.*?^end type', src, re.M | re.S | re.I)
+    if not m: return None
+    out = []
+    for l in m.group(0).split('\n')[1:-1]:
+        l = re.sub(r'!.*', '', l)
+        if '::' in l and not re.match(r'\s*procedure', l, re.I):
+            out += [re.sub(r'_a$', '', v.split('=')[0].strip().lower()) for v in l.split('::')[1].split(',')]
+    return set(out)
+
+
+def group_gaps(tn, mc):
+    """Fields of tn missing from its mirror, converter or capture helper."""
+    gaps = []
+    tf, mf = type_fields(tn), type_fields(mc)
+    if tf != mf: gaps.append('mirror fields differ: %s' % sorted(tf ^ mf))
+    conv = re.search(r'^function ' + converters[tn] + r'\(.*?^end function', src, re.M | re.S).group(0)
+    set_ = {re.sub(r'_a$', '', f.lower()) for f in re.findall(r'cdesc%(\w+)\s*=', conv)}
+    if mf - set_: gaps.append('converter misses %s' % sorted(mf - set_))
+    name, arg, body = recorders[tn]
+    seen = {re.sub(r'_a$', '', f.lower()) for f in re.findall(arg + r'%(\w+)', body, re.I)}
+    if tf - seen: gaps.append('%s misses %s' % (name, sorted(tf - seen)))
+    return gaps
 
 
 def sub(name):
@@ -93,12 +126,16 @@ def classify(name, typ):
     if m:
         tn = m.group(1)
         if tn in ('realarray_t', 'intarray_t', 'logicalarray_t', 'box_t'): return True, 'container/box'
-        if tn == 'grid_core_type': return True, 'grid_core_C'
+        if tn in ('grid_core_type', 'grid_obc_type'): return True, 'persistent grid group, %C mirror'
         if tn == 'ocean_obc_type' and 'pointer' in tl: return True, 'OBC -> c_ptr'
         if tn == 'c_ptr' and name.lower() == 'host': return True, 'host context -> c_ptr'
         mc = mirror_of(tn)
-        if mc and tn in converters: return True, 'mirror %s + %s' % (mc, converters[tn])
-        if mc: return False, 'mirror %s but no converter' % mc
+        if mc and tn in converters and tn in recorders:
+            gaps = group_gaps(tn, mc)
+            if gaps: return False, '; '.join(gaps)
+            return True, 'mirror %s + %s + %s' % (mc, converters[tn], recorders[tn][0])
+        if mc and tn not in converters: return False, 'mirror %s but no converter' % mc
+        if mc: return False, 'mirror %s + %s but no record_* capture helper' % (mc, converters[tn])
         return False, 'no bind(C) mirror for %s' % tn
     if re.match(r'(real|integer|logical)\b', tl):
         if 'dimension' in tl or 'pointer' in tl: return False, 'raw array/pointer'

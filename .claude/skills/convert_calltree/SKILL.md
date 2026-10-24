@@ -259,8 +259,9 @@ Phase 2 is done when the Fortran is bridge-ready, not when the planned stages ar
 means, for every Phase 3 target in the tree and in every sibling call tree:
 
 1. Every dummy can cross `bind(C)`: a container or `Box_t`; a non-pointer `real`/`integer`/
-   `logical` scalar; `grid_core_type`; a derived type with a `bind(C)` mirror and converter in the
-   module (container groups too, not only scalar bundles); `OBC` as a pointer (a `c_ptr` the C++
+   `logical` scalar; `grid_core_type`/`grid_OBC_type`; a derived type with a `bind(C)` mirror, a
+   converter and a `record_*` capture helper in the module, each covering every field of the type
+   (container groups too, not only scalar bundles); `OBC` as a pointer (a `c_ptr` the C++
    aborts on when non-null); or the host-context `c_ptr` (Scope), handled the same way. No whole
    `G`/`GV`/`US`, control structure, `tv`, `VarMix`, `Waves` or diagnostics struct, and no
    `character` or `optional` dummy.

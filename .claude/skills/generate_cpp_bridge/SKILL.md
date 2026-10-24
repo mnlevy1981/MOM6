@@ -87,8 +87,16 @@ The shim's argument list is not a decision: it is the converted subroutine's, ve
 Record intent, kind, rank and optional for every dummy and map it by lessons §3.1–§3.2
 (containers → `_C` mirrors, scalars by value with C kinds, pointers → `type(c_ptr)`).
 
-A derived-type dummy whose fields the C side needs is **flattened**: one channel per field. Build
-the field list from this subroutine's own body (lessons §10 #5):
+A derived-type dummy with a `bind(C)` mirror in the module (a bundle, shadow or container group)
+crosses as that mirror: the module's `<type>_to_c(x)` in the AMReX arm, the mirror type in the
+interface (`import ::`). It is captured with the module's `record_<type>` helper: once with no
+suffix, then `_before`/`_after` by intent, as for a container (lessons §13). `grid_core_type`
+crosses as `Gcore%C` and is captured as `_<field>` for each field the `_fortran` body views
+(vertvisc precedent). A group missing its converter or capture helper is a Phase 2 gap
+(`convert_calltree` Step 6b): stop, never write one here.
+
+A derived-type dummy with no mirror is **flattened**: one channel per field. Build the field list
+from this subroutine's own body (lessons §10 #5):
 1. Grep for every `<dummy>%<field>`, including call actuals; where the whole struct is passed to a
    callee, follow it and repeat. Deduplicate.
 2. Classify each field as read and/or written, and record its guards; a field behind its own
@@ -133,8 +141,10 @@ stay at the caller (lessons §16).
 
 - **Field coverage, by script:** for each flattened dummy, the field set from re-grepping
   `<name>_fortran` and its followed callees equals the interface arguments, the AMReX arm's
-  `%to_c()` set, and the capture records (`_after` for every written field). Count/order checks and
-  CAPTURE replay can't catch a field missing from all of them.
+  `%to_c()` set, and the capture records (`_after` for every written field). For a mirrored group,
+  every field the body uses is in its converter and capture helper, and every written group has an
+  `_after` record; for `Gcore`, every viewed field is recorded. Count/order checks and CAPTURE
+  replay can't catch a field missing from all of them.
 - **Unchanged code:** `<name>_fortran` differs from the original only by its name lines; no call
   site changed; no existing comment edited.
 - **Declarations:** no undeclared or case-insensitively clashing names; `#if` depth balanced.

@@ -148,6 +148,14 @@ The converter is unconditional if every member is a scalar (`reconstruction_CS_t
 container member it is wrapped in `#ifdef _TIM` (`%to_c()` exists only under TIM), with its doc
 comment before the `#ifdef` (`BT_cont_container_to_c`).
 
+Each bundle also gets a capture helper, `record_<cluster>_CS`, unconditional, next to the
+converter; without it a bridged kernel's capture silently omits the bundle. It adds every field
+as `prefix//"_<field>"` with `rec%add` (a nested bundle through its own helper:
+`record_CorAdv_opts_CS`). A bundle holding containers takes a `suffix` and follows the shadow
+form (`create_shadow_container_type` Step 4; `record_coupling_state`): with an empty suffix it
+records each container's `%associated()` and the scalars, otherwise each associated container
+under `prefix//"_<field>"//suffix`.
+
 C++ side: a scalar-only mirror needs no marshalling helper; the bridge passes
 `const <cluster>_CS_C*` and the kernel reads `const <cluster>_CS_C&`. It is defined in the
 module's kernel header, not `turbotmp_bridge_c_types.h` (protoMOMxx `generate_amrex_code` lessons.md
@@ -183,6 +191,8 @@ Where a leaf had renamed a field's dummy, restore the bundle field's real name.
   (or plain signature) and every call site.
 - Each converter: scalars assigned directly, containers via `%to_c()`, `#ifdef _TIM` iff it has
   a container member.
+- Mirror, converter and `record_*` helper each cover every field of the bundle
+  (`convert_calltree/audit_bridge_ready.py` checks this for every type a bridge target takes).
 - No bare reference to a bundled field name remains in the tree outside `%<field>` access.
 - Every leaf is exactly one of the Step 6 kinds.
 - Comments: every existing `!<` survives verbatim; line limit (lessons §7); `#if`/`#endif` depth-tracked across the
