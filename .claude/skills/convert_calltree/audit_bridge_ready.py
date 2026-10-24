@@ -20,7 +20,8 @@ Checks, per Phase 3 target:
      a derived type with a bind(C) mirror AND a converter, the OBC pointer, or one opaque
      host-context `type(c_ptr) :: host` dummy that reaches Fortran-only helpers);
   2. no Fortran-only work in the body (diagnostics, halo passes incl. pass_var/pass_vector,
-     checksums, reporting, any --forbid call,
+     checksums, reporting, any --forbid call, %alloc/%free/%rebound of a dummy or a component of one
+     (local scratch containers are allowed),
      MOM_error, I/O, G%/GV%/US% references, SZ*_ macros, container %alloc/%free);
   3. every do concurrent iterates over a Box_t;
 and, for the per-column primitives:
@@ -124,7 +125,14 @@ for t in TARGETS:
     bad_body = sorted(set(re.findall(FORBIDDEN, code)))
     bad_body += sorted(set('%s%%' % x for x in re.findall(r'(?<![%\w])(G|GV|US)%\w+', code)))
     bad_body += sorted(set(re.findall(r'SZ[IJK]B?_\(\w+\)', code)))
-    bad_body += sorted(set(m + '()' for m in re.findall(r'%(alloc|free)\s*\(', code)))
+    # %alloc/%free/%rebound are Fortran-only, but only matter on data that crosses the bridge or
+    # persists: a dummy or a component of one.  Local scratch inside the Fortran implementation is
+    # allowed (the C++ side manages its own; CorAdCalc_TR precedent).
+    dummy_names = {n.lower() for n, _ in dummy_types(s)}
+    for base, op in re.findall(r'(?<![%\w])(\w+)(?:%\w+)*%(alloc|free|rebound)\s*\(', code):
+        if base.lower() in dummy_names:
+            bad_body.append('%s%%...%%%s()' % (base, op))
+    bad_body = sorted(set(bad_body))
     heads = re.findall(r'do concurrent \(([^\n]*)', code)
     bad_loops = [h[:60] for h in heads
                  if not all(re.match(r'\s*\w+\s*=\s*\w+%idxS\(\d\):\w+%idxE\(\d\)\s*$', r)

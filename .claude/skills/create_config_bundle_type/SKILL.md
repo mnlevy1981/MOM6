@@ -1,200 +1,125 @@
 ---
 name: create_config_bundle_type
-version: "0.3.2"
-description: Cluster a private (module-local) control-structure/config derived type's fields — scalars, and already-containerized arrays — into small, purpose-built bind(C)-ready bundle types, nested back into the original type, based on which fields actually travel together across the call tree. Worked example in this codebase: continuity_PPM_CS's 20 individually-flattened fields were clustered into reconstruction_CS (upwind_1st/monotonic/simple_2nd) and transport_adjust_CS (CFL_limit_adjust/aggress_adjust/vol_CFL/better_iter/use_visc_rem_max/marginal_faces/tol_eta/tol_vel). Use this instead of leaving convert_array_containers's flattening as the end state, and instead of create_shadow_container_type, whenever the type in question is private to the module/call tree being worked on (no shadow-and-copy-back dance needed) rather than shared with code outside it.
+version: "0.4.0"
+description: Cluster a private (module-local) MOM6 control-structure/config type's fields -- scalars and already-containerized arrays -- into small bind(C)-ready bundle types nested back into the original type, based on which fields actually travel together across the call tree (e.g. continuity_PPM_CS -> reconstruction_CS + transport_adjust_CS). Also gives init-time constant arrays persistent container copies (grid_core pattern) when the plan records it. Use instead of leaving individually flattened fields as the end state, when the type is private to the tree; for a type shared outside the tree use create_shadow_container_type instead.
 user-invocable: true
 argument-hint: <work-directory> <type-name> [<call-tree-entry-point>] [--enable_git_commit] [--disable_git_commit]
 ---
 
 # Cluster a private control structure's fields into bind(C)-ready bundles
 
-## Why this exists
+A control structure that can never be `bind(C)` (e.g. it holds a `type(diag_ctrl), pointer`)
+gets flattened into individual dummies by `convert_array_containers` Step 2 wherever a bridged
+leaf needs its fields. Left that way, the same few fields reappear in every signature and bridge
+interface down the tree. Instead, trace which fields travel together and give each such cluster
+its own small bundle type (plain fields, a `bind(C)` mirror, a converter), nested back into the
+original type. The un-bindable fields stay on the original type, untouched.
 
-`convert_array_containers`'s argument-list-reduction step (its own
-"Settle these decisions" item 2) flattens a private control structure's
-fields into individual dummies wherever a leaf kernel needs them — this
-is necessary groundwork whenever the type itself can never be `bind(C)`
-(e.g. it holds a `type(diag_ctrl), pointer`), so a leaf destined for a
-bridge can't take the whole struct. Left at that end state, the same
-handful of fields end up reappearing individually, repeatedly, across
-every signature and every `bind(C)` bridge interface down the call
-tree — the flattening obscures exactly the logical relationships between
-arguments that the original struct expressed for free.
+- **Shared type?** If code outside the tree accesses its fields, stop and use
+  `create_shadow_container_type`.
+- Works on an already-flattened or an unflattened type; Step 6's per-leaf decision applies
+  either way.
+- Container API and `%to_c()`/`bind(C)` conventions come from `array_container_lessons` and
+  `cpp_bridge_lessons` (invoke once per session).
 
-**The fix:** trace which fields actually travel together across the
-call tree, and cluster each such group into its own small bundle type —
-plain Fortran fields, a `bind(C)` mirror, and a converter — nested back
-into the original struct in place of the flat fields. Threading one
-bundle dummy through a dozen signatures reads the same as threading the
-original struct did, without reintroducing the struct's own
-bridge-incompatibility (the bundle holds only bridge-representable
-fields; the un-bindable ones, like the `diag_ctrl` pointer, stay on the
-original struct, untouched).
+## Field eligibility
 
-**Not `create_shadow_container_type`.** That skill solves a different
-problem: a type *shared* with code outside the call tree being worked
-on, where you can't touch the real fields at all and must build a
-temporary parallel shadow, copy in, forward, copy back, free. A private,
-module-local control structure has no such blast radius — restructure
-its real fields in place, once, with no shadow and no copy-back. If the
-type you're about to cluster turns out to be used outside this call
-tree (grep `use <its module>, only : <TypeName>` repo-wide), stop and
-use `create_shadow_container_type` instead.
+- **Scalar** (any intrinsic type): eligible.
+- **Array**: eligible only if already a container. Never convert a raw array here; run
+  `convert_array_containers` first. Exception: init-time constant arrays, when the plan
+  records it (Step 1b).
+- **Pointer to a derived type, or anything never `bind(C)`-representable**: never bundled;
+  stays on the original type.
+- **Diagnostic handles** (`id_*`): normally excluded by the plan (they never cross to C++). If one
+  also **gates computation** in a kernel (e.g. `if (CS%id_CAuS > 0 .or. CS%id_CAvS > 0)`), either
+  report the leaf as needing the whole struct (so Phase 3 passes the gate as an argument), or add
+  a logical member to the bundle (`do_CAS_diag`), set once at the end of init after diagnostics
+  are registered, from the same test. The `id_*` handles stay on the struct for `post_data`.
 
-**Runs on an already-flattened struct or an unflattened one.** Starting
-unflattened is mechanically simpler (straight to clustered bundles, no
-flattened intermediate state), but usage-tracing costs the same either
-way, and every leaf still needs Step 6's explicit per-leaf call — keep
-the whole struct, or stop taking it (Step 7) — never both.
+A cluster may mix scalars and containers; the converter treats each member by its kind (Step 4).
 
-This skill assumes `array_container_lessons` (container API,
-`%to_c()`/`bind(C)` conventions) and, if a bridge already exists
-anywhere in the call tree, `cpp_bridge_lessons`, have already been
-invoked this session. Neither is reproduced here.
+## Precondition: the type is private to the tree
 
-## Scope — field eligibility
-
-Walk every field of the target type and classify it before clustering
-anything:
-
-- **Scalar** (any intrinsic type) — always eligible, no precondition.
-- **Array** — eligible *only if it is already a container*
-  (`RealArray_t`/`IntArray_t`/`LogicalArray_t`). Never convert a raw
-  array as part of this skill — that is `convert_array_containers`'s
-  job. If a field you want to cluster is still a raw array, stop and run
-  `convert_array_containers` on the subroutines that need it first,
-  then come back.
-- **Pointer to another derived type, or anything else that can never be
-  `bind(C)`-representable** (e.g. `continuity_PPM_CS`'s
-  `type(diag_ctrl), pointer :: diag`) — never bundle. Leave it exactly
-  where it is on the original struct, alongside any other field that
-  ends up in no cluster at all.
-
-- **Diagnostic handles** (`id_*` integers passed to `post_data`) — normally
-  excluded by the calling plan: they never cross to C++. But check
-  whether any also **gate computation** inside a kernel (e.g.
-  CorAdCalc's `if (CS%id_CAuS > 0 .or. CS%id_CAvS > 0)` around the Stokes
-  diagnostic loops, and `id_rv`/`id_PV` gating `RV`/`PV`). An excluded
-  gating field stays on the struct, so every leaf that reads it must
-  keep taking the whole struct (Step 6), which keeps that leaf from
-  being bridgeable as-is. Name those leaves and fields in the report,
-  so Phase 3 can pass the gate values as plain arguments instead.
-  Or, as CorAdCalc did (`CorAdv_opts_CS`), make each gate a logical
-  member of the bundle (`do_CAS_diag`, `do_RV_diag`, `do_PV_diag`). Set
-  it once at the end of init, after the diagnostics are registered, from
-  the same test (`(CS%id_CAuS > 0) .or. (CS%id_CAvS > 0)`). The `id_*`
-  handles stay on the struct for `post_data`.
-
-A cluster may freely mix eligible scalars and eligible container fields
-— the converter (below) handles each member's own kind. This is not a
-new mechanism invented for this skill: `reconstruction_CS_to_c`/
-`transport_adjust_CS_to_c` (`MOM_continuity_PPM.F90`) already show the pure-scalar case
-(unconditional, direct assignment per field) and `BT_cont_container_to_c`
-already shows the pure-container case (`#ifdef _TIM`-guarded, delegates
-to each field's own `%to_c()`); a mixed cluster's converter is just both
-rules applied per field in the same function.
-
-## Hard precondition
-
-Confirm the target type is genuinely private to the call tree you're
-about to touch: grep `use <module>, only : <TypeName>` (and any
-qualified `<module>%<TypeName>` reference) across the whole repo, not
-just the module that defines it. What disqualifies a type is code
-outside the call tree **accessing its fields**. In that case this skill
-does not apply; use `create_shadow_container_type` instead. Code outside
-the tree that only declares the type and passes it along is fine, if
-the type's components are `private` (`type, public :: X ; private`),
-because restructuring its fields then can't affect that code. So check
-two things:
-1. Do any hits outside the tree reference fields (`<var>%<field>`)?
-2. Are the components private?
-
-This is exactly the check that made `continuity_PPM_CS` eligible here
-while `BT_cont_type` (used directly by `MOM_barotropic.F90` and the
-RK2/RK2b dynamics files) was not. `CoriolisAdv_CS` is the opaque-holder
-case: the four dynamics drivers declare and pass it but can't touch its
-private fields, so it's eligible.
+Grep the whole repo for `use <module>, only : <TypeName>` and `<module>%<TypeName>`. The type is
+disqualified only if code outside the tree **accesses its fields**. Outside code that merely
+declares and passes it is fine when the components are `private` (`type, public :: X ; private`)
+— e.g. `CoriolisAdv_CS`, passed opaquely by the dynamics drivers. `continuity_PPM_CS` qualifies;
+`BT_cont_type` (fields used by `MOM_barotropic.F90`) does not.
 
 ## Settle these decisions
 
-1. **Bundle uniformly, with one documented exception.** A subroutine
-   that needs only 1–2 fields of a cluster still takes the whole bundle,
-   rather than inventing a narrower type. The one exception: a leaf in
-   the hot inner-loop path (`elemental`, called per grid cell) may keep
-   a bare scalar, unpacked from the bundle by its caller at that one
-   call site — mirror `flux_elem`'s treatment of `vol_CFL` in the
-   `continuity_PPM_CS` work. Call out any such leaf explicitly; don't
-   apply the exception silently or to more than the one hottest call.
-2. **How many clusters** comes from tracing actual usage (Step 2 below),
-   never from guessing by field name or proximity in the struct
-   definition. Two disjoint clusters is common but not a rule.
-3. **Don't bundle a field with no repeated companion.** If a field is
-   read or forwarded at only one or two call sites and never travels
-   with another field, leave it as a bare individual dummy. Bundling
-   only pays off when a cluster of fields recurs together across many
-   signatures — confirmed negatively in this codebase by `GV`
-   (`verticalGrid_type`) and `US` (`unit_scale_type`) in the continuity
-   call tree: each of their touched fields is consumed at 1–2 call sites
-   with no recurring companion, so neither is a bundling candidate
-   there despite both being flattened structs in the same call tree.
-4. **Naming**: follow the in-tree precedent in `MOM_continuity_PPM.F90`:
-   - the bundle type is `<cluster>_CS`, its `bind(C)` mirror
-     `<cluster>_CS_C`, and its converter `<cluster>_CS_to_c`;
-   - it is nested in the parent struct as a member with the same name as
-     its type (`type(reconstruction_CS) :: reconstruction_CS`);
-   - a leaf that takes the bundle names that dummy `CS`, so its body's
-     `CS%<field>` references need no edit.
+Take the user's or the plan's values where given; otherwise:
 
-   Example from CorAdCalc: `Coriolis_scheme_CS` / `Coriolis_scheme_CS_C`
-   / `Coriolis_scheme_CS_to_c`, nested as `CS%Coriolis_scheme_CS`.
-   Deviate only if the codebase's existing naming for the domain says
-   otherwise.
-5. **Stage multi-cluster rollouts.** If more than one cluster is found,
-   roll each out as its own atomic pass (every call boundary for that
-   cluster's fields must agree at once, so a partial rewrite doesn't
-   compile) — mirror the Stage A/Stage B split used for
-   `reconstruction_CS`/`transport_adjust_CS`.
-
-If the user already specified any of these, take their values as-is.
+1. **Bundle uniformly.** A subroutine needing only one or two fields of a cluster still takes the
+   whole bundle. One exception: the hottest inner-loop leaf (`elemental`, per cell) may get a
+   bare scalar unpacked by its caller at that one call site (`flux_elem`'s `vol_CFL`). Name it in
+   the report; never apply it more widely.
+2. **Clusters come from traced usage** (Step 2), never from field names or declaration order.
+3. **No bundle for a field without a recurring companion.** A field used at one or two call
+   sites, never with another field, stays a bare dummy (as `GV`/`US` fields in continuity did).
+4. **Naming** (precedent: `MOM_continuity_PPM.F90`): type `<cluster>_CS`, mirror
+   `<cluster>_CS_C`, converter `<cluster>_CS_to_c`; nested as a member named like its type
+   (`type(reconstruction_CS) :: reconstruction_CS`); a leaf taking the bundle names the dummy
+   `CS`, so its `CS%<field>` references need no edit. Exception: Step 1b's dummy.
+5. **Stage multiple clusters**: each cluster is one atomic pass, since every call boundary for
+   its fields must agree at once.
 
 ## Steps
 
 ### 0. Validate inputs
 
-`<work-directory>` and `<type-name>` are required; `<call-tree-entry-point>`
-defaults to every public subroutine in the type's own module. If either
-required argument is empty, or equals `help`/`--help`/`-h`, print usage
-(mirroring this file's frontmatter) and stop. If `<work-directory>` is
-not an existing directory, stop. Locate `<type-name>`'s declaration
-(`grep -irn "^[[:space:]]*type.*::[[:space:]]*<type-name>\b"`); zero
-matches is an error, more than one asks the user which to use.
+`<work-directory>` and `<type-name>` are required; `<call-tree-entry-point>` defaults to every
+public subroutine in the type's module. Empty or `help`/`--help`/`-h`: print usage (from the
+frontmatter) and stop. A missing work directory stops. Locate the declaration
+(`grep -irn "^[[:space:]]*type.*::[[:space:]]*<type-name>\b"`): none is an error; more than one,
+ask.
 
 ### 1. Classify every field
 
-Read the type's full declaration and classify each field per Scope
-above. Stop and report if any field you'd otherwise want to cluster is
-still a raw array (refer to `convert_array_containers`); do not convert
-it yourself.
+Read the full declaration and classify each field as above. A raw array you would cluster (and
+that is not a Step 1b case) stops the run; report it for `convert_array_containers`.
+
+### 1b. Persistent containers for init-time constant arrays (only when the plan records it)
+
+For raw `allocatable` (or `ALLOCABLE_`) fields written only during init and only read by the
+tree: metric products and coefficient fields (`hor_visc_CS`'s `dx2h`, `Kh_bg_xx`,
+`Laplac2_const_xx`, …). Without this they would have to be copied into fresh containers at every
+call, every timestep. User decision 2026-10-23 (`horizontal_viscosity` D4).
+
+- **Pattern `grid_core`** (`src/core/MOM_grid_containers.F90`): keep every raw field as it is
+  (init, `*_end` and Fortran-only code still use it) and add a container-only bundle nested in
+  the type (e.g. `hv_metrics_CS`) holding one persistent copy per field. Members keep the raw
+  field's name and its doc comment verbatim.
+- **Build once at the very end of init**, after every helper that writes the arrays:
+  `call CS%<bundle>%<f>%alloc(lb=LBOUND(CS%<f>), ub=UBOUND(CS%<f>), source=CS%<f>)`. Guard a plain
+  `allocatable` field with `allocated(CS%<f>)`; guard an `ALLOCABLE_` field with the condition
+  init allocates it under, never `allocated()` (the macro is empty under static memory, where
+  `allocated()` doesn't compile).
+- **Free** every member in the type's `*_end` (`%free()` is safe when unallocated).
+- **Readers** take the bundle and `%view` each member they use into a local pointer named after
+  the field, nullified first and viewed under `%associated()`, so `CS%<f>(i,j)` becomes
+  `<f>(i,j)` and the arithmetic is unchanged. **Name the dummy differently from its type**
+  (`metrics` for `hv_metrics_CS`): a variable may not share a name with an accessible derived
+  type (gfortran: "Derived type 'hv_metrics_cs' … is being used before it is defined"). A
+  component may share it.
+- A field the tree writes is state, not configuration: leave it raw for
+  `convert_array_containers`.
+- The mirror and converter follow Step 4's container rule.
 
 ### 2. Trace usage across the call tree
 
-For every subroutine reachable from `<call-tree-entry-point>` down to
-every leaf, record which eligible fields it reads, writes, or forwards
-(whether currently reached via individually flattened dummies, direct
-`<dummy>%<field>` access, or the whole struct passed wholesale). This is
-the expensive step — for anything beyond a handful of subroutines, use
-an Explore/fork agent to build the usage map rather than guessing from
-memory or from field names.
+For every subroutine from the entry point down, record which eligible fields it reads, writes or
+forwards (via flattened dummies, `<dummy>%<field>`, or the whole struct). Beyond a handful of
+subroutines, build the map with an Explore/fork agent.
 
 ### 3. Cluster by co-occurrence
 
-Group fields that are read or forwarded together across most or all of
-the same subroutines. A field with no recurring companion is not
-bundled (Settle-these-decisions item 3) — leave it exactly as found.
+Group fields read or forwarded together across most of the same subroutines. Fields without a
+recurring companion stay as found.
 
 ### 4. Define each cluster's bundle
 
-For each cluster, add (in the same module as the original type):
+In the original type's module:
 
 ```fortran
 !> <One-line purpose of this cluster of options>.
@@ -208,172 +133,87 @@ type, bind(C) :: <cluster>_CS_C
   <c_kind or _C container-mirror type> :: field1
   ...
 end type <cluster>_CS_C
-```
 
-Then the converter. If every member is a scalar, it is unconditional —
-no infra dependency, matching `reconstruction_CS_to_c`/
-`transport_adjust_CS_to_c`:
-
-```fortran
 !> Converts a <cluster>_CS to its bind(C) mirror.
 function <cluster>_CS_to_c(opts) result(cdesc)
   type(<cluster>_CS), intent(in) :: opts
   type(<cluster>_CS_C) :: cdesc
-  cdesc%field1 = opts%field1   ! scalar: direct assignment
+  cdesc%field1 = opts%field1          ! scalar: direct assignment
+  cdesc%field2 = opts%field2_a%to_c() ! container: delegate
   ...
 end function <cluster>_CS_to_c
 ```
 
-If the cluster has at least one container member, guard the whole
-function with `#ifdef _TIM` (it now depends on `%to_c()`, which only
-exists under the TIM infra layer) and delegate that member, matching
-`BT_cont_container_to_c`:
+The converter is unconditional if every member is a scalar (`reconstruction_CS_to_c`). With any
+container member it is wrapped in `#ifdef _TIM` (`%to_c()` exists only under TIM), with its doc
+comment before the `#ifdef` (`BT_cont_container_to_c`).
 
-```fortran
-cdesc%field1 = opts%field1        ! scalar: direct assignment
-cdesc%field2 = opts%field2_a%to_c() ! container: delegate
-```
-
-On the C++ side, a scalar-only `<cluster>_CS_C` needs no marshalling
-helper. The bridge passes it as `const <cluster>_CS_C*`, and the kernel
-reads its fields directly through `const <cluster>_CS_C&`. Its full
-definition lives in the module's kernel header, not in the shared
-`turbotmp_bridge_c_types.h` (protoMOMxx `generate_amrex_code` lessons.md §2.2).
-Keep the `bind(C)` mirror's field order and kinds (`c_int`, `c_bool`,
-`c_double`) exactly matching what that header declares.
+C++ side: a scalar-only mirror needs no marshalling helper; the bridge passes
+`const <cluster>_CS_C*` and the kernel reads `const <cluster>_CS_C&`. It is defined in the
+module's kernel header, not `turbotmp_bridge_c_types.h` (protoMOMxx `generate_amrex_code` lessons.md
+§2.2). Field order and kinds (`c_int`, `c_bool`, `c_double`) must match that header exactly.
 
 ### 5. Restructure the original type
 
-Replace each clustered field with one
-`type(<cluster>_CS) :: <cluster>_CS` member per
-cluster. Leave every non-clustered field (pointers, lone scalars from
-Settle-these-decisions item 3) exactly where it is.
+Replace each cluster's fields with one `type(<cluster>_CS) :: <cluster>_CS` member. Every
+non-clustered field stays where it is.
 
 ### 6. Per leaf, decide once: keeps the whole struct, or stops taking it
 
-Every subroutine that currently touches the target type's fields —
-anywhere in the call tree, not just its own module — falls into exactly
-one of these; a leaf cannot straddle both for the same type:
+Every subroutine touching the type's fields, in any module, is exactly one of:
 
-- **Keeps taking the whole struct.** True whenever the leaf has no
-  reason to stop (no bind(C) bridge on it now or planned, and nothing
-  else forcing individual-field access). This needs **no signature
-  change at all** — only a body rename, `<dummy>%<field>` →
-  `<dummy>%<cluster>_CS%<field>` for every clustered field it touches.
-  This is Step 5's restructuring alone rippling through; it applies
-  identically whether the leaf is the type's own init/accessor routine
-  or an arbitrary subroutine three levels down that happened to still
-  take the whole struct.
-- **Stops taking the whole struct.** True for a leaf that needs (now or
-  per its own bridging work) individual-field access instead — already
-  flattened by `convert_array_containers`, or about to be. Its dummy
-  list changes to exactly: this cluster's bundle (Step 7) for every
-  cluster it uses fields from, plus any standalone (never-bundled)
-  field it uses promoted to its own bare dummy via
-  `convert_array_containers`'s Step 2b, in the same pass — never a mix
-  of "still takes the whole struct" *and* "also takes a bundle
-  extracted from that same struct," which would be redundant by
-  construction (the bundle is nested inside the struct after Step 5).
+- **Keeps the whole struct** (no bridge now or planned): no signature change; only
+  `<dummy>%<field>` → `<dummy>%<cluster>_CS%<field>` in the body.
+- **Stops taking it** (bridged, or about to be): its dummies become the bundles it uses plus any
+  unbundled field as a bare dummy (`convert_array_containers` Step 2), in the same pass.
 
-Decide this per leaf before touching anything, so Step 7 below has an
-unambiguous target signature for every leaf it touches.
+Never both for the same type (the bundle is inside the struct). Decide for every leaf before
+editing.
 
 ### 7. Roll out one cluster at a time
 
-Per the staging decision, for one cluster at a time, touch only the
-leaves classified above as "stops taking the whole struct" that use
-this cluster's fields: replace whatever currently carries them —
-individually flattened dummies, or direct struct-field access if this
-is the first cluster reaching that leaf — with the one bundle dummy,
-alongside whatever other bundles/standalone fields that same leaf also
-needs (Step 6). For an already-bridged leaf that means its
-`_fortran`/shim/`bind(C)` triple together (all three must agree); for a
-leaf with no bridge yet, just its own plain signature. Apply the
-hot-loop exception (item 1) only at the one leaf it was scoped to.
+For one cluster, at each "stops taking it" leaf using its fields: replace whatever carries them
+(flattened dummies or struct access) with the bundle dummy. A bridged leaf changes its
+`_fortran`/shim/`bind(C)` triple together. Apply the hot-loop exception only at its one leaf.
+Where a leaf had renamed a field's dummy, restore the bundle field's real name.
 
-Fix any naming inconsistency uncovered for free during the rewrite (a
-dummy renamed away from the field's real name at some leaf) by
-restoring the bundle field's real name at that call site.
+## Verify, by script
 
-## Verify
+- Argument count, order and kind match across every touched `_fortran`/shim/`bind(C)` triple
+  (or plain signature) and every call site.
+- Each converter: scalars assigned directly, containers via `%to_c()`, `#ifdef _TIM` iff it has
+  a container member.
+- No bare reference to a bundled field name remains in the tree outside `%<field>` access.
+- Every leaf is exactly one of the Step 6 kinds.
+- Comments: every existing `!<` survives verbatim; line limit (lessons §7); `#if`/`#endif` depth-tracked across the
+  file (never negative, ends at 0).
+- **Build:** don't compile, build or run tests unless the user explicitly allows it in this
+  conversation (`~/.claude/CLAUDE.md`). Report it as unrun, for both infra layers.
 
-- Programmatic argument count/order check across every `_fortran`/shim/
-  `bind(C)` triple touched (or plain signature, if unbridged) — a script
-  comparing each, not a by-eye read.
-- Every cluster's `_to_c` converter: scalar members assigned directly,
-  container members delegate to `%to_c()`, and the function is
-  `#ifdef _TIM`-guarded if and only if it has at least one container
-  member.
-- Zero remaining bare references to any bundled field name outside of
-  `%field` access, anywhere in the touched call tree.
-- Every field left un-bundled (Settle-these-decisions item 3) is named
-  explicitly in the report, with the call-site count that justified
-  leaving it alone.
-- Every touched leaf is classified as exactly one of "keeps the whole
-  struct" (body rename only) or "stops taking it" (Step 7 dummy-list
-  change) — none mixes both for the same type.
-- Line length within the file's own limit (MOM6 Fortran: 120; don't
-  lengthen an already-over-limit line); `#ifdef`/`#ifndef`/`#if` vs `#endif` depth-tracked
-  across the whole file (must never go negative, must end at 0) rather
-  than a raw token count.
-- No Fortran compiler locally — report the build as unrun.
+## Invariants (hard rules)
 
-## Versioning marker
-
-Every Fortran file this skill creates or modifies gets a `!!SKILLS: 0.3.2`
-marker line — the shared version number for this whole skill family,
-not just this one skill (bump every skill file's `version:` field and
-this marker in lockstep when any of them changes in a way that affects
-generated code, never per-skill). If the file doesn't already have one,
-add it as its own line immediately after the file's existing license/
-header comment block, before the `module` statement. If it already has
-one, update it to the current version rather than adding a second line.
-Deliberately grep-able (`grep -rn "!!SKILLS:"`) and meant to be stripped
-later, once these markers are no longer useful.
-
-## Hard rules
-
-- Never skip the `!!SKILLS: 0.3.2` marker on a file this skill touches,
-  and never add a second marker line if one already exists — update it
-  in place instead.
-- Never touch a type that's used outside the call tree being worked on
-  — that's `create_shadow_container_type`'s job; check first.
-- Never convert a raw array to a container here — `convert_array_containers`,
-  run separately, first.
-- Never bundle a pointer-to-derived-type or other field that can never
-  be `bind(C)`-representable.
-- Never guess a cluster from field names or declaration order — trace
-  actual usage (Step 2) first.
-- Never bundle a field with no recurring companion across the call
-  tree; leave it as a bare individual dummy instead.
-- Never apply the hot-loop bare-scalar exception beyond the one leaf it
-  was scoped to.
-- Never leave a leaf both still taking the whole struct *and* also
-  taking a bundle dummy extracted from that same struct — decide once,
-  per leaf (Step 6), which of the two it is.
-- Do not add commentary about the refactor itself in the source — this
-  codebase documents ocean physics, not its own refactoring history.
-- Do not claim a build passed that was never run; do not attempt to
-  install a Fortran compiler.
+- Only a type private to the tree; never convert a raw array here (Step 1b aside); never bundle
+  an un-bindable field.
+- Clusters from traced usage; no bundle for a field without a recurring companion; hot-loop
+  exception at one leaf only.
+- Each leaf keeps the whole struct or takes bundles, never both.
+- Never reword, shorten or "fix" an existing comment; no comments about the refactor itself.
+- Never claim an unrun build passed; never install a compiler.
+- Exactly one `!!SKILLS: 0.4.0` marker per touched Fortran file, on its own line after the
+  license header, before `module`; update an existing one in place. The version is shared by
+  the whole skill family and bumped in lockstep.
 
 ## Commit gating
 
-Same as `convert_array_containers`: `--enable_git_commit`/
-`--disable_git_commit` override; otherwise follow
-`~/.claude/preferences.json`'s `git_commit_and_push` key (`"auto"` runs
-the commit step; `"manual"`, a missing file, a missing key, or
-unparseable JSON all mean skip it and report modified files for manual
-commit). Branch name: `claude_<lowercased_type-name>_config_bundle`.
+As `convert_array_containers` Step 8: `--enable_git_commit`/`--disable_git_commit` override;
+otherwise `~/.claude/preferences.json` `git_commit_and_push` (`"auto"` commits; anything else,
+missing or unreadable, skips and lists the files). Branch:
+`claude_<lowercased_type-name>_config_bundle`. Never force-push.
 
-## Output to the user on success
+## Output to the user
 
-1. The clusters found, and each one's field list.
-2. Every field classified but left un-bundled, and why (no recurring
-   companion, or excluded as never-bind(C)-representable).
-3. Whether the hot-loop bare-scalar exception was applied, and where.
-4. Which clusters have been rolled out vs remain, if staged.
-5. Any naming inconsistencies fixed along the way.
-5a. Every excluded field that gates computation (Scope), and which leaves
-    it keeps on the whole struct.
-6. Build status — explicitly unrun if no compiler is available.
-7. Whether committed, or the list of modified files for manual commit.
+1. Clusters and their fields; rolled out vs remaining, if staged.
+2. Fields left unbundled and why; Step 1b bundles built, if any.
+3. Where the hot-loop exception was applied; naming inconsistencies fixed.
+4. Excluded fields that gate computation, and the leaves they keep on the whole struct.
+5. Verify results and build status; committed, or the files to commit.

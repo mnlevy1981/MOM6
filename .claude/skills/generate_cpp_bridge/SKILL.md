@@ -1,79 +1,47 @@
 ---
 name: generate_cpp_bridge
-version: "0.3.2"
-description: Wrap an already-container-based MOM6 Fortran subroutine in a runtime-dispatched shim that selects between (a) the original Fortran code, (b) a binary capture mode that records inputs+outputs to disk for offline validation, and (c) a C++/AMReX bridge invoked through bind(C). Use when porting any MOM6 kernel to AMReX while keeping the Fortran truth available as a numerical reference. Requires the target subroutine's array dummies to already be RealArray_t / IntArray_t -- run convert_array_containers first. Mirrors the pattern established in TURBO-ESM/MOM6 PR #15.
+version: "0.4.0"
+description: Wrap an already-container-based MOM6 Fortran subroutine in a runtime-dispatched shim that selects, per kernel via an env var, the original Fortran code, a capture mode that records inputs and outputs for offline validation, or a C++/AMReX bridge called through bind(C). Use when porting a MOM6 kernel to AMReX while keeping the Fortran truth as the reference. Requires RealArray_t/IntArray_t dummies and a Box_t iteration domain -- run convert_array_containers first.
 user-invocable: true
 argument-hint: <work-directory> <function-name> [--enable_src_validate] [--enable_git_commit] [--disable_git_commit]
 ---
 
-# Generate C++ bridge for a MOM6 Fortran subroutine
+# Generate a C++ bridge for a MOM6 subroutine
 
-This skill is the **execution checklist**; templates, rationale, and
-pitfalls live in `cpp_bridge_lessons` (§1–§17) — invoke it once per
-session before running this skill, and refer back to its sections from
-each step below (Step 0 checks it's loaded). Do not reproduce templates
-here.
+This skill is the **procedure**. Templates, type maps, naming and pitfalls live in
+`cpp_bridge_lessons` (§1–§17, cited here as "lessons §N"); invoke it once per session first.
 
-**Precondition:** the target's array dummies are already
-`type(RealArray_t)`/`type(IntArray_t)`, its iteration domain already a
-`type(Box_t)` — that's `convert_array_containers`'s job, run first;
-Step 0 stops if it isn't done. The two skills are orthogonal:
-
-| Owned by `convert_array_containers` | Owned by this skill |
-|---|---|
-| Array dummies → containers | The `*_fortran` rename |
-| `%view` pointers in the body | The dispatcher shim + `select case (mode)` |
-| Loops → `do concurrent` over a `Box_t` | `getenv_mode` and the env-var contract |
-| Introducing a `Box_t` dummy | Capture mode / `io_recorder` |
-| Call-site `alloc` / `copy2F` / `free` | `#ifdef _TIM` AMReX arm, `%to_c` |
-| | The `bind(C)` interface declaration |
-| | Halo-check and cpu-clock relocation |
-
-Never do left-column work here — stop and refer the user to
-`convert_array_containers` if the target needs it.
+**Bridge machinery only.** Converting data structures (array dummies → containers, `%view`
+pointers, `Box_t` dummies and loops, call-site `alloc`/`copy2F`/`free`) is
+`convert_array_containers`'s job. If the target needs any of it, stop and send the user there;
+never do it here. This skill adds only the `*_fortran` rename, the shim, capture mode, the
+`#ifdef _TIM` AMReX arm with `%to_c`, the `bind(C)` interface, and halo-check/clock relocation.
 
 ## Help message
 
-If `$ARGUMENTS` is empty, or equals `help`, or equals `--help`, or equals
-`-h`, do NOT run any steps. Print the following help message verbatim
-and stop:
+If the arguments are empty, `help`, `--help` or `-h`, print this and stop:
 
 ```
 Usage: /generate_cpp_bridge <work-directory> <function-name> [--enable_src_validate] [--enable_git_commit] [--disable_git_commit]
 
-Wrap a MOM6 Fortran subroutine in a runtime-dispatched shim that selects
-between the original Fortran code, a capture mode for offline validation,
-and a C++/AMReX bridge. Mirrors TURBO-ESM/MOM6 PR #15.
+Wrap a container-based MOM6 subroutine in a runtime-dispatched shim that
+selects between the original Fortran code, a capture mode for offline
+validation, and a C++/AMReX bridge.
 
-PRECONDITION: the target subroutine's array dummies must ALREADY be
-RealArray_t / IntArray_t containers, with a Box_t iteration domain. If it
-still takes raw arrays (real, dimension(SZI_(G),...)), run
-/convert_array_containers on it first -- this skill does not convert data
-structures.
+PRECONDITION: the subroutine's array dummies are already RealArray_t /
+IntArray_t containers with a Box_t iteration domain. If not, run
+/convert_array_containers first -- this skill does not convert data structures.
 
 Arguments:
-  <work-directory>   Absolute path to an existing TURBO-ESM/MOM6 checkout
-                     (must contain src/ and config_src/, and should be on
-                     the dev/turbo-debug branch). Cloning is not performed.
-  <function-name>    Name of the Fortran subroutine to wrap (case-insensitive
-                     match against its declaration in the tree). Must
-                     already be container-based.
-  --enable_src_validate  (optional) Run Step 1: verify the work directory is a
-                         TURBO-ESM/MOM6 checkout on dev/turbo-debug and that
-                         the subroutine exists. Off by default.
-  --enable_git_commit    (optional) Force Step 10 to run this invocation
-                         only, overriding the global git_commit_and_push
-                         preference in ~/.claude/preferences.json.
-                         Mutually exclusive with --disable_git_commit.
-  --disable_git_commit   (optional) Force Step 10 to be skipped this
-                         invocation only, overriding the global
-                         preference. Mutually exclusive with
-                         --enable_git_commit.
+  <work-directory>       An existing TURBO-ESM/MOM6 checkout (src/, config_src/),
+                         on dev/turbo-debug. Cloning is not performed.
+  <function-name>        The subroutine to wrap (case-insensitive).
+  --enable_src_validate  Also run Step 1: check the checkout, branch and target.
+  --enable_git_commit    Commit and push this run (overrides the global preference).
+  --disable_git_commit   Don't commit this run (overrides the global preference).
 
-When neither --enable_git_commit nor --disable_git_commit is passed, Step 10
-follows ~/.claude/preferences.json's "git_commit_and_push" key ("auto" or
-"manual"; treated as "manual" when the file is missing, the key is absent,
-or the JSON fails to parse).
+Without either commit flag, ~/.claude/preferences.json's "git_commit_and_push"
+("auto" or "manual"; missing or unreadable means "manual") decides.
 
 Example:
   /generate_cpp_bridge /glade/derecho/scratch/sunjian/MOM6 PPM_limit_pos
@@ -81,309 +49,125 @@ Example:
 
 ## Step 0 — validate inputs
 
-`$0` = work-directory, `$1` = function-name. Run these checks **before any
-other step** and stop on the first failure with a one-line, actionable
-error. Do not retry, do not assume defaults, do not create anything.
+Stop on the first failure with a one-line, actionable error; never assume a default or create
+anything.
+1. Both positional arguments present (else `Error: missing arguments. Run "/generate_cpp_bridge
+   --help" for usage.`); the work directory exists.
+2. Flags recognized (else `Error: unknown option "<value>"`); `--enable_git_commit` and
+   `--disable_git_commit` not both given.
+3. `cpp_bridge_lessons` already invoked this session; if not, invoke it now. Never reconstruct a
+   template from memory.
+4. The target is container-based: every grid-shaped array dummy is `RealArray_t`/`IntArray_t` and
+   the iteration domain is a `Box_t`. Otherwise stop with
+   `Error: "<function-name>" still takes raw arrays. Run "/convert_array_containers <work-directory> <function-name>" first.`
 
-1. **Argument count.** If `$0` empty OR `$1` empty → stop:
-   `Error: missing arguments. Run "/generate_cpp_bridge --help" for usage.`
-2. **Work directory is an existing MOM6 checkout.** If `$0` is not an
-   existing directory → stop:
-   `Error: work directory "<value>" does not exist.`
-   Cloning is not performed by this skill; Step 1 verifies checkout
-   identity and branch state.
-3. **Parse optional flags.** Scan remaining arguments for `--enable_src_validate`,
-   `--enable_git_commit`, and `--disable_git_commit`.
-   Store as boolean flags (default: off). If both `--enable_git_commit` and
-   `--disable_git_commit` are passed → stop: `Error: --enable_git_commit and
-   --disable_git_commit are mutually exclusive.` Any unrecognised argument
-   that starts with `--` → stop:
-   `Error: unknown option "<value>". Run "/generate_cpp_bridge --help" for usage.`
-4. **Reference material primed.** This skill assumes `cpp_bridge_lessons`
-   has already been invoked earlier in this session. If you have no
-   memory of its numbered sections (§3.1, §3.2, §5, §12, §13, §14, §15,
-   §16, §17 are referenced throughout), invoke it now, before Step 1 or
-   any step below — never guess at template content from memory.
-5. **Target is already container-based.** Every grid-shaped array dummy
-   must already be `type(RealArray_t)`/`type(IntArray_t)`, and the
-   iteration domain already a `type(Box_t)`. If any dummy is still a raw
-   grid-shaped array →
-   stop:
-   `Error: "<function-name>" still takes raw arrays. Run "/convert_array_containers <work-directory> <function-name>" first, then re-run this skill.`
-   Do not convert them yourself (boundary table above) — that would
-   duplicate `convert_array_containers`'s work and produce an
-   unreviewable combined diff.
+Items 3–4 always run. No wrapping happens until Step 0 passes.
 
-Step 1 runs only when `--enable_src_validate` is set. Items 4 and 5
-always run, regardless of flags. Step 10's behavior is decided by
-`--enable_git_commit`/`--disable_git_commit` if passed, or otherwise by
-the global preference described in Step 10. No wrapping work executes
-until Step 0 passes.
-
-## Settle these decisions (ask if not obvious from the tree)
-
-1. **Bridge prefix** — default to whatever existing `_bridge) bind(C)`
-   declarations in the tree use; otherwise `turbotmp_`.
-2. **Env-var name** — default `<UPPERCASE_$1>_MODE`.
-3. **AMReX gating** — default `#ifdef _TIM` around the `case (TIMH_runAMREX)`
-   arm only; capture mode is never gated.
-
-The shim's public argument list is **not** a decision: it is inherited
-verbatim from the converted subroutine (containers in, containers out),
-so existing call sites need no changes.
-
-If the user already specified any of these, take their values as-is.
+**Decisions** (take the user's or the campaign plan's value if given; otherwise these defaults):
+bridge prefix = the one existing `_bridge) bind(C)` declarations use, else `turbotmp_`
+(lessons §3.3); env var = `<UPPERCASE_NAME>_MODE`; only the AMReX arm is gated (lessons §8).
+The shim's argument list is not a decision: it is the converted subroutine's, verbatim.
 
 ## Procedure
 
-Each step is one action with a pointer to the lessons.md section that
-holds the template or rationale.
+### 1. Validate the checkout (only with `--enable_src_validate`)
 
-### 1. Validate the existing checkout *(runs only when `--enable_src_validate` is passed; skip otherwise and proceed to Step 2)*
-   All wrapping work in this skill is based on the `dev/turbo-debug`
-   branch — the agreed base for bridge work and what the C++ side
-   expects to merge against.
+- `git remote -v` names `TURBO-ESM/MOM6`; `src/` and `config_src/` exist.
+- The tree is clean (never stash or discard). HEAD is at `origin/dev/turbo-debug` (fetch first
+  only if the user's instructions allow contacting the remote); if not, ask before switching
+  branches.
+- Exactly one `subroutine <function-name>` declaration under `src/` or `config_src/`; none is an
+  error, more than one means ask which.
+- `.claude/skills/generate_cpp_bridge/lessons.md` exists (an install check only; it is a pointer,
+  never read it for guidance).
+- Print the plan: the file, env var, bridge symbol `<prefix>_<name>_bridge`, and the caller files.
 
-   Verify `$0` is a TURBO-ESM/MOM6 checkout by running
-   `git -C $0 remote -v` and confirming the output contains
-   `TURBO-ESM/MOM6`. If not → stop:
-   `Error: "<value>" is not a TURBO-ESM/MOM6 checkout.`
+### 2. Map each dummy to its `bind(C)` counterpart
 
-   Then run `git -C $0 fetch origin dev/turbo-debug` and check the
-   branch state:
-   - If the working tree is dirty (`git -C $0 status --porcelain` is
-     non-empty) → stop and surface to the user; do not stash or discard.
-   - If HEAD is not already at `origin/dev/turbo-debug` (compare
-     `git -C $0 rev-parse HEAD` and
-     `git -C $0 rev-parse origin/dev/turbo-debug`) → stop and ask the
-     user whether to `git checkout dev/turbo-debug` before continuing.
-     Do not switch branches silently — the user may have unrelated work
-     on the current branch.
+Record intent, kind, rank and optional for every dummy and map it by lessons §3.1–§3.2
+(containers → `_C` mirrors, scalars by value with C kinds, pointers → `type(c_ptr)`).
 
-   **Then validate the tree** before proceeding to Step 2 — stop on the
-   first failure with a one-line, actionable error:
-   - **Looks like MOM6.** If `$0/src` or `$0/config_src` is missing → stop:
-     `Error: "<value>" is not a MOM6 source tree (missing src/ or config_src/).`
-   - **Subroutine present.** Run `grep -irn "^[[:space:]]*subroutine[[:space:]]\+<function-name>\b" $0/src $0/config_src`.
-     - 0 matches → stop: `Error: subroutine "<function-name>" not found under <work-directory>/{src,config_src}.`
-     - >1 match → list candidates and ask the user which file to wrap.
-   - **`lessons.md` present.** If `$0/.claude/skills/generate_cpp_bridge/lessons.md` is missing → stop:
-     `Error: lessons.md not found at <work-directory>/.claude/skills/generate_cpp_bridge/lessons.md.`
-     This is an **existence check only** — a cheap proxy for "this
-     checkout has the skill installed." Do not read it for guidance:
-     content moved to `cpp_bridge_lessons`, and an older checkout's copy
-     may be stale (e.g. still showing the removed `%dup` API). Always
-     take templates and API detail from `cpp_bridge_lessons`.
-   - **Confirm the plan.** Print one paragraph naming: the resolved
-     subroutine file path, the proposed env-var (`<UPPERCASE_$1>_MODE`),
-     the proposed bridge symbol (`<prefix>_$1_bridge`; pick `<prefix>` by
-     `grep -h "_bridge) bind(C)" $0/src $0/config_src` — fall back to
-     `turbotmp_`), and the caller files found by
-     `grep -irl "call[[:space:]]\+<function-name>(" $0/src $0/config_src`.
-     Then proceed to Step 2.
+A derived-type dummy whose fields the C side needs is **flattened**: one channel per field. Build
+the field list from this subroutine's own body (lessons §10 #5):
+1. Grep for every `<dummy>%<field>`, including call actuals; where the whole struct is passed to a
+   callee, follow it and repeat. Deduplicate.
+2. Classify each field as read and/or written, and record its guards; a field behind its own
+   guard (`%associated()` inside the struct's presence check) gets its own null-able channel.
+3. Every field gets an interface argument (Step 4), a `%to_c()` in the AMReX arm and capture
+   records (Step 5). Print the list with its classification.
 
-### 2. Classify each dummy argument for the C boundary
-   The dummies are already containers (Step 0 item 5). For every arg,
-   record intent/kind/rank/optional, and map it to its `bind(C)`
-   counterpart using lessons.md §3.1–§3.2: `type(RealArray_t)` →
-   `type(RealArray_C)`, `type(Box_t)` → `type(Box_C)`, scalars →
-   `real(c_double)`/`integer(c_int)`/`logical(c_bool)` by value,
-   pointers → `type(c_ptr)`.
+### 3. Rename the original
 
-   **A derived-type dummy whose fields must cross the boundary**
-   (`BT_cont`, anything not opaque to the C side) can't cross as one
-   argument, so its fields are flattened into separate `RealArray_C`s.
-   Derive that field list from the `_fortran` body, **never** from a
-   sibling bridge's interface that takes the same type — a sibling only
-   carries the fields *its* body touches (lessons.md §10 #8):
-   1. Grep the whole body for every `<dummy>%<field>` occurrence,
-      including actual arguments to callees (`call foo(..., BT_cont%h_u,
-      ...)`) and calls that pass the whole struct to another subroutine
-      — follow those into the callee and repeat. Deduplicate by field.
-   2. Record per field: read and/or written, and every guard around its
-      use. A field behind a second guard beyond the struct's own
-      presence (`if (BT_cont%h_u%associated())` inside `if
-      (set_BT_cont)`) is independently optional: it still needs its own
-      channel, which may be null even when the struct is present.
-   3. Every field on the list gets a `bind(C)` argument (Step 4), an
-      AMREX-arm `%to_c()` with a null placeholder for the absent case
-      (Step 5), and capture records (Step 5, lessons.md §13):
-      `_before` if read, `_after` if written. Print the list with each
-      field's read/written/guard classification alongside Step 2's
-      argument map.
+`<name>` → `<name>_fortran` on the `subroutine`/`end subroutine` lines; nothing else in it changes
+(lessons §12).
 
-   Do **not** introduce a `Box_t`, and do not alter any dummy's type. If
-   the iteration domain is not already a `Box_t`, stop and refer the
-   user to `convert_array_containers` — Step 0 item 5 should have
-   caught this.
+### 4. Add the `bind(C)` interface
 
-### 3. Rename the original implementation
-   Rename `$1` → `$1_fortran` in place. **That is the only change to
-   this subroutine.** Body, dummy declarations, `%view` calls, and loop
-   structure are already container-based and must be left byte-for-byte
-   unchanged apart from the `subroutine`/`end subroutine` name lines.
-   Template: lessons.md §12.
+At the top of the host module, per lessons §3.3, every dummy doc-commented.
 
-   Do not convert array dummies (already done), rewrite loops (already
-   `do concurrent` over the `Box_t`), or touch the math.
+### 5. Write the shim `<name>`
 
-### 4. Add the `bind(C)` interface block
-   At the top of the host module, declare `<prefix>_$1_bridge` per the
-   template in lessons.md §3.3. Doc-comment every dummy with `!<`.
+Same name and dummy list as the original, copied verbatim (names, types, intents, `!<` comments),
+so call sites need no change. One `select case (mode)` over
+`getenv_mode("<ENV_VAR>", default=TIMH_runFORTRAN)` with a capture arm, the AMReX arm in
+`#ifdef _TIM` (all `%to_c()` calls inside it), and `case default` calling `<name>_fortran`
+(lessons §2, §3.1, §8). Capture names and the `kernel` string follow lessons §13. Casts and null
+pointers follow lessons §3.2; check new local names case-insensitively against module names
+(lessons §10 #6).
 
-### 5. Write the shim subroutine `$1`
-   Takes the public name the original had, and **inherits that
-   subroutine's container-based dummy list verbatim** — same names,
-   types, intents, `!<` comments. Because the signature is unchanged,
-   existing call sites keep working untouched.
+### 6. Update the module imports
 
-   No array↔container wrapping happens anywhere in this shim: the
-   containers arrive ready to use. Each dispatch arm either passes them
-   straight to `$1_fortran` or converts them to their `_C` mirrors with
-   `%to_c()` for the bridge call (inside `#ifdef _TIM` — lessons.md §9
-   on why `%to_c` cannot appear unguarded).
+Add lessons §14's `use`s, deduplicated.
 
-   Body is one `select case (mode)` over
-   `getenv_mode("<ENV_VAR>", default=TIMH_runFORTRAN)` with three arms:
-   `TIMH_capture`, `TIMH_runAMREX` (inside `#ifdef _TIM`), and `case
-   default` falling through to `$1_fortran`. Template: lessons.md §2.
-   Capture-record naming: lessons.md §13.
+### 7. Confirm callers need no change
 
-### 6. Update host-module `use` statements
-   Add the imports listed in lessons.md §14, deduplicating with what the
-   module already has.
+Grep every `call <name>(` and confirm argument count and order still match. Edit no call site; a
+mismatch means the shim's signature drifted, so fix the shim.
 
-### 7. Confirm callers need no changes
-   The shim's signature is identical to the pre-rename subroutine's
-   (Step 5), so every existing call site remains valid by construction.
-   Verify this rather than assuming: run
-   `grep -rn "call[[:space:]]\+$1(" $0/src $0/config_src` and confirm each
-   site's argument count and order still match. Do not edit any call site.
+### 8. Relocate halo checks and clocks
 
-   If a call site *does* need changing, something has gone wrong — most
-   likely the shim's signature drifted from the original in Step 5. Stop
-   and fix the shim instead of rewriting callers.
-
-   Any call-site work involving `alloc`/`copy2F`/`free` belongs to
-   `convert_array_containers`, not here.
-
-### 8. Relocate halo checks and CPU clocks
-   Move any halo-sufficiency `MOM_error(FATAL,...)` from inside the
-   kernel to the caller or the shim entry (lessons.md §15). Leave any
-   pre-existing `cpu_clock_begin/end` at the caller, around the shim
-   call — never inside the shim (lessons.md §16).
+Halo-sufficiency checks move out of the kernel to the caller or shim entry (lessons §15); clocks
+stay at the caller (lessons §16).
 
 ### 9. Verify
-   **Field coverage, first, by script.** For every flattened derived-type
-   dummy (Step 2), re-grep `$1_fortran` (and the callees Step 2 followed)
-   for `<dummy>%<field>` and diff that field set against three others:
-   the `bind(C)` interface's arguments, the AMREX arm's `%to_c()`
-   assignments, and the capture arm's `rec%add` names (`_after` for every
-   written field). All four must agree. Argument count/order matching
-   between the shim call and the interface does **not** catch this — an
-   omitted field is omitted from both consistently. Nor does CAPTURE
-   mode: the capture list is built from the same field list, so a C++
-   replay validates against a recording that never contained the
-   missing field.
 
-   Run the three-mode matrix in lessons.md §17. If only the Fortran
-   shim + capture are being delivered, stop after CAPTURE verification
-   and report that the C++ side of `<prefix>_$1_bridge` is the next
-   deliverable.
+- **Field coverage, by script:** for each flattened dummy, the field set from re-grepping
+  `<name>_fortran` and its followed callees equals the interface arguments, the AMReX arm's
+  `%to_c()` set, and the capture records (`_after` for every written field). Count/order checks and
+  CAPTURE replay can't catch a field missing from all of them.
+- **Unchanged code:** `<name>_fortran` differs from the original only by its name lines; no call
+  site changed; no existing comment edited.
+- **Declarations:** no undeclared or case-insensitively clashing names; `#if` depth balanced.
+- **Build and run:** don't compile, build or run tests unless the user explicitly allows it in
+  this conversation. Hand the user the lessons §17 matrix to run and say it is unrun. If only the
+  shim and capture are delivered, the C++ side of the bridge is the next deliverable.
 
-### 10. Commit and push to `claude_<function-name>_bridge` *(gated by the global git-commit preference, overridable per run — see below)*
-   **Decide whether to run this step:**
-   1. If `--disable_git_commit` was passed, skip this entire step and
-      report the files that were modified so the user can commit
-      manually — this run's explicit override wins.
-   2. Else if `--enable_git_commit` was passed, run this step — this
-      run's explicit override wins.
-   3. Else, read the global preference: run
-      `cat ~/.claude/preferences.json 2>/dev/null` and inspect the
-      `git_commit_and_push` key.
-      - If it is `"auto"`, run this step.
-      - If it is `"manual"`, or the file does not exist, or the key is
-        absent, or the JSON fails to parse — skip this entire step and
-        report the files that were modified so the user can commit
-        manually. Absent or unreadable configuration means "manual";
-        never push on an unconfigured machine.
+### 10. Commit (gated)
 
-   From the work directory, create (or check out, if it already exists)
-   the branch `claude_$1_bridge` (use the lowercased function name so
-   different functions land on different branches and can be committed
-   in parallel). Step 1 has already guaranteed HEAD is at
-   `dev/turbo-debug`, so the new branch will be based on it. Stage every
-   modified and newly created file, and commit with a message that
-   briefly summarizes the changes (the wrapped subroutine name, the new
-   bridge symbol, and the affected caller files) and explicitly notes
-   that the work is co-authored by Claude. Use a HEREDOC so the trailer
-   is preserved verbatim:
+`--disable_git_commit` skips; `--enable_git_commit` runs; otherwise `git_commit_and_push` in
+`~/.claude/preferences.json` decides (`"auto"` runs; anything else, or unreadable, skips and lists
+the modified files). Commit everything on `claude_<lowercased name>_bridge` (`git checkout -B`),
+with a message naming the subroutine, the bridge symbol, the files touched and the verification
+reached, ending with the attribution trailer; push with `-u`. If the push is rejected, stop and
+report; never force-push.
 
-   ```
-   BRANCH="claude_$(echo "$1" | tr '[:upper:]' '[:lower:]')_bridge"
-   git checkout -B "$BRANCH"
-   git add -A
-   git commit -m "$(cat <<'EOF'
-   <one-line summary of the wrapping work for $1>
+## Invariants (hard rules)
 
-   <optional 1–3 line body describing the bridge symbol, callers touched,
-   and verification mode reached>
+- The public name and argument list never change; default-mode numerics are bit-identical.
+- No container conversion work (see top).
+- Per-kernel env vars only; capture is never gated by `_TIM`; `case default` is always present.
+- Never re-implement `turbotmp_helperF` helpers; never reuse a `kernel` string.
+- Flattened field lists come from this body, never from another bridge, and are checked by script.
+- Doc comments are copied verbatim; no existing Fortran comment is reworded.
+- Never claim an unrun build passed.
+- Exactly one `!!SKILLS: 0.4.0` marker per touched Fortran file, on its own line after the license
+  header and before `module` (update in place). It is the family's shared version.
+- Anything not covered: check lessons §10, then ask; never improvise.
 
-   Co-authored-by: Claude <noreply@anthropic.com>
-   EOF
-   )"
-   git push -u origin "$BRANCH"
-   ```
+## Output to the user
 
-   If the push is rejected because the branch already exists upstream
-   with unrelated history, stop and surface the conflict to the user
-   rather than force-pushing.
-
-## Versioning marker
-
-Every Fortran file this skill creates or modifies gets a `!!SKILLS: 0.3.2`
-marker line — the shared version number for this whole skill family,
-not just this one skill. If the file doesn't already have one, add it
-as its own line immediately after the license/header comment block,
-before the `module` statement; if it already has one, update it rather
-than adding a second line. Deliberately grep-able
-(`grep -rn "!!SKILLS:"`) and meant to be stripped later.
-
-## Hard rules
-
-- Never skip the `!!SKILLS: 0.3.2` marker on a file this skill touches,
-  and never add a second marker line if one already exists.
-- Do not change the public name of `$1`, or its argument list at all —
-  the shim inherits the converted subroutine's container signature
-  verbatim and must drop into existing call sites unchanged.
-- Do not do `convert_array_containers`'s work (boundary table above) —
-  never change a dummy's type, introduce a `Box_t`, rewrite a loop
-  nest, or add `alloc`/`%view`/`copy2F`/`free` at a call site.
-- Do not introduce a global mode variable; per-kernel env vars only.
-- Do not gate capture mode behind `#ifdef _TIM`; only the AMReX arm is gated.
-- Do not omit the `case default` arm.
-- Do not pass default-kind `logical`/`integer` to a `bind(C)` routine —
-  cast to `c_bool`/`c_int` (lessons.md §3.2).
-- Do not call `c_loc(this%data(1))` on an unallocated container; allocate
-  first.
-- Do not re-implement `getenv_mode`, `already_recorded`, `mark_recorded`,
-  or `io_recorder` — `use` them from `turbotmp_helperF`.
-- Do not reuse a `kernel` string across kernels.
-- Do not copy a flattened derived-type field list from another bridge —
-  derive it from this subroutine's own `_fortran` body, callees
-  included (Step 2), and verify it by script (Step 9). Every field the
-  body writes must be in the `bind(C)` interface, the AMREX arm, and the
-  capture `_after` records.
-
-If something not covered here comes up, consult lessons.md §10
-(recurring pitfalls) before improvising.
-
-## Output to the user on success
-
-Report:
-
-1. The shim's env-var name and the three accepted values.
-2. The `kernel` string used for capture filenames.
-3. The bridge symbol name(s) the C++ side must implement.
-4. The list of caller files that were rewritten.
-5. What still needs to happen on the C++ side (if anything).
+1. The env var and its three values; the `kernel` string.
+2. The bridge symbol(s) the C++ side must implement, with any flattened field list.
+3. Files touched, and confirmation that no call site changed.
+4. The Step 9 results, build status, and what remains on the C++ side; committed, or the files to
+   commit.
