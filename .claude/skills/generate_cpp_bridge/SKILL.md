@@ -91,8 +91,11 @@ A derived-type dummy with a `bind(C)` mirror in the module (a bundle, shadow or 
 crosses as that mirror: the module's `<type>_to_c(x)` in the AMReX arm, the mirror type in the
 interface (`import ::`). It is captured with the module's `record_<type>` helper: once with no
 suffix, then `_before`/`_after` by intent, as for a container (lessons §13). `grid_core_type`
-crosses as `Gcore%C` and is captured as `_<field>` for each field the `_fortran` body views
-(vertvisc precedent). A group missing its converter or capture helper is a Phase 2 gap
+crosses as `Gcore%C` and is captured as `_<field>` for each field the `_fortran` body views,
+following `Gcore` into every callee it is passed to, as for a flattened dummy (vertvisc
+precedent; a tree root that only forwards `Gcore` still needs its callees' fields). The host-context
+`c_ptr` (`convert_calltree` Scope) crosses by value like `OBC` and is captured as
+`_host_associated`. A group missing its converter or capture helper is a Phase 2 gap
 (`convert_calltree` Step 6b): stop, never write one here.
 
 A derived-type dummy with no mirror is **flattened**: one channel per field. Build the field list
@@ -143,7 +146,8 @@ stay at the caller (lessons §16).
   `<name>_fortran` and its followed callees equals the interface arguments, the AMReX arm's
   `%to_c()` set, and the capture records (`_after` for every written field). For a mirrored group,
   every field the body uses is in its converter and capture helper, and every written group has an
-  `_after` record; for `Gcore`, every viewed field is recorded. Count/order checks and CAPTURE
+  `_after` record; for `Gcore`, every field viewed by the body or a callee it passes `Gcore` to is
+  recorded. Count/order checks and CAPTURE
   replay can't catch a field missing from all of them.
 - **Unchanged code:** `<name>_fortran` differs from the original only by its name lines; no call
   site changed; no existing comment edited.

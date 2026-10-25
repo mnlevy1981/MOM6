@@ -10,7 +10,7 @@ module MOM_hor_visc
 
 use array_mod,                 only : RealArray_t, RealArray_C
 use iso_c_binding,             only : c_bool, c_double, c_int, c_ptr, c_loc, c_f_pointer
-use iso_c_binding,             only : c_null_char, c_null_ptr
+use iso_c_binding,             only : c_null_char, c_null_ptr, c_associated
 use turbotmp_helperF,          only : io_recorder, getenv_mode, already_recorded, mark_recorded
 use turbotmp_helperF,          only : TIMH_runAMREX, TIMH_capture, TIMH_runFORTRAN
 use posix,                     only : mkdir_posix
@@ -1389,6 +1389,126 @@ interface
       type(RealArray_C), intent(inout)       :: visc_bound_rem     !< fraction of overall viscous bounds that remain to
                                                                    !! be applied (h or q) [nondim]
     end subroutine turbotmp_hor_visc_q_coeffs_bridge
+
+    !> Bridge for the horizontal_viscosity_TR subroutine
+    subroutine turbotmp_horizontal_viscosity_tr_bridge(bxH0, bxQ0, u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, Gcore, &
+                                                       CS, metrics, nkblock, OBC, hu_cont, hv_cont, STOCH, u_smooth, &
+                                                       v_smooth, dz, slope_x, slope_y, sh_xx_bt, sh_xy_bt, &
+                                                       GME_effic_h, GME_effic_q, KH_u_GME, KH_v_GME, GME_coeff_h, &
+                                                       GME_coeff_q, str_xx_GME, str_xy_GME, NoSt, ShSt, FrictWork, &
+                                                       FrictWork_bh, FrictWork_GME, Ah_h, Ah_q, Kh_h, Kh_q, &
+                                                       grid_Re_Kh, grid_Re_Ah, div_xx_h, sh_xx_h, vort_xy_q, sh_xy_q, &
+                                                       visc_limit_h, visc_limit_q, visc_limit_h_flag, &
+                                                       visc_limit_q_flag, visc_limit_h_frac, visc_limit_q_frac, &
+                                                       BS_coeff_h, BS_coeff_q, H_subroundoff, H_to_RZ, s_to_T, &
+                                                       host) bind(C)
+      use iso_c_binding, only : c_double, c_int, c_ptr
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      import :: hor_visc_MEKE_C, hor_visc_STOCH_C, hor_visc_VarMix_C, hv_metrics_CS_C, hv_opts_CS_C
+      implicit none
+      type(Box_C), intent(in)                :: bxH0              !< The h-point box of the whole column,
+                                                                  !! [isc:iec, jsc:jec, 1:nz]
+      type(Box_C), intent(in)                :: bxQ0              !< The B-grid-index box of the whole column,
+                                                                  !! [IscB:IecB, JscB:JecB, 1:nz]
+      type(RealArray_C), intent(in)          :: u                 !< The zonal velocity [L T-1 ~> m s-1].
+      type(RealArray_C), intent(in)          :: v                 !< The meridional velocity [L T-1 ~> m s-1].
+      type(RealArray_C), intent(in)          :: h                 !< Layer thicknesses [H ~> m or kg m-2].
+      type(RealArray_C), intent(in)          :: uh                !< The zonal volume transport [H L2 T-1 ~> m3 s-1].
+      type(RealArray_C), intent(in)          :: vh                !< The meridional volume transport
+                                                                  !! [H L2 T-1 ~> m3 s-1].
+      type(RealArray_C), intent(inout)       :: diffu             !< Zonal acceleration due to convergence of
+                                                                  !! along-coordinate stress tensor [L T-2 ~> m s-2]
+      type(RealArray_C), intent(inout)       :: diffv             !< Meridional acceleration due to convergence of
+                                                                  !! along-coordinate stress tensor [L T-2 ~> m s-2].
+      type(hor_visc_MEKE_C), intent(inout)   :: MEKE              !< MEKE fields related to Mesoscale Eddy Kinetic
+                                                                  !! Energy.
+      type(hor_visc_VarMix_C), intent(inout) :: VarMix            !< Variable mixing control structure
+      type(grid_core_C), intent(in)          :: Gcore             !< Persistent copies of the core ocean grid fields
+      type(hv_opts_CS_C), intent(in)         :: CS                !< Options used by the horizontal viscosity kernels
+      type(hv_metrics_CS_C), intent(in)      :: metrics           !< Persistent copies of the horizontal viscosity
+                                                                  !! metric and coefficient arrays
+      integer(c_int), intent(in), value      :: nkblock           !< The effective k-block size [nondim]
+      type(c_ptr), intent(in), value         :: OBC               !< Pointer to an open boundary condition type
+      type(RealArray_C), intent(inout)       :: hu_cont           !< Layer thickness at u-points [H ~> m or kg m-2].
+      type(RealArray_C), intent(inout)       :: hv_cont           !< Layer thickness at v-points [H ~> m or kg m-2].
+      type(hor_visc_STOCH_C), intent(inout)  :: STOCH             !< Stochastic control structure
+      type(RealArray_C), intent(in)          :: u_smooth          !< Zonal velocity, smoothed with a spatial low-pass
+                                                                  !! filter [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)          :: v_smooth          !< Meridional velocity, smoothed with a spatial
+                                                                  !! low-pass filter [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)          :: dz                !< Height change across layers [Z ~> m]
+      type(RealArray_C), intent(inout)       :: slope_x           !< Isopycnal slope in i-direction [Z L-1 ~> nondim]
+      type(RealArray_C), intent(inout)       :: slope_y           !< Isopycnal slope in j-direction [Z L-1 ~> nondim]
+      type(RealArray_C), intent(in)          :: sh_xx_bt          !< barotropic horizontal tension (du/dx - dv/dy)
+                                                                  !! including metric terms [T-1 ~> s-1]
+      type(RealArray_C), intent(in)          :: sh_xy_bt          !< barotropic horizontal shearing strain (du/dy +
+                                                                  !! dv/dx) inc. metric terms [T-1 ~> s-1]
+      type(RealArray_C), intent(in)          :: GME_effic_h       !< The filtered efficiency of the GME terms at h
+                                                                  !! points [nondim]
+      type(RealArray_C), intent(in)          :: GME_effic_q       !< The filtered efficiency of the GME terms at q
+                                                                  !! points [nondim]
+      type(RealArray_C), intent(in)          :: KH_u_GME          !< Isopycnal height diffusivities in u-columns
+                                                                  !! [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(in)          :: KH_v_GME          !< Isopycnal height diffusivities in v-columns
+                                                                  !! [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(inout)       :: GME_coeff_h       !< GME coefficient at h-points [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(inout)       :: GME_coeff_q       !< GME coeff. at q-points [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(inout)       :: str_xx_GME        !< smoothed diagonal term in the stress tensor from
+                                                                  !! GME [L2 T-2 ~> m2 s-2]
+      type(RealArray_C), intent(inout)       :: str_xy_GME        !< smoothed cross term in the stress tensor from GME
+                                                                  !! [L2 T-2 ~> m2 s-2]
+      type(RealArray_C), intent(inout)       :: NoSt              !< A diagnostic array of normal stress [T-1 ~> s-1].
+      type(RealArray_C), intent(inout)       :: ShSt              !< A diagnostic array of shear stress [T-1 ~> s-1].
+      type(RealArray_C), intent(inout)       :: FrictWork         !< work done by MKE dissipation mechanisms
+                                                                  !! [R Z L2 T-3 ~> W m-2]
+      type(RealArray_C), intent(inout)       :: FrictWork_bh      !< work done by the biharmonic MKE dissipation
+                                                                  !! mechanisms [R Z L2 T-3 ~> W m-2]
+      type(RealArray_C), intent(inout)       :: FrictWork_GME     !< work done by GME [R Z L2 T-3 ~> W m-2]
+      type(RealArray_C), intent(inout)       :: Ah_h              !< biharmonic viscosity at thickness points
+                                                                  !! [L4 T-1 ~> m4 s-1]
+      type(RealArray_C), intent(inout)       :: Ah_q              !< biharmonic viscosity at corner points
+                                                                  !! [L4 T-1 ~> m4 s-1]
+      type(RealArray_C), intent(inout)       :: Kh_h              !< Laplacian viscosity at thickness points
+                                                                  !! [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(inout)       :: Kh_q              !< Laplacian viscosity at corner points
+                                                                  !! [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(inout)       :: grid_Re_Kh        !< Grid Reynolds number for Laplacian horizontal
+                                                                  !! viscosity at h points [nondim]
+      type(RealArray_C), intent(inout)       :: grid_Re_Ah        !< Grid Reynolds number for Biharmonic horizontal
+                                                                  !! viscosity at h points [nondim]
+      type(RealArray_C), intent(inout)       :: div_xx_h          !< horizontal divergence [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)       :: sh_xx_h           !< horizontal tension (du/dx - dv/dy) including metric
+                                                                  !! terms [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)       :: vort_xy_q         !< vertical vorticity at corner points [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)       :: sh_xy_q           !< horizontal shearing strain at corner points
+                                                                  !! [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)       :: visc_limit_h      !< Used to stabilize the EY24_EBT_BS backscatter
+                                                                  !! [nondim]
+      type(RealArray_C), intent(inout)       :: visc_limit_q      !< used to stabilize the EY24_EBT_BS backscatter
+                                                                  !! [nondim]
+      type(RealArray_C), intent(inout)       :: visc_limit_h_flag !< determines whether backscatter is shut off [nondim]
+      type(RealArray_C), intent(inout)       :: visc_limit_q_flag !< determines whether backscatter is shut off [nondim]
+      type(RealArray_C), intent(inout)       :: visc_limit_h_frac !< determines how close backscatter is to shutting off
+                                                                  !! [nondim]
+      type(RealArray_C), intent(inout)       :: visc_limit_q_frac !< determines how close backscatter is to shutting off
+                                                                  !! [nondim]
+      type(RealArray_C), intent(inout)       :: BS_coeff_h        !< A diagnostic array of the backscatter coefficient
+                                                                  !! [L2 T-1 ~> m2 s-1]
+      type(RealArray_C), intent(inout)       :: BS_coeff_q        !< A diagnostic array of the backscatter coefficient
+                                                                  !! [L2 T-1 ~> m2 s-1]
+      real(c_double), intent(in), value      :: H_subroundoff     !< A thickness that is so small that it can be added
+                                                                  !! to a thickness of Angstrom or larger without
+                                                                  !! changing it at the bit level [H ~> m or kg m-2]
+      real(c_double), intent(in), value      :: H_to_RZ           !< A constant that translates thickness units to the
+                                                                  !! units of mass per unit area
+                                                                  !! [R Z H-1 ~> kg m-3 or 1]
+      real(c_double), intent(in), value      :: s_to_T            !< A constant that translates time intervals in
+                                                                  !! seconds to the units of time [T s-1 ~> 1]
+      type(c_ptr), intent(in), value         :: host              !< Opaque pointer to the hv_host_ctx that holds the
+                                                                  !! Fortran objects used by the host helpers
+    end subroutine turbotmp_horizontal_viscosity_tr_bridge
 end interface
 
 contains
@@ -1823,17 +1943,16 @@ end subroutine horizontal_viscosity
 !> The tree root of horizontal_viscosity: calculates the acceleration due to the horizontal
 !! viscosity once the Fortran-only work (halo updates, calls into other modules, error checks
 !! and diagnostics) has been done by the horizontal_viscosity wrapper.
-subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, MEKE_a, &
-                                   VarMix_a, Gcore, CS, metrics, nkblock, OBC, hu_cont_a, &
-                                   hv_cont_a, STOCH_a, u_smooth_a, v_smooth_a, dz_a, slope_x_a, &
-                                   slope_y_a, sh_xx_bt_a, sh_xy_bt_a, GME_effic_h_a, GME_effic_q_a, &
-                                   KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, GME_coeff_q_a, &
-                                   str_xx_GME_a, str_xy_GME_a, NoSt_a, ShSt_a, FrictWork_a, &
-                                   FrictWork_bh_a, FrictWork_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, &
-                                   grid_Re_Kh_a, grid_Re_Ah_a, div_xx_h_a, sh_xx_h_a, vort_xy_q_a, &
-                                   sh_xy_q_a, visc_limit_h_a, visc_limit_q_a, visc_limit_h_flag_a, &
-                                   visc_limit_q_flag_a, visc_limit_h_frac_a, visc_limit_q_frac_a, &
-                                   BS_coeff_h_a, BS_coeff_q_a, H_subroundoff, H_to_RZ, s_to_T, host)
+subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, MEKE_a, VarMix_a, &
+                                           Gcore, CS, metrics, nkblock, OBC, hu_cont_a, hv_cont_a, STOCH_a, &
+                                           u_smooth_a, v_smooth_a, dz_a, slope_x_a, slope_y_a, sh_xx_bt_a, sh_xy_bt_a, &
+                                           GME_effic_h_a, GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, &
+                                           GME_coeff_q_a, str_xx_GME_a, str_xy_GME_a, NoSt_a, ShSt_a, FrictWork_a, &
+                                           FrictWork_bh_a, FrictWork_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, &
+                                           grid_Re_Kh_a, grid_Re_Ah_a, div_xx_h_a, sh_xx_h_a, vort_xy_q_a, sh_xy_q_a, &
+                                           visc_limit_h_a, visc_limit_q_a, visc_limit_h_flag_a, visc_limit_q_flag_a, &
+                                           visc_limit_h_frac_a, visc_limit_q_frac_a, BS_coeff_h_a, BS_coeff_q_a, &
+                                           H_subroundoff, H_to_RZ, s_to_T, host)
   type(Box_t),                   intent(in)    :: bxH0 !< The h-point box of the whole column,
                                                        !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),                   intent(in)    :: bxQ0 !< The B-grid-index box of the whole column,
@@ -2362,6 +2481,426 @@ subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_
 
 
 
+
+end subroutine horizontal_viscosity_TR_fortran
+
+!> Dispatches horizontal_viscosity_TR to the Fortran implementation, to a capture of its inputs and
+!! outputs, or to the C++/AMReX bridge, as selected by HORIZONTAL_VISCOSITY_TR_MODE.
+subroutine horizontal_viscosity_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, MEKE_a, &
+                                   VarMix_a, Gcore, CS, metrics, nkblock, OBC, hu_cont_a, &
+                                   hv_cont_a, STOCH_a, u_smooth_a, v_smooth_a, dz_a, slope_x_a, &
+                                   slope_y_a, sh_xx_bt_a, sh_xy_bt_a, GME_effic_h_a, GME_effic_q_a, &
+                                   KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, GME_coeff_q_a, &
+                                   str_xx_GME_a, str_xy_GME_a, NoSt_a, ShSt_a, FrictWork_a, &
+                                   FrictWork_bh_a, FrictWork_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, &
+                                   grid_Re_Kh_a, grid_Re_Ah_a, div_xx_h_a, sh_xx_h_a, vort_xy_q_a, &
+                                   sh_xy_q_a, visc_limit_h_a, visc_limit_q_a, visc_limit_h_flag_a, &
+                                   visc_limit_q_flag_a, visc_limit_h_frac_a, visc_limit_q_frac_a, &
+                                   BS_coeff_h_a, BS_coeff_q_a, H_subroundoff, H_to_RZ, s_to_T, host)
+  type(Box_t),                   intent(in)    :: bxH0 !< The h-point box of the whole column,
+                                                       !! [isc:iec, jsc:jec, 1:nz]
+  type(Box_t),                   intent(in)    :: bxQ0 !< The B-grid-index box of the whole column,
+                                                       !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(grid_core_type), intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  real,                 intent(in)    :: H_subroundoff !< A thickness that is so small that it can be added
+                                                       !! to a thickness of Angstrom or larger without
+                                                       !! changing it at the bit level [H ~> m or kg m-2]
+  real,                 intent(in)    :: H_to_RZ !< A constant that translates thickness units to the units
+                                                 !! of mass per unit area [R Z H-1 ~> kg m-3 or 1]
+  type(RealArray_t), intent(in)    :: u_a !< The zonal velocity [L T-1 ~> m s-1].
+  type(RealArray_t), intent(in)    :: v_a !< The meridional velocity [L T-1 ~> m s-1].
+  type(RealArray_t), intent(in)    :: h_a !< Layer thicknesses [H ~> m or kg m-2].
+  type(RealArray_t), intent(in)    :: uh_a !< The zonal volume transport [H L2 T-1 ~> m3 s-1].
+  type(RealArray_t), intent(in)    :: vh_a !< The meridional volume transport [H L2 T-1 ~> m3 s-1].
+  type(RealArray_t), intent(inout) :: diffu_a !< Zonal acceleration due to convergence of
+                                              !! along-coordinate stress tensor [L T-2 ~> m s-2]
+  type(RealArray_t), intent(inout) :: diffv_a !< Meridional acceleration due to convergence
+                                              !! of along-coordinate stress tensor [L T-2 ~> m s-2].
+  type(hor_visc_MEKE_type),      intent(inout) :: MEKE_a !< MEKE fields
+                                                       !! related to Mesoscale Eddy Kinetic Energy.
+  type(hor_visc_VarMix_type),    intent(inout) :: VarMix_a !< Variable mixing control structure
+  type(c_ptr), value,   intent(in)    :: host  !< Opaque pointer to the hv_host_ctx that holds the Fortran
+                                               !! objects used by the host helpers
+  real,                 intent(in)    :: s_to_T  !< A constant that translates time intervals in seconds to
+                                                 !! the units of time [T s-1 ~> 1]
+  type(hv_opts_CS),     intent(in)    :: CS      !< Options used by the horizontal viscosity kernels
+  type(hv_metrics_CS),  intent(in)    :: metrics !< Persistent copies of the horizontal
+                                                 !! viscosity metric and coefficient arrays
+  integer,                       intent(in)    :: nkblock !< The effective k-block size [nondim]
+  type(ocean_OBC_type), optional, pointer      :: OBC  !< Pointer to an open boundary condition type
+  type(RealArray_t), intent(inout) :: hu_cont_a !< Layer thickness at u-points [H ~> m or kg m-2].
+  type(RealArray_t), intent(inout) :: hv_cont_a !< Layer thickness at v-points [H ~> m or kg m-2].
+  type(hor_visc_STOCH_type), intent(inout)           :: STOCH_a !< Stochastic control structure
+  type(RealArray_t), intent(in)    :: u_smooth_a !< Zonal velocity, smoothed with a spatial low-pass filter
+                                                 !! [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_smooth_a !< Meridional velocity, smoothed with a spatial low-pass
+                                                 !! filter [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: dz_a !< Height change across layers [Z ~> m]
+  type(RealArray_t), intent(inout) :: slope_x_a !< Isopycnal slope in i-direction [Z L-1 ~> nondim]
+  type(RealArray_t), intent(inout) :: slope_y_a !< Isopycnal slope in j-direction [Z L-1 ~> nondim]
+  type(RealArray_t), intent(in)    :: sh_xx_bt_a !< barotropic horizontal tension (du/dx - dv/dy) including
+                                                 !! metric terms [T-1 ~> s-1]
+  type(RealArray_t), intent(in)    :: sh_xy_bt_a !< barotropic horizontal shearing strain (du/dy + dv/dx) inc.
+                                                 !! metric terms [T-1 ~> s-1]
+  type(RealArray_t), intent(in)    :: GME_effic_h_a !< The filtered efficiency of the GME terms at h points
+                                                    !! [nondim]
+  type(RealArray_t), intent(in)    :: GME_effic_q_a !< The filtered efficiency of the GME terms at q points
+                                                    !! [nondim]
+  type(RealArray_t), intent(in)    :: KH_u_GME_a !< Isopycnal height diffusivities in u-columns
+                                                 !! [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(in)    :: KH_v_GME_a !< Isopycnal height diffusivities in v-columns
+                                                 !! [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(inout) :: GME_coeff_h_a !< GME coefficient at h-points [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(inout) :: GME_coeff_q_a !< GME coeff. at q-points [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(inout) :: str_xx_GME_a !< smoothed diagonal term in the stress tensor from GME
+                                                   !! [L2 T-2 ~> m2 s-2]
+  type(RealArray_t), intent(inout) :: str_xy_GME_a !< smoothed cross term in the stress tensor from GME
+                                                   !! [L2 T-2 ~> m2 s-2]
+  type(RealArray_t), intent(inout) :: NoSt_a !< A diagnostic array of normal stress [T-1 ~> s-1].
+  type(RealArray_t), intent(inout) :: ShSt_a !< A diagnostic array of shear stress [T-1 ~> s-1].
+  type(RealArray_t), intent(inout) :: FrictWork_a !< work done by MKE dissipation mechanisms
+                                                  !! [R Z L2 T-3 ~> W m-2]
+  type(RealArray_t), intent(inout) :: FrictWork_bh_a !< work done by the biharmonic MKE dissipation mechanisms
+                                                     !! [R Z L2 T-3 ~> W m-2]
+  type(RealArray_t), intent(inout) :: FrictWork_GME_a !< work done by GME [R Z L2 T-3 ~> W m-2]
+  type(RealArray_t), intent(inout) :: Ah_h_a !< biharmonic viscosity at thickness points [L4 T-1 ~> m4 s-1]
+  type(RealArray_t), intent(inout) :: Ah_q_a !< biharmonic viscosity at corner points [L4 T-1 ~> m4 s-1]
+  type(RealArray_t), intent(inout) :: Kh_h_a !< Laplacian viscosity at thickness points [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(inout) :: Kh_q_a !< Laplacian viscosity at corner points [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(inout) :: grid_Re_Kh_a !< Grid Reynolds number for Laplacian horizontal viscosity
+                                                   !! at h points [nondim]
+  type(RealArray_t), intent(inout) :: grid_Re_Ah_a !< Grid Reynolds number for Biharmonic horizontal viscosity
+                                                   !! at h points [nondim]
+  type(RealArray_t), intent(inout) :: div_xx_h_a !< horizontal divergence [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: sh_xx_h_a !< horizontal tension (du/dx - dv/dy) including metric terms
+                                                !! [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: vort_xy_q_a !< vertical vorticity at corner points [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: sh_xy_q_a !< horizontal shearing strain at corner points [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: visc_limit_h_a !< Used to stabilize the EY24_EBT_BS backscatter [nondim]
+  type(RealArray_t), intent(inout) :: visc_limit_q_a !< used to stabilize the EY24_EBT_BS backscatter [nondim]
+  type(RealArray_t), intent(inout) :: visc_limit_h_flag_a !< determines whether backscatter is shut off
+                                                          !! [nondim]
+  type(RealArray_t), intent(inout) :: visc_limit_q_flag_a !< determines whether backscatter is shut off
+                                                          !! [nondim]
+  type(RealArray_t), intent(inout) :: visc_limit_h_frac_a !< determines how close backscatter is to shutting
+                                                          !! off [nondim]
+  type(RealArray_t), intent(inout) :: visc_limit_q_frac_a !< determines how close backscatter is to shutting
+                                                          !! off [nondim]
+  type(RealArray_t), intent(inout) :: BS_coeff_h_a !< A diagnostic array of the backscatter coefficient
+                                                   !! [L2 T-1 ~> m2 s-1]
+  type(RealArray_t), intent(inout) :: BS_coeff_q_a !< A diagnostic array of the backscatter coefficient
+                                                   !! [L2 T-1 ~> m2 s-1]
+
+  ! Local variables
+  integer            :: mode, rc
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+  type(Box_C)             :: bxH0_c
+  type(Box_C)             :: bxQ0_c
+  type(RealArray_C)       :: u_c
+  type(RealArray_C)       :: v_c
+  type(RealArray_C)       :: h_c
+  type(RealArray_C)       :: uh_c
+  type(RealArray_C)       :: vh_c
+  type(RealArray_C)       :: diffu_c
+  type(RealArray_C)       :: diffv_c
+  type(hor_visc_MEKE_C)   :: MEKE_c
+  type(hor_visc_VarMix_C) :: VarMix_c
+  type(hv_opts_CS_C)      :: CS_c
+  type(hv_metrics_CS_C)   :: metrics_c
+  type(RealArray_C)       :: hu_cont_c
+  type(RealArray_C)       :: hv_cont_c
+  type(hor_visc_STOCH_C)  :: STOCH_c
+  type(RealArray_C)       :: u_smooth_c
+  type(RealArray_C)       :: v_smooth_c
+  type(RealArray_C)       :: dz_c
+  type(RealArray_C)       :: slope_x_c
+  type(RealArray_C)       :: slope_y_c
+  type(RealArray_C)       :: sh_xx_bt_c
+  type(RealArray_C)       :: sh_xy_bt_c
+  type(RealArray_C)       :: GME_effic_h_c
+  type(RealArray_C)       :: GME_effic_q_c
+  type(RealArray_C)       :: KH_u_GME_c
+  type(RealArray_C)       :: KH_v_GME_c
+  type(RealArray_C)       :: GME_coeff_h_c
+  type(RealArray_C)       :: GME_coeff_q_c
+  type(RealArray_C)       :: str_xx_GME_c
+  type(RealArray_C)       :: str_xy_GME_c
+  type(RealArray_C)       :: NoSt_c
+  type(RealArray_C)       :: ShSt_c
+  type(RealArray_C)       :: FrictWork_c
+  type(RealArray_C)       :: FrictWork_bh_c
+  type(RealArray_C)       :: FrictWork_GME_c
+  type(RealArray_C)       :: Ah_h_c
+  type(RealArray_C)       :: Ah_q_c
+  type(RealArray_C)       :: Kh_h_c
+  type(RealArray_C)       :: Kh_q_c
+  type(RealArray_C)       :: grid_Re_Kh_c
+  type(RealArray_C)       :: grid_Re_Ah_c
+  type(RealArray_C)       :: div_xx_h_c
+  type(RealArray_C)       :: sh_xx_h_c
+  type(RealArray_C)       :: vort_xy_q_c
+  type(RealArray_C)       :: sh_xy_q_c
+  type(RealArray_C)       :: visc_limit_h_c
+  type(RealArray_C)       :: visc_limit_q_c
+  type(RealArray_C)       :: visc_limit_h_flag_c
+  type(RealArray_C)       :: visc_limit_q_flag_c
+  type(RealArray_C)       :: visc_limit_h_frac_c
+  type(RealArray_C)       :: visc_limit_q_frac_c
+  type(RealArray_C)       :: BS_coeff_h_c
+  type(RealArray_C)       :: BS_coeff_q_c
+  type(c_ptr)             :: OBC_c
+  logical                 :: OBC_associated
+
+  kernel = "horizontal_viscosity_tr"
+  mode = getenv_mode("HORIZONTAL_VISCOSITY_TR_MODE", default=TIMH_runFORTRAN)
+  OBC_associated = .false.
+  if (present(OBC)) OBC_associated = associated(OBC)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxH0", bxH0)
+        call rec%add("_bxQ0", bxQ0)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_h", h_a)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_diffu_before", diffu_a)
+        call rec%add("_diffv_before", diffv_a)
+        call record_hor_visc_MEKE(rec, "_MEKE", MEKE_a, "")
+        call record_hor_visc_MEKE(rec, "_MEKE", MEKE_a, "_before")
+        call record_hor_visc_VarMix(rec, "_VarMix", VarMix_a, "")
+        call record_hor_visc_VarMix(rec, "_VarMix", VarMix_a, "_before")
+        call rec%add("_IdyCu", Gcore%IdyCu)
+        call rec%add("_IdxCv", Gcore%IdxCv)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_mask2dT", Gcore%mask2dT)
+        call rec%add("_dxBu", Gcore%dxBu)
+        call rec%add("_mask2dBu", Gcore%mask2dBu)
+        call rec%add("_IareaBu", Gcore%IareaBu)
+        call rec%add("_dyCv", Gcore%dyCv)
+        call rec%add("_dxCu", Gcore%dxCu)
+        call rec%add("_dyBu", Gcore%dyBu)
+        call rec%add("_IdxBu", Gcore%IdxBu)
+        call rec%add("_IdyBu", Gcore%IdyBu)
+        call rec%add("_dF_dx", Gcore%dF_dx)
+        call rec%add("_dF_dy", Gcore%dF_dy)
+        call rec%add("_mask2dCu", Gcore%mask2dCu)
+        call rec%add("_mask2dCv", Gcore%mask2dCv)
+        call rec%add("_IareaCu", Gcore%IareaCu)
+        call rec%add("_IareaCv", Gcore%IareaCv)
+        call rec%add("_IdxT", Gcore%IdxT)
+        call rec%add("_IdyT", Gcore%IdyT)
+        call rec%add("_IareaT", Gcore%IareaT)
+        call rec%add("_CoriolisBu", Gcore%CoriolisBu)
+        call record_hv_opts_CS(rec, "_CS", CS)
+        call record_hv_metrics_CS(rec, "_metrics", metrics, "")
+        call record_hv_metrics_CS(rec, "_metrics", metrics, "_before")
+        call rec%add("_nkblock", nkblock)
+        call rec%add("_OBC_associated", OBC_associated)
+        call rec%add("_hu_cont_allocated", hu_cont_a%associated())
+        if (hu_cont_a%associated()) call rec%add("_hu_cont_before", hu_cont_a)
+        call rec%add("_hv_cont_allocated", hv_cont_a%associated())
+        if (hv_cont_a%associated()) call rec%add("_hv_cont_before", hv_cont_a)
+        call record_hor_visc_STOCH(rec, "_STOCH", STOCH_a, "")
+        call record_hor_visc_STOCH(rec, "_STOCH", STOCH_a, "_before")
+        call rec%add("_u_smooth", u_smooth_a)
+        call rec%add("_v_smooth", v_smooth_a)
+        call rec%add("_dz", dz_a)
+        call rec%add("_slope_x_before", slope_x_a)
+        call rec%add("_slope_y_before", slope_y_a)
+        call rec%add("_sh_xx_bt", sh_xx_bt_a)
+        call rec%add("_sh_xy_bt", sh_xy_bt_a)
+        call rec%add("_GME_effic_h", GME_effic_h_a)
+        call rec%add("_GME_effic_q", GME_effic_q_a)
+        call rec%add("_KH_u_GME", KH_u_GME_a)
+        call rec%add("_KH_v_GME", KH_v_GME_a)
+        call rec%add("_GME_coeff_h_before", GME_coeff_h_a)
+        call rec%add("_GME_coeff_q_before", GME_coeff_q_a)
+        call rec%add("_str_xx_GME_before", str_xx_GME_a)
+        call rec%add("_str_xy_GME_before", str_xy_GME_a)
+        call rec%add("_NoSt_before", NoSt_a)
+        call rec%add("_ShSt_before", ShSt_a)
+        call rec%add("_FrictWork_before", FrictWork_a)
+        call rec%add("_FrictWork_bh_before", FrictWork_bh_a)
+        call rec%add("_FrictWork_GME_before", FrictWork_GME_a)
+        call rec%add("_Ah_h_before", Ah_h_a)
+        call rec%add("_Ah_q_before", Ah_q_a)
+        call rec%add("_Kh_h_before", Kh_h_a)
+        call rec%add("_Kh_q_before", Kh_q_a)
+        call rec%add("_grid_Re_Kh_before", grid_Re_Kh_a)
+        call rec%add("_grid_Re_Ah_before", grid_Re_Ah_a)
+        call rec%add("_div_xx_h_before", div_xx_h_a)
+        call rec%add("_sh_xx_h_before", sh_xx_h_a)
+        call rec%add("_vort_xy_q_before", vort_xy_q_a)
+        call rec%add("_sh_xy_q_before", sh_xy_q_a)
+        call rec%add("_visc_limit_h_before", visc_limit_h_a)
+        call rec%add("_visc_limit_q_before", visc_limit_q_a)
+        call rec%add("_visc_limit_h_flag_before", visc_limit_h_flag_a)
+        call rec%add("_visc_limit_q_flag_before", visc_limit_q_flag_a)
+        call rec%add("_visc_limit_h_frac_before", visc_limit_h_frac_a)
+        call rec%add("_visc_limit_q_frac_before", visc_limit_q_frac_a)
+        call rec%add("_BS_coeff_h_before", BS_coeff_h_a)
+        call rec%add("_BS_coeff_q_before", BS_coeff_q_a)
+        call rec%add("_H_subroundoff", H_subroundoff)
+        call rec%add("_H_to_RZ", H_to_RZ)
+        call rec%add("_s_to_T", s_to_T)
+        call rec%add("_host_associated", c_associated(host))
+      endif
+
+      call horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, MEKE_a, VarMix_a, &
+                                           Gcore, CS, metrics, nkblock, OBC, hu_cont_a, hv_cont_a, STOCH_a, &
+                                           u_smooth_a, v_smooth_a, dz_a, slope_x_a, slope_y_a, sh_xx_bt_a, sh_xy_bt_a, &
+                                           GME_effic_h_a, GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, &
+                                           GME_coeff_q_a, str_xx_GME_a, str_xy_GME_a, NoSt_a, ShSt_a, FrictWork_a, &
+                                           FrictWork_bh_a, FrictWork_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, &
+                                           grid_Re_Kh_a, grid_Re_Ah_a, div_xx_h_a, sh_xx_h_a, vort_xy_q_a, sh_xy_q_a, &
+                                           visc_limit_h_a, visc_limit_q_a, visc_limit_h_flag_a, visc_limit_q_flag_a, &
+                                           visc_limit_h_frac_a, visc_limit_q_frac_a, BS_coeff_h_a, BS_coeff_q_a, &
+                                           H_subroundoff, H_to_RZ, s_to_T, host)
+
+      if (capture) then
+        call rec%add("_diffu_after", diffu_a)
+        call rec%add("_diffv_after", diffv_a)
+        call record_hor_visc_MEKE(rec, "_MEKE", MEKE_a, "_after")
+        call record_hor_visc_VarMix(rec, "_VarMix", VarMix_a, "_after")
+        if (hu_cont_a%associated()) call rec%add("_hu_cont_after", hu_cont_a)
+        if (hv_cont_a%associated()) call rec%add("_hv_cont_after", hv_cont_a)
+        call record_hor_visc_STOCH(rec, "_STOCH", STOCH_a, "_after")
+        call rec%add("_slope_x_after", slope_x_a)
+        call rec%add("_slope_y_after", slope_y_a)
+        call rec%add("_GME_coeff_h_after", GME_coeff_h_a)
+        call rec%add("_GME_coeff_q_after", GME_coeff_q_a)
+        call rec%add("_str_xx_GME_after", str_xx_GME_a)
+        call rec%add("_str_xy_GME_after", str_xy_GME_a)
+        call rec%add("_NoSt_after", NoSt_a)
+        call rec%add("_ShSt_after", ShSt_a)
+        call rec%add("_FrictWork_after", FrictWork_a)
+        call rec%add("_FrictWork_bh_after", FrictWork_bh_a)
+        call rec%add("_FrictWork_GME_after", FrictWork_GME_a)
+        call rec%add("_Ah_h_after", Ah_h_a)
+        call rec%add("_Ah_q_after", Ah_q_a)
+        call rec%add("_Kh_h_after", Kh_h_a)
+        call rec%add("_Kh_q_after", Kh_q_a)
+        call rec%add("_grid_Re_Kh_after", grid_Re_Kh_a)
+        call rec%add("_grid_Re_Ah_after", grid_Re_Ah_a)
+        call rec%add("_div_xx_h_after", div_xx_h_a)
+        call rec%add("_sh_xx_h_after", sh_xx_h_a)
+        call rec%add("_vort_xy_q_after", vort_xy_q_a)
+        call rec%add("_sh_xy_q_after", sh_xy_q_a)
+        call rec%add("_visc_limit_h_after", visc_limit_h_a)
+        call rec%add("_visc_limit_q_after", visc_limit_q_a)
+        call rec%add("_visc_limit_h_flag_after", visc_limit_h_flag_a)
+        call rec%add("_visc_limit_q_flag_after", visc_limit_q_flag_a)
+        call rec%add("_visc_limit_h_frac_after", visc_limit_h_frac_a)
+        call rec%add("_visc_limit_q_frac_after", visc_limit_q_frac_a)
+        call rec%add("_BS_coeff_h_after", BS_coeff_h_a)
+        call rec%add("_BS_coeff_q_after", BS_coeff_q_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxH0_c = bxH0%to_c()
+      bxQ0_c = bxQ0%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      h_c = h_a%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      diffu_c = diffu_a%to_c()
+      diffv_c = diffv_a%to_c()
+      MEKE_c = hor_visc_MEKE_to_c(MEKE_a)
+      VarMix_c = hor_visc_VarMix_to_c(VarMix_a)
+      CS_c = hv_opts_CS_to_c(CS)
+      metrics_c = hv_metrics_CS_to_c(metrics)
+      if (OBC_associated) then
+        OBC_c = c_loc(OBC)
+      else
+        OBC_c = c_null_ptr
+      endif
+      hu_cont_c = hu_cont_a%to_c()
+      hv_cont_c = hv_cont_a%to_c()
+      STOCH_c = hor_visc_STOCH_to_c(STOCH_a)
+      u_smooth_c = u_smooth_a%to_c()
+      v_smooth_c = v_smooth_a%to_c()
+      dz_c = dz_a%to_c()
+      slope_x_c = slope_x_a%to_c()
+      slope_y_c = slope_y_a%to_c()
+      sh_xx_bt_c = sh_xx_bt_a%to_c()
+      sh_xy_bt_c = sh_xy_bt_a%to_c()
+      GME_effic_h_c = GME_effic_h_a%to_c()
+      GME_effic_q_c = GME_effic_q_a%to_c()
+      KH_u_GME_c = KH_u_GME_a%to_c()
+      KH_v_GME_c = KH_v_GME_a%to_c()
+      GME_coeff_h_c = GME_coeff_h_a%to_c()
+      GME_coeff_q_c = GME_coeff_q_a%to_c()
+      str_xx_GME_c = str_xx_GME_a%to_c()
+      str_xy_GME_c = str_xy_GME_a%to_c()
+      NoSt_c = NoSt_a%to_c()
+      ShSt_c = ShSt_a%to_c()
+      FrictWork_c = FrictWork_a%to_c()
+      FrictWork_bh_c = FrictWork_bh_a%to_c()
+      FrictWork_GME_c = FrictWork_GME_a%to_c()
+      Ah_h_c = Ah_h_a%to_c()
+      Ah_q_c = Ah_q_a%to_c()
+      Kh_h_c = Kh_h_a%to_c()
+      Kh_q_c = Kh_q_a%to_c()
+      grid_Re_Kh_c = grid_Re_Kh_a%to_c()
+      grid_Re_Ah_c = grid_Re_Ah_a%to_c()
+      div_xx_h_c = div_xx_h_a%to_c()
+      sh_xx_h_c = sh_xx_h_a%to_c()
+      vort_xy_q_c = vort_xy_q_a%to_c()
+      sh_xy_q_c = sh_xy_q_a%to_c()
+      visc_limit_h_c = visc_limit_h_a%to_c()
+      visc_limit_q_c = visc_limit_q_a%to_c()
+      visc_limit_h_flag_c = visc_limit_h_flag_a%to_c()
+      visc_limit_q_flag_c = visc_limit_q_flag_a%to_c()
+      visc_limit_h_frac_c = visc_limit_h_frac_a%to_c()
+      visc_limit_q_frac_c = visc_limit_q_frac_a%to_c()
+      BS_coeff_h_c = BS_coeff_h_a%to_c()
+      BS_coeff_q_c = BS_coeff_q_a%to_c()
+      call turbotmp_horizontal_viscosity_tr_bridge(bxH0_c, bxQ0_c, u_c, v_c, h_c, uh_c, vh_c, diffu_c, diffv_c, &
+                                                   MEKE_c, VarMix_c, Gcore%C, CS_c, metrics_c, int(nkblock, c_int), &
+                                                   OBC_c, hu_cont_c, hv_cont_c, STOCH_c, u_smooth_c, v_smooth_c, dz_c, &
+                                                   slope_x_c, slope_y_c, sh_xx_bt_c, sh_xy_bt_c, GME_effic_h_c, &
+                                                   GME_effic_q_c, KH_u_GME_c, KH_v_GME_c, GME_coeff_h_c, &
+                                                   GME_coeff_q_c, str_xx_GME_c, str_xy_GME_c, NoSt_c, ShSt_c, &
+                                                   FrictWork_c, FrictWork_bh_c, FrictWork_GME_c, Ah_h_c, Ah_q_c, &
+                                                   Kh_h_c, Kh_q_c, grid_Re_Kh_c, grid_Re_Ah_c, div_xx_h_c, sh_xx_h_c, &
+                                                   vort_xy_q_c, sh_xy_q_c, visc_limit_h_c, visc_limit_q_c, &
+                                                   visc_limit_h_flag_c, visc_limit_q_flag_c, visc_limit_h_frac_c, &
+                                                   visc_limit_q_frac_c, BS_coeff_h_c, BS_coeff_q_c, H_subroundoff, &
+                                                   H_to_RZ, s_to_T, host)
+#endif
+
+    case default
+      call horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, diffu_a, diffv_a, MEKE_a, VarMix_a, &
+                                           Gcore, CS, metrics, nkblock, OBC, hu_cont_a, hv_cont_a, STOCH_a, &
+                                           u_smooth_a, v_smooth_a, dz_a, slope_x_a, slope_y_a, sh_xx_bt_a, sh_xy_bt_a, &
+                                           GME_effic_h_a, GME_effic_q_a, KH_u_GME_a, KH_v_GME_a, GME_coeff_h_a, &
+                                           GME_coeff_q_a, str_xx_GME_a, str_xy_GME_a, NoSt_a, ShSt_a, FrictWork_a, &
+                                           FrictWork_bh_a, FrictWork_GME_a, Ah_h_a, Ah_q_a, Kh_h_a, Kh_q_a, &
+                                           grid_Re_Kh_a, grid_Re_Ah_a, div_xx_h_a, sh_xx_h_a, vort_xy_q_a, sh_xy_q_a, &
+                                           visc_limit_h_a, visc_limit_q_a, visc_limit_h_flag_a, visc_limit_q_flag_a, &
+                                           visc_limit_h_frac_a, visc_limit_q_frac_a, BS_coeff_h_a, BS_coeff_q_a, &
+                                           H_subroundoff, H_to_RZ, s_to_T, host)
+
+  end select
 
 end subroutine horizontal_viscosity_TR
 
