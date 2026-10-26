@@ -927,12 +927,12 @@ interface
     end subroutine turbotmp_hor_visc_leithy_ah_h_bridge
 
     !> Bridge for the hor_visc_strain subroutine
-    subroutine turbotmp_hor_visc_strain_bridge(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, bxHstr, bxQstr, &
+    subroutine turbotmp_hor_visc_strain_bridge(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxKh, bxHstr, bxQstr, &
                                                bxHgrad, bxQshear, bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, &
-                                               apply_OBC_strain, use_cont_huv, is_vort, ie_vort, js_vort, je_vort, u, &
-                                               v, h, hu_cont, hv_cont, u_smooth, v_smooth, NoSt, ShSt, Del2u, h_u, &
-                                               Del2v, h_v, sh_xx, sh_xx_smooth, dudx, dvdy, dvdx, dudy, dvdx_smooth, &
-                                               dudy_smooth, sh_xy, sh_xy_smooth, vort_xy, vort_xy_smooth) bind(C)
+                                               apply_OBC_strain, use_cont_huv, u, v, h, hu_cont, hv_cont, u_smooth, &
+                                               v_smooth, NoSt, ShSt, Del2u, h_u, Del2v, h_v, sh_xx, sh_xx_smooth, &
+                                               dudx, dvdy, dvdx, dudy, dvdx_smooth, dudy_smooth, sh_xy, sh_xy_smooth, &
+                                               vort_xy, vort_xy_smooth) bind(C)
       use iso_c_binding, only : c_bool, c_int, c_ptr
       use array_mod, only : RealArray_C
       use box_mod, only : Box_C
@@ -952,8 +952,8 @@ interface
                                                              !! [IscB:IecB, jsc:jec, 1:kmax]
       type(Box_C), intent(in)            :: bxV              !< The v-point iteration box of this tile,
                                                              !! [isc:iec, JscB:JecB, 1:kmax]
-      type(Box_C), intent(in)            :: bxVort           !< The vorticity box of this tile,
-                                                             !! [is_vort:ie_vort, js_vort:je_vort, 1:kmax]
+      type(Box_C), intent(in)            :: bxKh             !< The thickness-point viscosity box of this tile,
+                                                             !! [is_Kh:ie_Kh, js_Kh:je_Kh, 1:kmax]
       type(Box_C), intent(in)            :: bxHstr           !< The h points of this tile where the normal stresses are
                                                              !! computed, [IscB:IecB+1, JscB:JecB+1, 1:kmax]
       type(Box_C), intent(in)            :: bxQstr           !< The q points of this tile where the shear stresses are
@@ -973,10 +973,6 @@ interface
                                                              !! configuration is applied
       logical(c_bool), intent(in), value :: use_cont_huv     !< If true, use the continuity solver thicknesses at
                                                              !! velocity points
-      integer(c_int), intent(in), value  :: is_vort          !< Loop ranges for vorticity terms
-      integer(c_int), intent(in), value  :: ie_vort          !< Loop ranges for vorticity terms
-      integer(c_int), intent(in), value  :: js_vort          !< Loop ranges for vorticity terms
-      integer(c_int), intent(in), value  :: je_vort          !< Loop ranges for vorticity terms
       type(RealArray_C), intent(in)      :: u                !< The zonal velocity [L T-1 ~> m s-1].
       type(RealArray_C), intent(in)      :: v                !< The meridional velocity [L T-1 ~> m s-1].
       type(RealArray_C), intent(in)      :: h                !< Layer thicknesses [H ~> m or kg m-2].
@@ -2147,7 +2143,6 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
   logical :: use_Leith    ! True if any Leith parameterizations are enabled
   logical :: use_vort_xy  ! True if vort_xy must be computed
   logical :: use_Smag     ! True if a Smagorinsky viscosity is enabled
-  integer :: is_vort, ie_vort, js_vort, je_vort  ! Loop ranges for vorticity terms
   integer :: is_Kh, ie_Kh, js_Kh, je_Kh  ! Loop ranges for thickness point viscosities
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, kstart, kend, kmax
@@ -2184,7 +2179,6 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
   type(Box_t) :: bxKh   ! The thickness-point viscosity box of one tile, [is_Kh:ie_Kh, js_Kh:je_Kh, 1:kmax]
   type(Box_t) :: bxKh_i ! The thickness-point viscosity range in i only, [is_Kh:ie_Kh, jsc:jec, 1:kmax]
   type(Box_t) :: bxKh_j ! The thickness-point viscosity range in j only, [isc:iec, js_Kh:je_Kh, 1:kmax]
-  type(Box_t) :: bxVort ! The vorticity box of one tile, [is_vort:ie_vort, js_vort:je_vort, 1:kmax]
   type(Box_t) :: bxHstr ! h points of one tile where the normal stresses are computed,
                         ! [IscB:IecB+1, JscB:JecB+1, 1:kmax]: the u- and v-point divergence needs
                         ! them on both sides of each velocity point; built from bxQ because the
@@ -2365,13 +2359,6 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
     js_Kh = Jsq ; je_Kh = je+1 ; is_Kh = Isq ; ie_Kh = ie+1
   endif
 
-  ! Set the halo sizes used for the vorticity calculations.
-  if ((CS%Leith_Kh) .or. (CS%Leith_Ah) .or. (CS%use_Leithy)) then
-    js_vort = js_Kh-2 ; je_vort = Jeq+2 ; is_vort = is_Kh-2 ; ie_vort = Ieq+2
-  else
-    js_vort = js-2 ; je_vort = Jeq+1 ; is_vort = is-2 ; ie_vort = Ieq+1
-  endif
-
   nullify(MEKE_mom_src, MEKE_mom_src_bh, MEKE_GME_snk)
   if (MEKE_a%mom_src_a%associated()) call MEKE_a%mom_src_a%view(MEKE_mom_src)
   if (MEKE_a%mom_src_bh_a%associated()) call MEKE_a%mom_src_bh_a%view(MEKE_mom_src_bh)
@@ -2408,7 +2395,6 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
   call bxH%safe_alloc(ndims=3) ; call bxQ%safe_alloc(ndims=3) ; call bxU%safe_alloc(ndims=3)
   call bxV%safe_alloc(ndims=3) ; call bxKh%safe_alloc(ndims=3)
   call bxKh_i%safe_alloc(ndims=3) ; call bxKh_j%safe_alloc(ndims=3)
-  call bxVort%safe_alloc(ndims=3)
   do kstart=1,nz,nkblock
     kend = min(kstart+nkblock-1,nz)
     kmax = kend-kstart+1
@@ -2419,19 +2405,17 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
     call bxKh%set(idxS=[is_Kh,js_Kh,1], idxE=[ie_Kh,je_Kh,kmax])
     call bxKh_i%set(idxS=[is_Kh,js,1], idxE=[ie_Kh,je,kmax])
     call bxKh_j%set(idxS=[is,js_Kh,1], idxE=[ie,je_Kh,kmax])
-    call bxVort%set(idxS=[is_vort,js_vort,1], idxE=[ie_vort,je_vort,kmax])
     bxHstr = bxQ%growBy(lo=[0,0,0], hi=[1,1,0])
     bxQstr = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
     bxHgrad = bxQ%growBy(lo=[1,1,0], hi=[2,2,0])
     bxQshear = bxH%growBy(lo=[2,2,0], hi=[1,1,0])
     bxQvsmooth = bxKh%growBy(lo=[1,1,0], hi=[0,0,0])
 
-    call hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, bxHstr, bxQstr, bxHgrad, bxQshear, &
-                         bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, use_cont_huv, is_vort, &
-                         ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, v_smooth_a, &
-                         NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, &
-                         dvdx_a, dudy_a, dvdx_smooth_a, dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, &
-                         vort_xy_smooth_a)
+    call hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxKh, bxHstr, bxQstr, bxHgrad, bxQshear, &
+                         bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, use_cont_huv, u_a, &
+                         v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, &
+                         Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
+                         dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
 
     if (use_Leith) then
       call hor_visc_Leith_grad_a(bxH, bxKh, bxKh_i, bxKh_j, bxQstr, bxQvsmooth, Gcore, CS, nkblock, dudx_a, dvdy_a, &
@@ -2507,7 +2491,7 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
     endif
   enddo ! end of kstart block loop
   call bxH%free() ; call bxQ%free() ; call bxU%free() ; call bxV%free()
-  call bxKh%free() ; call bxKh_i%free() ; call bxKh_j%free() ; call bxVort%free()
+  call bxKh%free() ; call bxKh_i%free() ; call bxKh_j%free()
   call bxHstr%free() ; call bxQstr%free() ; call bxHgrad%free() ; call bxQshear%free()
   call bxQvsmooth%free()
   call h_u_a%free() ; call Del2u_a%free() ; call h_v_a%free() ; call Del2v_a%free()
@@ -2955,12 +2939,12 @@ end subroutine horizontal_viscosity_TR
 
 !> Calculates the horizontal tension and shearing strain, the thicknesses at velocity points,
 !! the Laplacian of velocity, and the vorticity for one tile of horizontal_viscosity.
-subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, bxHstr, bxQstr, bxHgrad, &
+subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxKh, bxHstr, bxQstr, bxHgrad, &
                                    bxQshear, bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, &
-                                   use_cont_huv, is_vort, ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, &
-                                   hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, &
-                                   sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
-                                   dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
+                                   use_cont_huv, u_a, v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, &
+                                   ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, &
+                                   dvdx_a, dudy_a, dvdx_smooth_a, dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, &
+                                   vort_xy_smooth_a)
   type(grid_core_type), intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(hv_opts_CS),    intent(in)    :: CS    !< Options used by the horizontal viscosity kernels
   type(hv_metrics_CS), intent(in)    :: metrics       !< Persistent copies of the horizontal
@@ -2974,8 +2958,8 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
                                                        !! [IscB:IecB, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxV  !< The v-point iteration box of this tile,
                                                        !! [isc:iec, JscB:JecB, 1:kmax]
-  type(Box_t),                   intent(in)    :: bxVort !< The vorticity box of this tile,
-                                                         !! [is_vort:ie_vort, js_vort:je_vort, 1:kmax]
+  type(Box_t),                   intent(in)    :: bxKh !< The thickness-point viscosity box of this
+                                                       !! tile, [is_Kh:ie_Kh, js_Kh:je_Kh, 1:kmax]
   type(Box_t),                   intent(in)    :: bxHstr !< The h points of this tile where the normal stresses are
                                                          !! computed, [IscB:IecB+1, JscB:JecB+1, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQstr !< The q points of this tile where the shear stresses are
@@ -2993,10 +2977,6 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   logical, intent(in)    :: apply_OBC !< If true, open boundary conditions are applied on this PE
   logical, intent(in)    :: apply_OBC_strain !< If true, the specified open boundary strain configuration is applied
   logical, intent(in)    :: use_cont_huv !< If true, use the continuity solver thicknesses at velocity points
-  integer, intent(in)    :: is_vort !< Loop ranges for vorticity terms
-  integer, intent(in)    :: ie_vort !< Loop ranges for vorticity terms
-  integer, intent(in)    :: js_vort !< Loop ranges for vorticity terms
-  integer, intent(in)    :: je_vort !< Loop ranges for vorticity terms
   type(RealArray_t), intent(in)    :: u_a !< The zonal velocity [L T-1 ~> m s-1].
   type(RealArray_t), intent(in)    :: v_a !< The meridional velocity [L T-1 ~> m s-1].
   type(RealArray_t), intent(in)    :: h_a !< Layer thicknesses [H ~> m or kg m-2].
@@ -3048,6 +3028,10 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
                          ! because the range starts at js-2 in both memory modes
   type(Box_t) :: bxUhavg ! u points [is-2:Ieq+1, js-2:je+2] where h_u is averaged from h; built from bxH
                          ! because the range starts at is-2 in both memory modes
+  type(Box_t) :: bxVort ! q points of this tile where dudy, dvdx and vort_xy are computed,
+                        ! [is_vort:ie_vort, js_vort:je_vort, 1:kmax]: two points below and one above the h points; with
+                        ! a Leith scheme, around bxKh instead, because Leith takes gradients of the vorticity
+  integer :: is_vort, ie_vort, js_vort, je_vort  ! Loop ranges for vorticity terms
   real, dimension(:,:,:), contiguous, pointer :: vort_xy_smooth, vort_xy, sh_xy_smooth, sh_xy, &
     dudy_smooth, dvdx_smooth, dudy, dvdx, dvdy, dudx, sh_xx_smooth, sh_xx, h_v, Del2v, h_u, Del2u, &
     ShSt, NoSt, v_smooth, u_smooth, hv_cont, hu_cont, h, v, u
@@ -3098,6 +3082,14 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   bxVhcont = bxV%growBy(lo=[2,1,0], hi=[2,1,0])
   bxVhavg = bxH%growBy(lo=[2,2,0], hi=[2,1,0])
   bxUhavg = bxH%growBy(lo=[2,2,0], hi=[1,2,0])
+  ! Set the halo sizes used for the vorticity calculations.
+  if ((CS%Leith_Kh) .or. (CS%Leith_Ah) .or. (CS%use_Leithy)) then
+    bxVort = bxKh%growBy(lo=[2,2,0], hi=[1,1,0])
+  else
+    bxVort = bxH%growBy(lo=[2,2,0], hi=[1,1,0])
+  endif
+  is_vort = bxVort%idxS(1) ; ie_vort = bxVort%idxE(1)
+  js_vort = bxVort%idxS(2) ; je_vort = bxVort%idxE(2)
 
   k=kstart
 
@@ -3448,16 +3440,16 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   call bxUhcont%free()
   call bxVdel2%free()
   call bxVhcont%free()
+  call bxVort%free()
 end subroutine hor_visc_strain_fortran
 
 !> Dispatches hor_visc_strain to the Fortran implementation, to a capture of its inputs and
 !! outputs, or to the C++/AMReX bridge, as selected by HOR_VISC_STRAIN_MODE.
-subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, bxHstr, bxQstr, bxHgrad, bxQshear, &
-                           bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, use_cont_huv, &
-                           is_vort, ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, &
-                           v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, &
-                           dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, &
-                           vort_xy_a, vort_xy_smooth_a)
+subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxKh, bxHstr, bxQstr, bxHgrad, bxQshear, &
+                           bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, use_cont_huv, u_a, &
+                           v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, &
+                           Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
+                           dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
   type(grid_core_type), intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(hv_opts_CS),    intent(in)    :: CS    !< Options used by the horizontal viscosity kernels
   type(hv_metrics_CS), intent(in)    :: metrics       !< Persistent copies of the horizontal
@@ -3471,8 +3463,8 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
                                                        !! [IscB:IecB, jsc:jec, 1:kmax]
   type(Box_t),                   intent(in)    :: bxV  !< The v-point iteration box of this tile,
                                                        !! [isc:iec, JscB:JecB, 1:kmax]
-  type(Box_t),                   intent(in)    :: bxVort !< The vorticity box of this tile,
-                                                         !! [is_vort:ie_vort, js_vort:je_vort, 1:kmax]
+  type(Box_t),                   intent(in)    :: bxKh !< The thickness-point viscosity box of this
+                                                       !! tile, [is_Kh:ie_Kh, js_Kh:je_Kh, 1:kmax]
   type(Box_t),                   intent(in)    :: bxHstr !< The h points of this tile where the normal stresses are
                                                          !! computed, [IscB:IecB+1, JscB:JecB+1, 1:kmax]
   type(Box_t),                   intent(in)    :: bxQstr !< The q points of this tile where the shear stresses are
@@ -3490,10 +3482,6 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
   logical, intent(in)    :: apply_OBC !< If true, open boundary conditions are applied on this PE
   logical, intent(in)    :: apply_OBC_strain !< If true, the specified open boundary strain configuration is applied
   logical, intent(in)    :: use_cont_huv !< If true, use the continuity solver thicknesses at velocity points
-  integer, intent(in)    :: is_vort !< Loop ranges for vorticity terms
-  integer, intent(in)    :: ie_vort !< Loop ranges for vorticity terms
-  integer, intent(in)    :: js_vort !< Loop ranges for vorticity terms
-  integer, intent(in)    :: je_vort !< Loop ranges for vorticity terms
   type(RealArray_t), intent(in)    :: u_a !< The zonal velocity [L T-1 ~> m s-1].
   type(RealArray_t), intent(in)    :: v_a !< The meridional velocity [L T-1 ~> m s-1].
   type(RealArray_t), intent(in)    :: h_a !< Layer thicknesses [H ~> m or kg m-2].
@@ -3545,7 +3533,7 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
   type(Box_C)           :: bxQ_c
   type(Box_C)           :: bxU_c
   type(Box_C)           :: bxV_c
-  type(Box_C)           :: bxVort_c
+  type(Box_C)           :: bxKh_c
   type(Box_C)           :: bxHstr_c
   type(Box_C)           :: bxQstr_c
   type(Box_C)           :: bxHgrad_c
@@ -3616,7 +3604,7 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
         call rec%add("_bxQ", bxQ)
         call rec%add("_bxU", bxU)
         call rec%add("_bxV", bxV)
-        call rec%add("_bxVort", bxVort)
+        call rec%add("_bxKh", bxKh)
         call rec%add("_bxHstr", bxHstr)
         call rec%add("_bxQstr", bxQstr)
         call rec%add("_bxHgrad", bxHgrad)
@@ -3628,10 +3616,6 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
         call rec%add("_apply_OBC", apply_OBC)
         call rec%add("_apply_OBC_strain", apply_OBC_strain)
         call rec%add("_use_cont_huv", use_cont_huv)
-        call rec%add("_is_vort", is_vort)
-        call rec%add("_ie_vort", ie_vort)
-        call rec%add("_js_vort", js_vort)
-        call rec%add("_je_vort", je_vort)
         call rec%add("_u", u_a)
         call rec%add("_v", v_a)
         call rec%add("_h", h_a)
@@ -3661,12 +3645,12 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
         call rec%add("_vort_xy_smooth_before", vort_xy_smooth_a)
       endif
 
-      call hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, bxHstr, bxQstr, bxHgrad, &
+      call hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxKh, bxHstr, bxQstr, bxHgrad, &
                                    bxQshear, bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, &
-                                   use_cont_huv, is_vort, ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, &
-                                   hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, &
-                                   sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
-                                   dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
+                                   use_cont_huv, u_a, v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, &
+                                   ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, &
+                                   dvdx_a, dudy_a, dvdx_smooth_a, dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, &
+                                   vort_xy_smooth_a)
 
       if (capture) then
         if (hu_cont_a%associated()) call rec%add("_hu_cont_after", hu_cont_a)
@@ -3706,7 +3690,7 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
       bxQ_c = bxQ%to_c()
       bxU_c = bxU%to_c()
       bxV_c = bxV%to_c()
-      bxVort_c = bxVort%to_c()
+      bxKh_c = bxKh%to_c()
       bxHstr_c = bxHstr%to_c()
       bxQstr_c = bxQstr%to_c()
       bxHgrad_c = bxHgrad%to_c()
@@ -3741,24 +3725,22 @@ subroutine hor_visc_strain(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, 
       sh_xy_smooth_c = sh_xy_smooth_a%to_c()
       vort_xy_c = vort_xy_a%to_c()
       vort_xy_smooth_c = vort_xy_smooth_a%to_c()
-      call turbotmp_hor_visc_strain_bridge(Gcore%C, CS_c, metrics_c, OBC_c, bxH_c, bxQ_c, bxU_c, bxV_c, bxVort_c, &
+      call turbotmp_hor_visc_strain_bridge(Gcore%C, CS_c, metrics_c, OBC_c, bxH_c, bxQ_c, bxU_c, bxV_c, bxKh_c, &
                                            bxHstr_c, bxQstr_c, bxHgrad_c, bxQshear_c, bxQvsmooth_c, &
                                            int(nkblock, c_int), int(kstart, c_int), use_vort_xy_c, apply_OBC_c, &
-                                           apply_OBC_strain_c, use_cont_huv_c, int(is_vort, c_int), &
-                                           int(ie_vort, c_int), int(js_vort, c_int), int(je_vort, c_int), u_c, v_c, &
-                                           h_c, hu_cont_c, hv_cont_c, u_smooth_c, v_smooth_c, NoSt_c, ShSt_c, Del2u_c, &
-                                           h_u_c, Del2v_c, h_v_c, sh_xx_c, sh_xx_smooth_c, dudx_c, dvdy_c, dvdx_c, &
-                                           dudy_c, dvdx_smooth_c, dudy_smooth_c, sh_xy_c, sh_xy_smooth_c, vort_xy_c, &
-                                           vort_xy_smooth_c)
+                                           apply_OBC_strain_c, use_cont_huv_c, u_c, v_c, h_c, hu_cont_c, hv_cont_c, &
+                                           u_smooth_c, v_smooth_c, NoSt_c, ShSt_c, Del2u_c, h_u_c, Del2v_c, h_v_c, &
+                                           sh_xx_c, sh_xx_smooth_c, dudx_c, dvdy_c, dvdx_c, dudy_c, dvdx_smooth_c, &
+                                           dudy_smooth_c, sh_xy_c, sh_xy_smooth_c, vort_xy_c, vort_xy_smooth_c)
 #endif
 
     case default
-      call hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxVort, bxHstr, bxQstr, bxHgrad, &
+      call hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, bxKh, bxHstr, bxQstr, bxHgrad, &
                                    bxQshear, bxQvsmooth, nkblock, kstart, use_vort_xy, apply_OBC, apply_OBC_strain, &
-                                   use_cont_huv, is_vort, ie_vort, js_vort, je_vort, u_a, v_a, h_a, hu_cont_a, &
-                                   hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, &
-                                   sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, dvdx_a, dudy_a, dvdx_smooth_a, &
-                                   dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, vort_xy_smooth_a)
+                                   use_cont_huv, u_a, v_a, h_a, hu_cont_a, hv_cont_a, u_smooth_a, v_smooth_a, NoSt_a, &
+                                   ShSt_a, Del2u_a, h_u_a, Del2v_a, h_v_a, sh_xx_a, sh_xx_smooth_a, dudx_a, dvdy_a, &
+                                   dvdx_a, dudy_a, dvdx_smooth_a, dudy_smooth_a, sh_xy_a, sh_xy_smooth_a, vort_xy_a, &
+                                   vort_xy_smooth_a)
 
   end select
 
