@@ -1,7 +1,7 @@
 ---
 name: consolidate_iteration_boxes
 version: "0.4.0"
-description: Phase 2 cleanup of a MOM6 call tree's iteration boxes, after convert_loops_to_box_iterators and before bridging. The tree root builds a handful of base boxes (one per stagger, plus any halo decision other kernels depend on, plus any space shared by three or more kernels); every other loop box is one commented grow of a box the kernel receives, named for the points it covers and what it computes. Loop ranges never change, so results are bit-for-bit. Use when kernels build many offset-named boxes (bxU_mi_m2j_pi_p2j) or grow boxes of one stagger to cover another.
+description: Phase 2 cleanup of a MOM6 call tree's iteration boxes, after convert_loops_to_box_iterators and before bridging. The tree root builds a handful of base boxes (one per stagger, plus any halo decision other kernels depend on, plus any space shared by two or more kernels); every other loop box is one commented grow of a box the kernel receives, named for the points it covers and what it computes. Loop ranges never change, so results are bit-for-bit. Use when kernels build many offset-named boxes (bxU_mi_m2j_pi_p2j) or grow boxes of one stagger to cover another.
 user-invocable: true
 argument-hint: <work-directory> <root-function> --box <name> | --kernels <k1,k2,...> [--enable_git_commit] [--disable_git_commit]
 ---
@@ -44,10 +44,10 @@ one commented grow per local box, purpose names. Loop ranges are unchanged (bit-
      viscosity coefficients are computed), built as **one grow of a base box** by widths the root
      computes from the options and the memory mode (`is - Isq` is 1 in symmetric memory and 0 in
      non-symmetric), each width commented with why;
-   - any iteration space used by three or more kernels.
+   - any iteration space used by two or more kernels.
 
    Every root box has a comment giving its range, why it has that halo, and the kernels using it.
-3. **Everything else is local** to the one or two kernels that use it: **one** `grow`/`growLo`/
+3. **Everything else is local** to the one kernel that uses it: **one** `grow`/`growLo`/
    `growHi`/`growBy` call on a box the kernel receives, with constant offsets or widths derived
    from received boxes or control-structure flags, and a comment giving the range, the field(s)
    computed, and why it is that wide. Built once per subroutine and freed on every exit path.
