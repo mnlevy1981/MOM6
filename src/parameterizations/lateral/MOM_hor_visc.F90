@@ -2143,7 +2143,8 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
   logical :: use_Leith    ! True if any Leith parameterizations are enabled
   logical :: use_vort_xy  ! True if vort_xy must be computed
   logical :: use_Smag     ! True if a Smagorinsky viscosity is enabled
-  integer :: is_Kh, ie_Kh, js_Kh, je_Kh  ! Loop ranges for thickness point viscosities
+  integer :: kh_lo(2) ! The number of points below the h points, in i and j, over which the
+                      ! thickness-point viscosities are computed [nondim]
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, kstart, kend, kmax
   real :: inv_PI3, inv_PI2, inv_PI6 ! Powers of the inverse of pi [nondim]
@@ -2353,10 +2354,12 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
   endif
 
   ! Set the halo sizes used for the thickness-point viscosities.
+  ! They always extend one point above the h points, for the normal stresses over bxHstr.
   if (CS%use_Leithy .or. CS%debug) then
-    js_Kh = js-1 ; je_Kh = je+1 ; is_Kh = is-1 ; ie_Kh = ie+1
+    kh_lo(:) = 1  ! One point below: Leith+E interpolates the h-point Ah to q points from isc-1,
+                  ! and the debug checksums cover it
   else
-    js_Kh = Jsq ; je_Kh = je+1 ; is_Kh = Isq ; ie_Kh = ie+1
+    kh_lo(:) = [is-Isq, js-Jsq]  ! Down to the first u (v) point: 1 in symmetric memory, else 0
   endif
 
   nullify(MEKE_mom_src, MEKE_mom_src_bh, MEKE_GME_snk)
@@ -2393,8 +2396,7 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
   !!$omp target enter data map(alloc: CS%use_Leithy)
 
   call bxH%safe_alloc(ndims=3) ; call bxQ%safe_alloc(ndims=3) ; call bxU%safe_alloc(ndims=3)
-  call bxV%safe_alloc(ndims=3) ; call bxKh%safe_alloc(ndims=3)
-  call bxKh_i%safe_alloc(ndims=3) ; call bxKh_j%safe_alloc(ndims=3)
+  call bxV%safe_alloc(ndims=3)
   do kstart=1,nz,nkblock
     kend = min(kstart+nkblock-1,nz)
     kmax = kend-kstart+1
@@ -2402,9 +2404,9 @@ subroutine horizontal_viscosity_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a
     call bxQ%set(idxS=[Isq,Jsq,1], idxE=[Ieq,Jeq,kmax])
     call bxU%set(idxS=[Isq,js,1], idxE=[Ieq,je,kmax])
     call bxV%set(idxS=[is,Jsq,1], idxE=[ie,Jeq,kmax])
-    call bxKh%set(idxS=[is_Kh,js_Kh,1], idxE=[ie_Kh,je_Kh,kmax])
-    call bxKh_i%set(idxS=[is_Kh,js,1], idxE=[ie_Kh,je,kmax])
-    call bxKh_j%set(idxS=[is,js_Kh,1], idxE=[ie,je_Kh,kmax])
+    bxKh = bxH%growBy(lo=[kh_lo(1),kh_lo(2),0], hi=[1,1,0])
+    bxKh_i = bxH%growBy(lo=[kh_lo(1),0,0], hi=[1,0,0])
+    bxKh_j = bxH%growBy(lo=[0,kh_lo(2),0], hi=[0,1,0])
     bxHstr = bxQ%growBy(lo=[0,0,0], hi=[1,1,0])
     bxQstr = bxH%growBy(lo=[1,1,0], hi=[0,0,0])
     bxHgrad = bxQ%growBy(lo=[1,1,0], hi=[2,2,0])
