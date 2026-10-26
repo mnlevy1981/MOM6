@@ -165,6 +165,24 @@ with a message naming the subroutine, the bridge symbol, the files touched and t
 reached, ending with the attribution trailer; push with `-u`. If the push is rejected, stop and
 report; never force-push.
 
+## Changing the signature of a bridged kernel
+
+A later cleanup (e.g. `consolidate_iteration_boxes`) may add, drop or replace a dummy of
+`<name>_fortran`. The shim, its capture records and the `bind(C)` interface are generated from that
+signature, so they change with it, in the same step:
+
+1. The transforming skill edits `<name>_fortran` and every call site of `<name>` (the shim keeps
+   the public name, so callers see the new list).
+2. **Regenerate the shim and the interface** from the new `<name>_fortran` signature by Steps 2–5,
+   replacing the old ones. The `kernel` string, env var and bridge symbol stay the same; record
+   names follow lessons §13 for the new dummies.
+3. **Verify** as Step 9, plus: the regenerated shim differs from the old one only in what follows
+   from the changed dummies (declarations, `_c` locals, capture records, `%to_c()` lines, call
+   actuals); `<name>_fortran` differs from its pre-cleanup form only by the transforming skill's
+   edit.
+4. **Report** the changed `<prefix>_<name>_bridge` argument list and the added or removed capture
+   records: the C++ implementation and any recorded capture fixtures must follow.
+
 ## Invariants (hard rules)
 
 - The public name and argument list never change; default-mode numerics are bit-identical.

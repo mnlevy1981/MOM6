@@ -167,3 +167,4 @@ As `convert_array_containers` Step 8. Branch `claude_<lowercased first name>_box
 
 The Step 1 table with each derived box's build; out-of-scope loops; core boxes added, argument
 lists changed, names dropped; Step 4 results and build status; committed, or the files to commit.
+In a `convert_calltree` campaign, `consolidate_iteration_boxes` runs next.
