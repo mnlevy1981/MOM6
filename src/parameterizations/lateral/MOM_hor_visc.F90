@@ -3020,16 +3020,20 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   ! Local variables
   type(Box_t) :: bxUdel2 ! u points [Isq-1:Ieq+1, js-1:je+1] where Del2u is computed: one point beyond bxU,
                          ! because the biharmonic pass in hor_visc_h_coeffs_b differences Del2u between neighbours
-  type(Box_t) :: bxUhcont ! u points [Isq-1:Ieq+1, js-2:je+2] where h_u is copied from hu_cont; two
-                          ! points out in j for the OBC cross-corner projections
   type(Box_t) :: bxVdel2 ! v points [is-1:ie+1, Jsq-1:Jeq+1] where Del2v is computed: one point beyond bxV,
                          ! because the biharmonic pass in hor_visc_h_coeffs_b differences Del2v between neighbours
-  type(Box_t) :: bxVhcont ! v points [is-2:ie+2, Jsq-1:Jeq+1] where h_v is copied from hv_cont; two
-                          ! points out in i for the OBC cross-corner projections
-  type(Box_t) :: bxVhavg ! v points [is-2:ie+2, js-2:Jeq+1] where h_v is averaged from h; built from bxH
-                         ! because the range starts at js-2 in both memory modes
-  type(Box_t) :: bxUhavg ! u points [is-2:Ieq+1, js-2:je+2] where h_u is averaged from h; built from bxH
-                         ! because the range starts at is-2 in both memory modes
+  type(Box_t) :: bxVthick ! v points [is-2:ie+2, js-2:Jeq+1] where h_v is set: hrat_min in
+                          ! hor_visc_h_coeffs_a reads it on both sides of bxKh, and two points out in i
+                          ! for the OBC cross-corner projections; built from bxH because the range starts
+                          ! at js-2 in both memory modes
+  type(Box_t) :: bxUthick ! u points [is-2:Ieq+1, js-2:je+2] where h_u is set: hrat_min in
+                          ! hor_visc_h_coeffs_a reads it on both sides of bxKh, and two points out in j
+                          ! for the OBC cross-corner projections; built from bxH because the range starts
+                          ! at is-2 in both memory modes
+  type(Box_t) :: bxHtens ! h points where dudx, dvdy and sh_xx are computed: bxHgrad, or with a Leith
+                         ! scheme [is-2:ie+2, js-2:je+2], because the divergence in hor_visc_Leith_grad_a
+                         ! reads dudx and dvdy one point around bxKh; built from bxH because that range
+                         ! starts at is-2 in both memory modes
   type(Box_t) :: bxVort ! q points of this tile where dudy, dvdx and vort_xy are computed,
                         ! [is_vort:ie_vort, js_vort:je_vort, 1:kmax]: two points below and one above the h points; with
                         ! a Leith scheme, around bxKh instead, because Leith takes gradients of the vorticity
@@ -3079,16 +3083,16 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   Isq = bxQ%idxS(1) ; Ieq = bxQ%idxE(1) ; Jsq = bxQ%idxS(2) ; Jeq = bxQ%idxE(2)
   kmax = bxH%idxE(3) - bxH%idxS(3) + 1
   bxUdel2 = bxU%growBy(lo=[1,1,0], hi=[1,1,0])
-  bxUhcont = bxU%growBy(lo=[1,2,0], hi=[1,2,0])
   bxVdel2 = bxV%growBy(lo=[1,1,0], hi=[1,1,0])
-  bxVhcont = bxV%growBy(lo=[2,1,0], hi=[2,1,0])
-  bxVhavg = bxH%growBy(lo=[2,2,0], hi=[2,1,0])
-  bxUhavg = bxH%growBy(lo=[2,2,0], hi=[1,2,0])
+  bxVthick = bxH%growBy(lo=[2,2,0], hi=[2,1,0])
+  bxUthick = bxH%growBy(lo=[2,2,0], hi=[1,2,0])
   ! Set the halo sizes used for the vorticity calculations.
   if ((CS%Leith_Kh) .or. (CS%Leith_Ah) .or. (CS%use_Leithy)) then
     bxVort = bxKh%growBy(lo=[2,2,0], hi=[1,1,0])
+    bxHtens = bxH%growBy(lo=[2,2,0], hi=[2,2,0])
   else
     bxVort = bxH%growBy(lo=[2,2,0], hi=[1,1,0])
+    bxHtens = bxHgrad%growBy(lo=[0,0,0], hi=[0,0,0])
   endif
   is_vort = bxVort%idxS(1) ; ie_vort = bxVort%idxE(1)
   js_vort = bxVort%idxS(2) ; je_vort = bxVort%idxE(2)
@@ -3100,8 +3104,8 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   ! Griffies and Hallberg (2000).
 
   ! Calculate horizontal tension
-  do concurrent (kk=bxHgrad%idxS(3):bxHgrad%idxE(3), j=bxHgrad%idxS(2):bxHgrad%idxE(2), &
-                 i=bxHgrad%idxS(1):bxHgrad%idxE(1)) DO_LOCALITY(local(k))
+  do concurrent (kk=bxHtens%idxS(3):bxHtens%idxE(3), j=bxHtens%idxS(2):bxHtens%idxE(2), &
+                 i=bxHtens%idxS(1):bxHtens%idxE(1)) DO_LOCALITY(local(k))
     k = kstart + kk - 1
     dudx(i,j,kk) = DY_dxT(i,j)*((IdyCu(I,j) * u(I,j,k)) - &
                                   (IdyCu(I-1,j) * u(I-1,j,k)))
@@ -3155,41 +3159,41 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
   ! even with OBCs if the accelerations are zeroed at OBC points, in which
   ! case the j-loop for h_u could collapse to j=js=1,je+1. -RWH
   if (use_cont_huv) then
-    do concurrent (kk=bxUhcont%idxS(3):bxUhcont%idxE(3), &
-                   j=bxUhcont%idxS(2):bxUhcont%idxE(2), &
-                   I=bxUhcont%idxS(1):bxUhcont%idxE(1)) DO_LOCALITY(local(k))
+    do concurrent (kk=bxUthick%idxS(3):bxUthick%idxE(3), &
+                   j=bxUthick%idxS(2):bxUthick%idxE(2), &
+                   I=bxUthick%idxS(1):bxUthick%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_u(I,j,kk) = hu_cont(I,j,k)
     enddo
-    do concurrent (kk=bxVhcont%idxS(3):bxVhcont%idxE(3), &
-                   J=bxVhcont%idxS(2):bxVhcont%idxE(2), &
-                   i=bxVhcont%idxS(1):bxVhcont%idxE(1)) DO_LOCALITY(local(k))
+    do concurrent (kk=bxVthick%idxS(3):bxVthick%idxE(3), &
+                   J=bxVthick%idxS(2):bxVthick%idxE(2), &
+                   i=bxVthick%idxS(1):bxVthick%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_v(i,J,kk) = hv_cont(i,J,k)
     enddo
   elseif (CS%use_land_mask) then
-    do concurrent (kk=bxUhavg%idxS(3):bxUhavg%idxE(3), &
-                   j=bxUhavg%idxS(2):bxUhavg%idxE(2), &
-                   I=bxUhavg%idxS(1):bxUhavg%idxE(1)) DO_LOCALITY(local(k))
+    do concurrent (kk=bxUthick%idxS(3):bxUthick%idxE(3), &
+                   j=bxUthick%idxS(2):bxUthick%idxE(2), &
+                   I=bxUthick%idxS(1):bxUthick%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_u(I,j,kk) = 0.5 * (mask2dT(i,j)*h(i,j,k) + mask2dT(i+1,j)*h(i+1,j,k))
     enddo
-    do concurrent (kk=bxVhavg%idxS(3):bxVhavg%idxE(3), &
-                   J=bxVhavg%idxS(2):bxVhavg%idxE(2), &
-                   i=bxVhavg%idxS(1):bxVhavg%idxE(1)) DO_LOCALITY(local(k))
+    do concurrent (kk=bxVthick%idxS(3):bxVthick%idxE(3), &
+                   J=bxVthick%idxS(2):bxVthick%idxE(2), &
+                   i=bxVthick%idxS(1):bxVthick%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_v(i,J,kk) = 0.5 * (mask2dT(i,j)*h(i,j,k) + mask2dT(i,j+1)*h(i,j+1,k))
     enddo
   else
-    do concurrent (kk=bxUhavg%idxS(3):bxUhavg%idxE(3), &
-                   j=bxUhavg%idxS(2):bxUhavg%idxE(2), &
-                   I=bxUhavg%idxS(1):bxUhavg%idxE(1)) DO_LOCALITY(local(k))
+    do concurrent (kk=bxUthick%idxS(3):bxUthick%idxE(3), &
+                   j=bxUthick%idxS(2):bxUthick%idxE(2), &
+                   I=bxUthick%idxS(1):bxUthick%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_u(I,j,kk) = 0.5 * (h(i,j,k) + h(i+1,j,k))
     enddo
-    do concurrent (kk=bxVhavg%idxS(3):bxVhavg%idxE(3), &
-                   J=bxVhavg%idxS(2):bxVhavg%idxE(2), &
-                   i=bxVhavg%idxS(1):bxVhavg%idxE(1)) DO_LOCALITY(local(k))
+    do concurrent (kk=bxVthick%idxS(3):bxVthick%idxE(3), &
+                   J=bxVthick%idxS(2):bxVthick%idxE(2), &
+                   i=bxVthick%idxS(1):bxVthick%idxE(1)) DO_LOCALITY(local(k))
       k = kstart + kk - 1
       h_v(i,J,kk) = 0.5 * (h(i,j,k) + h(i,j+1,k))
     enddo
@@ -3437,11 +3441,10 @@ subroutine hor_visc_strain_fortran(Gcore, CS, metrics, OBC, bxH, bxQ, bxU, bxV, 
     endif
   endif
 
-  call bxVhavg%free() ; call bxUhavg%free()
+  call bxVthick%free() ; call bxUthick%free()
   call bxUdel2%free()
-  call bxUhcont%free()
   call bxVdel2%free()
-  call bxVhcont%free()
+  call bxHtens%free()
   call bxVort%free()
 end subroutine hor_visc_strain_fortran
 
