@@ -2055,7 +2055,7 @@ subroutine vertvisc(u, v, h, forces, visc, dt, OBC, ADp, CDp, G, GV, US, CS, &
     if (.not. DoStokesMixing) &
       call MOM_error(FATAL, "Stokes Mixing called without associated Waves Control Structure")
   endif
-  if (DoStokesMixing) then
+  if (DoStokesMixing .or. lfpmix) then
     call Us_x_a%alloc(lb=LBOUND(Waves%Us_x), ub=UBOUND(Waves%Us_x), source=Waves%Us_x)
     call Us_y_a%alloc(lb=LBOUND(Waves%Us_y), ub=UBOUND(Waves%Us_y), source=Waves%Us_y)
   endif
@@ -2321,7 +2321,7 @@ subroutine vertvisc_TR(bxU0, bxV0, u_a, v_a, h_a, forces_a, visc_a, dt, OBC, AD_
   nullify(Us_x, Us_y)
   if (Us_x_a%associated()) call Us_x_a%view(Us_x)
   if (Us_y_a%associated()) call Us_y_a%view(Us_y)
-  DoStokesMixing = associated(Us_x)
+  DoStokesMixing = CS%StokesMixing .and. associated(Us_x)
   lfpmix = fpmix
 
   !   Update the zonal velocity component using a modification of a standard
