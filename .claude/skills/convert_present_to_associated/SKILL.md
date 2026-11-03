@@ -1,7 +1,7 @@
 ---
 name: convert_present_to_associated
-version: "0.3.2"
-description: Convert an already-array-container-ified optional dummy argument from Fortran's `optional`/`present()` idiom to a non-optional container checked via `x%associated()`, for bind(C)/C++ bridge-readiness (C/C++ has no `optional`, only nullable pointers). The unit of conversion is an ARGUMENT NAME across its whole by-value forwarding chain, not a single subroutine. Precondition: the argument must already be a RealArray_t/IntArray_t/LogicalArray_t at every subroutine in that chain (run convert_array_containers first where it is still raw). Does not touch the container API beyond the %associated() method, does not add a bind(C) bridge -- that is generate_cpp_bridge's job.
+version: "0.4.0"
+description: Remove `optional` dummies for bind(C) bridge-readiness (C has nullable pointers, not optional arguments). An optional container dummy (RealArray_t/IntArray_t/LogicalArray_t) or container group (shadow/bundle type) becomes non-optional and is tested with `%associated()`; an optional scalar becomes mandatory, with every caller that omitted it passing the value absence used to mean. The unit is an argument name across its whole by-value forwarding chain, not one subroutine. An array argument must already be a container everywhere in that chain (run convert_array_containers first). Adds no bind(C) bridge -- that is generate_cpp_bridge's job.
 user-invocable: true
 argument-hint: <work-directory> <dummy-argument-name>[,<dummy-argument-name>...] [<seed-function-name>]
 ---
@@ -10,172 +10,119 @@ argument-hint: <work-directory> <dummy-argument-name>[,<dummy-argument-name>...]
 
 ## Why this exists
 
-`bind(C)` can't express "this argument may be omitted." The fix is to
-make the argument **always present as a container**, whose internal
-pointer may be unassociated — "absent" becomes "associated with
-nothing," not "not passed." Query this via `%associated()` (wraps
-`associated(this%data)`, identical across container types and infra
-layers) rather than `x%data` inline, which would leak the field name
-outside `array_mod`.
+`bind(C)` can't express an omitted argument. The argument becomes **always present as a
+container** whose data may be unassociated, tested with `%associated()` (never `x%data`, which
+leaks the field name out of `array_mod`). This is for bridge-readiness only; both tests are O(1).
 
-Separate from `convert_array_containers`: converting a raw array to a
-container, and converting its presence-test idiom, are independent
-transformations that happen to often apply to the same variable.
+Campaign decisions recorded in the calling plan (`convert_calltree`) are applied, not re-asked.
+
+## Help message
+
+If the arguments are empty, `help`, `--help` or `-h`, print this and stop:
+
+```
+Usage: /convert_present_to_associated <work-directory> <dummy-argument-name>[,<dummy-argument-name>...] [<seed-function-name>]
+
+Drop `optional` from a dummy across its whole forwarding chain. A container
+dummy is tested with x%associated() and callers that omitted it pass an
+unallocated placeholder; a scalar dummy becomes mandatory and callers that
+omitted it pass its absent-default explicitly.
+```
 
 ## Step 0 — scope: one subroutine, or the whole forwarding chain
 
-**The unit here is an argument name, not a subroutine** — the one
-respect this skill differs from the rest of the family. A dummy's
-presence-idiom must match at both ends of every place it's forwarded
-**by value** (not via a guarded `%view`, which carries its own presence
-signal). Naming one subroutine is only safe if the argument is
-self-contained there; otherwise find the full set first:
+The presence idiom must match at both ends of every **by-value** forward (a guarded `%view`
+carries its own signal and ends the chain). Build the set by closure:
 
-1. **Seed.** Start from `<seed-function-name>` if given (confirm it
-   declares the argument as an optional container there); otherwise
-   grep for every subroutine declaring an optional dummy of that name
-   and keep the ones that are the same logical quantity. A known root
-   of the chain is a good seed — its own upward check should terminate
-   almost immediately, confirming it's really the top.
-
-2. **Close the set.** From every member, check both directions and
-   repeat until a pass adds nothing:
-   - *Downward:* does it forward the argument by value into another
-     subroutine's own same-named optional dummy? Add that callee.
-   - *Upward:* grep the whole tree for every caller. If a caller's
-     actual argument is *its own* same-named optional dummy, add it.
-   Apply both checks to every member, including ones found by the
-   *other* direction — a node reached only upward can have its own
-   downward callees, and checking only from the seed can miss a
-   sibling caller that shares a callee further down but never appears
-   in the seed's own tree.
-   A branch ends at a subroutine that consumes the argument directly
-   (`%view`/`%associated()`), or hands it to a *mandatory* dummy under
-   a different name (a separately-decided variable). A caller that
-   passes a fixed value or omits the argument outright (not its own
-   same-named optional dummy) is a **boundary**: its call site still
-   needs Step 4, but it isn't a set member.
-
-3. The closed set is one consistent boundary: every member gets Steps
-   1–3 applied; every edge call site (internal, external, or
-   non-`optional`) gets Step 4. An empty closure — one subroutine — is
-   still the common outcome, just no longer assumed without checking.
+1. **Seed** from `<seed-function-name>` (confirm it declares the argument as an optional
+   container), or from every subroutine declaring an optional dummy of that name that is the
+   same quantity.
+2. **Close** it, repeating until a pass adds nothing, from *every* member (not just the seed):
+   *down* — a callee whose same-named optional dummy receives it by value joins; *up* — a caller
+   that passes its own same-named optional dummy joins. A chain ends where the argument is
+   consumed (`%view`/`%associated()`) or passed to a mandatory dummy under another name. A
+   caller that passes a fixed value or omits it is a **boundary**: not a member, but its call
+   site gets Step 4.
+3. Members get Steps 1–3; every boundary call site gets Step 4, in the same pass. A one-member
+   set is common, but only after the closure says so.
 
 ## Hard precondition
 
-Every argument in the set must already be a container (run
-`convert_array_containers` first where still raw). Every caller
-currently omitting the argument needs Step 4 in the same pass — never
-leave one end expecting a container while the other still omits it.
-
-## Grouped arguments
-
-If this argument's presence is checked together with another's (e.g.
-`present(a) .and. present(b)`, or the routine treats a set as
-all-or-nothing), convert the whole group together — converting one
-member while a sibling stays on `present()` produces mixed semantics
-for what was meant to be one logical state.
+An array argument is already a container in every member (a scalar or derived type needs nothing). A `present()`-linked group (`present(a) .and.
+present(b)`, or all-or-nothing handling) converts together, never one member alone.
 
 ## Steps
 
-1. **List every `present(<name>)` occurrence**, for every subroutine in
-   the set, before changing anything.
+1. **List every `present(<name>)`** in every member before editing.
+2. **Drop `optional`** from each declaration; nothing else in it changes.
+3. **Replace `present(x)` with `x%associated()`**, checking each occurrence really tests this
+   argument. `%associated()` must be `pure` (it may sit inside `do concurrent`); confirm once
+   per container type. At every rewritten guard, independently:
+   - a pointer local set by a guarded `%view` is `nullify`d before the first guard (lessons §9 #16);
+   - inside an `!$omp target`/`teams`/`parallel`/`loop`-family construct, `%associated()` is never
+     referenced: precompute a logical before the construct (lessons §9 #17).
+4. **Fix every boundary call site.** One that already passes a container needs nothing. One that
+   omitted the argument passes a never-`%alloc`'d placeholder local, declared inside the
+   subroutine that contains the call (check its line range, not proximity). One placeholder never
+   serves two dummies of one call when either is `intent(out)`/`inout`: that aliasing is illegal
+   whichever branch runs.
+5. **Leave `%to_c()` alone**; it is already null-safe.
 
-2. **Drop `optional`** from each declaration:
-   ```fortran
-   ! before
-   type(RealArray_t), optional, intent(in) :: uhbt
-   ! after
-   type(RealArray_t), intent(in) :: uhbt
-   ```
+## Optional scalar dummies
 
-3. **Replace `present(x)` with `x%associated()`**, everywhere in the
-   set — confirm each occurrence actually tests the container's
-   presence, not an unrelated similarly-named flag.
-   ```fortran
-   ! before
-   if (present(uhbt)) then
-   ! after
-   if (uhbt%associated()) then
-   ```
-   `%associated()` must be `pure` — F2018 forbids referencing an impure
-   procedure inside `do concurrent`, where these checks often sit.
-   Confirm once per container type, not per call site.
+An optional `real`/`integer`/`logical` scalar can't cross `bind(C)` either, and has no
+"unassociated" state, so it becomes **mandatory** and its absent meaning moves to the callers.
+Step 0's closure applies unchanged (a caller forwarding its own same-named optional joins the set).
 
-   Two independent, confirmed-real-bug checks apply to every guard
-   rewritten here, regardless of when this subroutine last saw
-   `convert_array_containers`:
-   - If the guard also conditionally sets a `pointer` local via `%view`,
-     that pointer needs a `nullify` before the first such guard.
-   - If the guard sits inside an `!$omp target`/`teams`/`parallel`/
-     `loop`-family construct, never leave `x%associated()` itself as
-     the in-loop condition — precompute a scalar before the construct.
+1. **Find the absent-default:** the single value the body uses when `present(x)` is false,
+   typically `x_val = <default> ; if (present(x)) x_val = x`. If absence selects behaviour no
+   single value expresses, stop and ask.
+2. **Drop `optional`.** Replace only the fallback: the default-then-override lines become
+   `x_val = x`; the rest of the body is unchanged.
+3. **Every boundary call site that omitted it passes the default explicitly** (by keyword if the
+   call already uses keywords); call sites that passed a value keep it.
+4. An existing doc comment that describes the absent case ("If present and false, …") is left
+   verbatim and reported to the user (lessons, comment STANDING RULE).
 
-4. **Fix every call site at the edge of the set.** One that already
-   builds the container unconditionally needs nothing. One that omits
-   the argument needs a dedicated, never-`%alloc`'d placeholder local
-   (its `data` stays `null()`) declared *within* the subroutine that
-   actually contains that call — confirm by that subroutine's own line
-   range, never by proximity to other edits or a same-named "real"
-   container elsewhere in the file.
+## Optional derived-type dummies (shadows, bundles)
 
-   **Never let one placeholder serve two dummies in the same call.**
-   Fortran forbids the same actual argument associated with two dummies
-   in one invocation when either is definable (`intent(out)`/`inout`) —
-   the restriction is on declared intent, not on which branch runs, and
-   a compiler may assume non-aliased memory. Check the intents in play
-   before sharing a variable across two argument positions.
-
-5. **Leave `%to_c()` alone** — already null-safe for an unassociated
-   container; this skill only changes the Fortran-side presence idiom.
+A derived type grouping containers and scalars (a `create_shadow_container_type` shadow, a
+bundle) is handled like a container: **drop `optional`**; the caller always passes an instance,
+and a caller that omitted it passes a never-built instance (its containers unassociated, its
+scalars at their default component values). Each `present(x)` guard becomes the presence test of
+what it protects:
+- around a container field's use: that field's `%associated()`, or nothing where an inner guard
+  already tests the field (keep the `nullify`, lessons §9 #16);
+- around a scalar field's read: no test, provided the type's default component value equals the
+  old absent-default; otherwise stop and ask. A default-then-override pair becomes the plain read.
 
 ## Verify
 
-Programmatically, not by eye — a wrong-scope placeholder or a missing
-`pure` both compile clean past a casual read.
-
-- Zero remaining `present(<name>)`/`optional ... <name>`, repo-wide,
-  for every argument in the set.
-- Every call site's placeholder declared within its actual enclosing
-  subroutine's line range.
-- No actual argument repeated within one call's full list (Step 4's
-  aliasing hazard).
-- **Nullify audit:** every `pointer` local set by a guarded
-  `%view`, anywhere in each set subroutine, has a `nullify` before the
-  first such guard.
-- **OpenMP-construct audit:** no `%associated()` guard, anywhere in
-  each set subroutine, is the condition of an `!$omp target`/`teams`/
-  `parallel`/`loop`-family construct.
-- Line length ≤ 100; doc comments preserved verbatim.
+Scripted:
+- No `present(<name>)` or `optional … <name>` left repo-wide for any argument in the set.
+- Scalars: every call that omitted the argument now passes the recorded absent-default.
+- Every placeholder declared within its call's enclosing subroutine; no actual repeated in one call.
+- Every guarded-`%view` pointer nullified first; no `%associated()` inside an OpenMP construct.
+- Doc comments verbatim; line limit (lessons §7).
+- **Build:** don't compile, build or run tests unless the user explicitly allows it in this
+  conversation; say it is unrun.
 
 ## Explicitly not performance motivated
 
-`%associated()` and `present()` are both O(1); Fortran resolves neither
-at compile time. The only reason to do this is bridge-readiness.
+`present()` and `%associated()` are both O(1) runtime checks; the only gain is bridge-readiness.
 
 ## Versioning marker
 
-Every Fortran file this skill creates or modifies gets a `!!SKILLS: 0.3.2`
-marker line — the shared version for this whole skill family. If
-missing, add it right after the file's license/header block, before
-`module`; if present, update it in place. Grep-able
-(`grep -rn "!!SKILLS:"`), meant to be stripped later.
+Exactly one `!!SKILLS: 0.4.0` line per touched Fortran file, after the license header, before
+`module`; update in place if present.
 
 ## Hard rules
 
-- Never skip or duplicate the `!!SKILLS: 0.3.2` marker.
-- Never convert an argument still declared as a raw array.
-- Never convert one member of a `present()`-linked group alone.
-- Never leave a caller omitting the argument after its callee drops
-  `optional` — same pass, always.
-- Never scope this to one subroutine without running Step 0's closure.
-- Never assume a call site's enclosing subroutine from proximity —
-  check its line range.
-- Never let two dummies in one call share an actual argument when
-  either is definable.
-- Never declare `isAssociated<Type>` without `pure`.
-- Never rewrite a `present(x)`/`x%associated()` guard without checking
-  both the `nullify` and OpenMP-construct hazards independently — two
-  distinct, confirmed bugs.
-- Do not add a `bind(C)` interface, dispatcher, or capture mode — that's
-  `generate_cpp_bridge`'s job, strictly afterward.
+- Never convert a raw array, one member of a linked group, or a subroutine without the closure.
+- A scalar's absent-default is one value read from the body, never guessed; otherwise ask.
+- A derived type's scalar field read unguarded only if its default component value is the absent-default.
+- Callee and callers change in the same pass.
+- Placeholders scoped by line range, never shared across two definable dummies of one call.
+- `%associated()` is `pure`; nullify and OpenMP hazards checked at every rewritten guard.
+- No `bind(C)` interface, dispatcher or capture mode (`generate_cpp_bridge`, afterwards);
+  never claim an unrun build passed.

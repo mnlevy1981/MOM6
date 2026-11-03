@@ -15,7 +15,7 @@ AC_DEFUN([MOM6_FC_DO_CONCURRENT_LOCAL], [
       AC_COMPILE_IFELSE([
         AC_LANG_PROGRAM([], [
 dnl ---
-      do concurrent(i=1:2) local(a,b)
+      do concurrent(i=1:2) local(a,b) reduce(+:s)
       end do
 dnl ---
         ])
