@@ -112,6 +112,15 @@ end type <RealType>_container_type
 - **`copy_back(real_struct)`** — the reverse: `%copy2F` each field into
   the real struct, then `%free()` it. Guard exactly the same field
   groups the same way.
+- **Fields allocated independently.** If the real type allocates each field on its own,
+  so that there is no allocated-together group (CorAdCalc's `CorAdv_AD_type` shadow of
+  `accel_diag_ptrs`: `gradKEu`/`gradKEv`/`rv_x_u`/`rv_x_v`, allocated by several modules):
+  - guard each field separately in `build_from` (`associated(AD%x)`) and `copy_back`
+    (`x_a%associated()`);
+  - leaves test and `%view` each field under its own `%associated()`, because `%view` on an
+    unallocated container is FATAL;
+  - omit the whole-shadow `associated()` below; there is no valid sentinel, and none should be
+    invented.
 - **`associated()`** — a `pure function` returning whether this shadow
   was ever built. Pick **one field from the group that's always
   allocated together** as the presence sentinel (do not add a separate

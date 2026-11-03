@@ -14,7 +14,7 @@ use MOM_diag_mediator, only : post_data, query_averaging_enabled, diag_ctrl
 use MOM_diag_mediator, only : post_product_u, post_product_sum_u
 use MOM_diag_mediator, only : post_product_v, post_product_sum_v
 use MOM_diag_mediator, only : register_diag_field, safe_alloc_ptr, time_type
-use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING
+use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
 use MOM_file_parser,   only : get_param, log_version, param_file_type
 use MOM_grid,          only : ocean_grid_type
 use MOM_grid_containers, only : grid_core_type, grid_OBC_type, grid_core, grid_OBC
@@ -27,9 +27,12 @@ use MOM_unit_scaling,  only : unit_scale_type
 use MOM_variables,     only : accel_diag_ptrs, porous_barrier_type
 use MOM_verticalGrid,  only : verticalGrid_type
 use MOM_wave_interface, only : wave_parameters_CS
-use box_mod,           only : Box_t
+use box_mod,           only : Box_t, Box_C
 use array_mod,         only : RealArray_t, RealArray_C
-use iso_c_binding,     only : c_int, c_bool, c_double
+use iso_c_binding,     only : c_int, c_bool, c_double, c_null_char, c_ptr, c_loc, c_null_ptr
+use posix,             only : mkdir_posix
+use turbotmp_helperF,  only : getenv_mode, io_recorder, already_recorded, mark_recorded
+use turbotmp_helperF,  only : TIMH_runAMREX, TIMH_capture, TIMH_runFORTRAN
 
 implicit none ; private
 
@@ -228,6 +231,382 @@ character*(20), parameter :: PV_ADV_CENTERED_STRING = "PV_ADV_CENTERED"
 character*(20), parameter :: PV_ADV_UPWIND1_STRING = "PV_ADV_UPWIND1"
 !>@}
 
+  !----------------------------------------
+  ! C interface (bridge to C++)
+  !----------------------------------------
+  interface
+    !> Bridge for the gradKE subroutine
+    subroutine turbotmp_gradke_bridge(bxQ, bxU, bxV, u, v, KE, KEx, KEy, Gcore, Gobc, KE_Scheme, &
+                                      KE_use_limiter) bind(C)
+      use iso_c_binding, only : c_int, c_bool
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C, grid_OBC_C
+      implicit none
+      type(Box_C),       intent(in)    :: bxQ   !< The B-grid-index iteration box of this tile
+      type(Box_C),       intent(in)    :: bxU   !< The u-point iteration box of this tile
+      type(Box_C),       intent(in)    :: bxV   !< The v-point iteration box of this tile
+      type(RealArray_C), intent(in)    :: u     !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)    :: v     !< Meridional velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(inout) :: KE    !< Kinetic energy per unit mass [L2 T-2 ~> m2 s-2]
+      type(RealArray_C), intent(inout) :: KEx   !< Zonal acceleration due to kinetic
+                                                !! energy gradient [L T-2 ~> m s-2]
+      type(RealArray_C), intent(inout) :: KEy   !< Meridional acceleration due to kinetic
+                                                !! energy gradient [L T-2 ~> m s-2]
+      type(grid_core_C), intent(in)    :: Gcore !< Persistent copies of the core
+                                                !! ocean grid fields
+      type(grid_OBC_C),  intent(in)    :: Gobc  !< Persistent copies of the ocean
+                                                !! grid OBC mask fields
+      integer(c_int),  intent(in), value :: KE_Scheme !< Selects the discretization
+                                                !! for the kinetic energy: KE_ARAKAWA,
+                                                !! KE_SIMPLE_GUDONOV, KE_GUDONOV or KE_UP3
+      logical(c_bool), intent(in), value :: KE_use_limiter !< If true, use the
+                                                !! Koren limiter for the KE_UP3 scheme
+    end subroutine turbotmp_gradke_bridge
+
+    !> Bridge for the CorAdv_setup subroutine
+    subroutine turbotmp_coradv_setup_bridge(bxH, bxQ, bxU, bxV, bxQs, u, v, h, OBC, AD, &
+                                            por_face_areaU, por_face_areaV, Waves, Gcore, &
+                                            Area_h, Area_q, Stokes_VF, use_weno, &
+                                            vol_neglect, area_neglect, q, Ih_q, abs_vort, &
+                                            h_q, qS, q2, uh_center, vh_center, RV, PV, CS) bind(C)
+      use iso_c_binding, only : c_bool, c_double, c_ptr
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      import :: CorAdv_AD_C, CorAdv_opts_CS_C
+      implicit none
+      type(Box_C), intent(in)            :: bxH            !< The h-point iteration box of this
+                                                           !! tile, [isc:iec, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)            :: bxQ            !< The B-grid-index iteration box of this
+                                                           !! tile, [IscB:IecB, JscB:JecB, ksc:kec]
+      type(Box_C), intent(in)            :: bxU            !< The u-point iteration box of this
+                                                           !! tile, [IscB:IecB, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)            :: bxV            !< The v-point iteration box of this
+                                                           !! tile, [isc:iec, JscB:JecB, ksc:kec]
+      type(Box_C), intent(in)            :: bxQs           !< The scheme-dependent vorticity-point
+                                                           !! box, [Is_q:Ie_q, Js_q:Je_q, ksc:kec]
+      type(RealArray_C), intent(in)      :: u              !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)      :: v              !< Meridional velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)      :: h              !< Layer thickness [H ~> m or kg m-2]
+      type(c_ptr), intent(in), value     :: OBC            !< Open boundary control structure
+      type(CorAdv_AD_C), intent(in)      :: AD             !< Copies of the acceleration diagnostics
+      type(RealArray_C), intent(in)      :: por_face_areaU !< fractional open area of U-faces
+                                                           !! [nondim]
+      type(RealArray_C), intent(in)      :: por_face_areaV !< fractional open area of V-faces
+                                                           !! [nondim]
+      type(c_ptr), intent(in), value     :: Waves          !< An optional pointer to Stokes drift CS
+      type(grid_core_C), intent(in)      :: Gcore          !< Persistent copies of the core ocean
+                                                           !! grid fields
+      type(RealArray_C), intent(in)      :: Area_h         !< The ocean area at h points [L2 ~> m2]
+      type(RealArray_C), intent(in)      :: Area_q         !< The sum of the ocean areas at the 4
+                                                           !! adjacent thickness points [L2 ~> m2]
+      logical(c_bool), intent(in), value :: Stokes_VF      !< If true, include the Stokes drift
+      logical(c_bool), intent(in), value :: use_weno       !< True if using one of the WENO schemes
+      real(c_double), intent(in), value  :: vol_neglect    !< A negligible volume [H L2 ~> m3 or kg]
+      real(c_double), intent(in), value  :: area_neglect   !< A negligible area [L2 ~> m2]
+      type(RealArray_C), intent(inout)   :: q              !< Layer potential vorticity
+                                                           !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(inout)   :: Ih_q           !< Inverse of thickness interpolated to q
+                                                           !! points [H-1 ~> m-1 or m2 kg-1]
+      type(RealArray_C), intent(inout)   :: abs_vort       !< Absolute vorticity at q-points
+                                                           !! [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)   :: h_q            !< Thickness interpolated to q points
+                                                           !! [H ~> m or kg m-2]
+      type(RealArray_C), intent(inout)   :: qS             !< Layer Stokes vorticity
+                                                           !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(inout)   :: q2             !< Relative vorticity over thickness
+                                                           !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(inout)   :: uh_center      !< Transport based on arithmetic mean h
+                                                           !! at u-points
+                                                           !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(inout)   :: vh_center      !< Transport based on arithmetic mean h
+                                                           !! at v-points
+                                                           !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(inout)   :: RV             !< Diagnostic relative vorticity
+                                                           !! [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)   :: PV             !< Diagnostic potential vorticity
+                                                           !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(CorAdv_opts_CS_C), intent(in) :: CS             !< Options used in the Coriolis and
+                                                           !! momentum advection calculations
+    end subroutine turbotmp_coradv_setup_bridge
+
+    !> Bridge for the CorAdv_sadourny subroutine
+    subroutine turbotmp_coradv_sadourny_bridge(bxH, bxU, bxV, u, v, uh, vh, q, uh_center, &
+                                               vh_center, Gcore, CAu, CAv, CS) bind(C)
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      import :: Coriolis_scheme_CS_C
+      implicit none
+      type(Box_C), intent(in)                :: bxH       !< The h-point iteration box of this tile,
+                                                          !! [isc:iec, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)                :: bxU       !< The u-point iteration box of this tile,
+                                                          !! [IscB:IecB, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)                :: bxV       !< The v-point iteration box of this tile,
+                                                          !! [isc:iec, JscB:JecB, ksc:kec]
+      type(RealArray_C), intent(in)          :: u         !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)          :: v         !< Meridional velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)          :: uh        !< Zonal transport u*h*dy
+                                                          !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: vh        !< Meridional transport v*h*dx
+                                                          !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: q         !< Layer potential vorticity
+                                                          !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(in)          :: uh_center !< Transport based on arithmetic mean h at
+                                                          !! u-points [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: vh_center !< Transport based on arithmetic mean h at
+                                                          !! v-points [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(grid_core_C), intent(in)          :: Gcore     !< Persistent copies of the core ocean
+                                                          !! grid fields
+      type(RealArray_C), intent(inout)       :: CAu       !< Zonal acceleration due to Coriolis and
+                                                          !! momentum advection [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)       :: CAv       !< Meridional acceleration due to Coriolis
+                                                          !! and momentum advection
+                                                          !! [L T-2 ~> m s-2].
+      type(Coriolis_scheme_CS_C), intent(in) :: CS        !< Options selecting the Coriolis
+                                                          !! discretization
+    end subroutine turbotmp_coradv_sadourny_bridge
+
+    !> Bridge for the CorAdv_arakawa subroutine
+    subroutine turbotmp_coradv_arakawa_bridge(bxH, bxQ, bxU, bxV, uh, vh, q, Ih_q, Fe_m2, &
+                                              rat_lin, Gcore, CAu, CAv, wt_lin_blend, CS) bind(C)
+      use iso_c_binding, only : c_double
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      import :: Coriolis_scheme_CS_C
+      implicit none
+      type(Box_C), intent(in)                :: bxH          !< The h-point iteration box of this
+                                                             !! tile, [isc:iec, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)                :: bxQ          !< The B-grid-index iteration box of
+                                                             !! this tile,
+                                                             !! [IscB:IecB, JscB:JecB, ksc:kec]
+      type(Box_C), intent(in)                :: bxU          !< The u-point iteration box of this
+                                                             !! tile, [IscB:IecB, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)                :: bxV          !< The v-point iteration box of this
+                                                             !! tile, [isc:iec, JscB:JecB, ksc:kec]
+      type(RealArray_C), intent(in)          :: uh           !< Zonal transport u*h*dy
+                                                             !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: vh           !< Meridional transport v*h*dx
+                                                             !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: q            !< Layer potential vorticity
+                                                             !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(in)          :: Ih_q         !< Inverse of thickness interpolated to
+                                                             !! q points [H-1 ~> m-1 or m2 kg-1]
+      real(c_double), intent(in), value      :: Fe_m2        !< ARAKAWA_LAMB_BLEND blending
+                                                             !! parameter [nondim]
+      real(c_double), intent(in), value      :: rat_lin      !< ARAKAWA_LAMB_BLEND blending
+                                                             !! parameter [nondim]
+      type(grid_core_C), intent(in)          :: Gcore        !< Persistent copies of the core ocean
+                                                             !! grid fields
+      type(RealArray_C), intent(inout)       :: CAu          !< Zonal acceleration due to Coriolis
+                                                             !! and momentum advection
+                                                             !! [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)       :: CAv          !< Meridional acceleration due to
+                                                             !! Coriolis and momentum advection
+                                                             !! [L T-2 ~> m s-2].
+      real(c_double), intent(in), value      :: wt_lin_blend !< A weighting value beyond which the
+                                                             !! blending between Sadourny and
+                                                             !! Arakawa & Hsu goes linearly to 0
+                                                             !! [nondim].
+      type(Coriolis_scheme_CS_C), intent(in) :: CS           !< Options selecting the Coriolis
+                                                             !! discretization
+    end subroutine turbotmp_coradv_arakawa_bridge
+
+    !> Bridge for the CorAdv_robust_enstro subroutine
+    subroutine turbotmp_coradv_robust_enstro_bridge(bxU, bxV, u, v, h, uh, vh, abs_vort, &
+                                                    eps_vel, h_tiny, Gcore, CAu, CAv, &
+                                                    PV_Adv_Scheme) bind(C)
+      use iso_c_binding, only : c_double, c_int
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      implicit none
+      type(Box_C), intent(in)           :: bxU           !< The u-point iteration box of this tile,
+                                                         !! [IscB:IecB, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)           :: bxV           !< The v-point iteration box of this tile,
+                                                         !! [isc:iec, JscB:JecB, ksc:kec]
+      type(RealArray_C), intent(in)     :: u             !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)     :: v             !< Meridional velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)     :: h             !< Layer thickness [H ~> m or kg m-2]
+      type(RealArray_C), intent(in)     :: uh            !< Zonal transport u*h*dy
+                                                         !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)     :: vh            !< Meridional transport v*h*dx
+                                                         !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)     :: abs_vort      !< Absolute vorticity at q-points
+                                                         !! [T-1 ~> s-1]
+      real(c_double), intent(in), value :: eps_vel       !< A tiny, positive velocity
+                                                         !! [L T-1 ~> m s-1]
+      real(c_double), intent(in), value :: h_tiny        !< A very small thickness
+                                                         !! [H ~> m or kg m-2]
+      type(grid_core_C), intent(in)     :: Gcore         !< Persistent copies of the core ocean grid
+                                                         !! fields
+      type(RealArray_C), intent(inout)  :: CAu           !< Zonal acceleration due to Coriolis and
+                                                         !! momentum advection [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)  :: CAv           !< Meridional acceleration due to Coriolis
+                                                         !! and momentum advection [L T-2 ~> m s-2].
+      integer(c_int), intent(in), value :: PV_Adv_Scheme !< Selects the discretization for PV
+                                                         !! advection: PV_ADV_CENTERED or
+                                                         !! PV_ADV_UPWIND1
+    end subroutine turbotmp_coradv_robust_enstro_bridge
+
+    !> Bridge for the CorAdv_weno subroutine
+    subroutine turbotmp_coradv_weno_bridge(bxU, bxV, u, v, uh, vh, q, abs_vort, h_q, &
+                                           Gcore, H_subroundoff, CAu, CAv, &
+                                           weno_velocity_smooth, CS) bind(C)
+      use iso_c_binding, only : c_bool, c_double
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      import :: Coriolis_scheme_CS_C
+      implicit none
+      type(Box_C), intent(in)                :: bxU           !< The u-point iteration box of this
+                                                              !! tile, [IscB:IecB, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)                :: bxV           !< The v-point iteration box of this
+                                                              !! tile, [isc:iec, JscB:JecB, ksc:kec]
+      type(RealArray_C), intent(in)          :: u             !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)          :: v             !< Meridional velocity
+                                                              !! [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)          :: uh            !< Zonal transport u*h*dy
+                                                              !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: vh            !< Meridional transport v*h*dx
+                                                              !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)          :: q             !< Layer potential vorticity
+                                                              !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(in)          :: abs_vort      !< Absolute vorticity at q-points
+                                                              !! [T-1 ~> s-1]
+      type(RealArray_C), intent(in)          :: h_q           !< Thickness interpolated to q points
+                                                              !! [H ~> m or kg m-2]
+      type(grid_core_C), intent(in)          :: Gcore         !< Persistent copies of the core ocean
+                                                              !! grid fields
+      real(c_double), intent(in), value      :: H_subroundoff !< A thickness that is so small that
+                                                              !! it can be added to a thickness of
+                                                              !! Angstrom or larger without changing
+                                                              !! it at the bit level
+                                                              !! [H ~> m or kg m-2].
+      type(RealArray_C), intent(inout)       :: CAu           !< Zonal acceleration due to Coriolis
+                                                              !! and momentum advection
+                                                              !! [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)       :: CAv           !< Meridional acceleration due to
+                                                              !! Coriolis and momentum advection
+                                                              !! [L T-2 ~> m s-2].
+      logical(c_bool), intent(in), value     :: weno_velocity_smooth !< If true, use velocity to
+                                                                     !! compute the smoothness
+                                                                     !! indicator for WENO
+      type(Coriolis_scheme_CS_C), intent(in) :: CS            !< Options selecting the Coriolis
+                                                              !! discretization
+    end subroutine turbotmp_coradv_weno_bridge
+
+    !> Bridge for the CorAdv_common_terms subroutine
+    subroutine turbotmp_coradv_common_terms_bridge(bxU, bxV, u, v, uh, vh, abs_vort, qS, &
+                                                   q2, KEx, KEy, Stokes_VF, Gcore, CAu, &
+                                                   CAv, CAuS, CAvS, AD, CS) bind(C)
+      use iso_c_binding, only : c_bool
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C
+      import :: CorAdv_AD_C, CorAdv_opts_CS_C
+      implicit none
+      type(Box_C), intent(in)            :: bxU       !< The u-point iteration box of this tile,
+                                                      !! [IscB:IecB, jsc:jec, ksc:kec]
+      type(Box_C), intent(in)            :: bxV       !< The v-point iteration box of this tile,
+                                                      !! [isc:iec, JscB:JecB, ksc:kec]
+      type(RealArray_C), intent(in)      :: u         !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)      :: v         !< Meridional velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)      :: uh        !< Zonal transport u*h*dy
+                                                      !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)      :: vh        !< Meridional transport v*h*dx
+                                                      !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)      :: abs_vort  !< Absolute vorticity at q-points [T-1 ~> s-1]
+      type(RealArray_C), intent(in)      :: qS        !< Layer Stokes vorticity
+                                                      !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(in)      :: q2        !< Relative vorticity over thickness
+                                                      !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(in)      :: KEx       !< Zonal gradient of kinetic energy per unit
+                                                      !! mass [L T-2 ~> m s-2]
+      type(RealArray_C), intent(in)      :: KEy       !< Meridional gradient of kinetic energy per
+                                                      !! unit mass [L T-2 ~> m s-2]
+      logical(c_bool), intent(in), value :: Stokes_VF !< If true, include the Stokes drift
+      type(grid_core_C), intent(in)      :: Gcore     !< Persistent copies of the core ocean grid
+                                                      !! fields
+      type(RealArray_C), intent(inout)   :: CAu       !< Zonal acceleration due to Coriolis and
+                                                      !! momentum advection [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)   :: CAv       !< Meridional acceleration due to Coriolis and
+                                                      !! momentum advection [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)   :: CAuS      !< Stokes contribution to CAu [L T-2 ~> m s-2]
+      type(RealArray_C), intent(inout)   :: CAvS      !< Stokes contribution to CAv [L T-2 ~> m s-2]
+      type(CorAdv_AD_C), intent(inout)   :: AD        !< Copies of the acceleration diagnostics
+      type(CorAdv_opts_CS_C), intent(in) :: CS        !< Options used in the Coriolis and momentum
+                                                      !! advection calculations
+    end subroutine turbotmp_coradv_common_terms_bridge
+
+    !> Bridge for the CorAdCalc_TR subroutine
+    subroutine turbotmp_coradcalc_tr_bridge(bxH0, bxQ0, u, v, h, uh, vh, CAu, CAv, RV, PV, &
+                                            CAuS, CAvS, OBC, AD, Gcore, Gobc, nz, &
+                                            H_subroundoff, Angstrom_H, m_to_L, m_s_to_L_T, &
+                                            CS, por_face_areaU, por_face_areaV, Waves, &
+                                            Stokes_VF) bind(C)
+      use iso_c_binding, only : c_bool, c_double, c_int, c_ptr
+      use array_mod, only : RealArray_C
+      use box_mod, only : Box_C
+      use MOM_grid_containers, only : grid_core_C, grid_OBC_C
+      import :: CorAdv_AD_C, CorAdv_opts_CS_C
+      implicit none
+      type(Box_C), intent(in)            :: bxH0           !< The h-point box of the whole column,
+                                                           !! [isc:iec, jsc:jec, 1:nz]
+      type(Box_C), intent(in)            :: bxQ0           !< The B-grid-index box of the whole
+                                                           !! column, [IscB:IecB, JscB:JecB, 1:nz]
+      type(RealArray_C), intent(in)      :: u              !< Zonal velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)      :: v              !< Meridional velocity [L T-1 ~> m s-1]
+      type(RealArray_C), intent(in)      :: h              !< Layer thickness [H ~> m or kg m-2]
+      type(RealArray_C), intent(in)      :: uh             !< Zonal transport u*h*dy
+                                                           !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(in)      :: vh             !< Meridional transport v*h*dx
+                                                           !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+      type(RealArray_C), intent(inout)   :: CAu            !< Zonal acceleration due to Coriolis and
+                                                           !! momentum advection [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)   :: CAv            !< Meridional acceleration due to
+                                                           !! Coriolis and momentum advection
+                                                           !! [L T-2 ~> m s-2].
+      type(RealArray_C), intent(inout)   :: RV             !< Diagnostic relative vorticity
+                                                           !! [T-1 ~> s-1]
+      type(RealArray_C), intent(inout)   :: PV             !< Diagnostic potential vorticity
+                                                           !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+      type(RealArray_C), intent(inout)   :: CAuS           !< Stokes contribution to CAu
+                                                           !! [L T-2 ~> m s-2]
+      type(RealArray_C), intent(inout)   :: CAvS           !< Stokes contribution to CAv
+                                                           !! [L T-2 ~> m s-2]
+      type(c_ptr), intent(in), value     :: OBC            !< Open boundary control structure
+      type(CorAdv_AD_C), intent(inout)   :: AD             !< Copies of the acceleration diagnostics
+      type(grid_core_C), intent(in)      :: Gcore          !< Persistent copies of the core ocean
+                                                           !! grid fields
+      type(grid_OBC_C), intent(in)       :: Gobc           !< Persistent copies of the ocean grid
+                                                           !! OBC mask fields
+      integer(c_int), intent(in), value  :: nz             !< The number of layers/levels in the
+                                                           !! vertical
+      real(c_double), intent(in), value  :: H_subroundoff  !< A thickness that is so small that it
+                                                           !! can be added to a thickness of
+                                                           !! Angstrom or larger without changing it
+                                                           !! at the bit level [H ~> m or kg m-2].
+      real(c_double), intent(in), value  :: Angstrom_H     !< A one-Angstrom thickness in the model
+                                                           !! thickness units [H ~> m or kg m-2].
+      real(c_double), intent(in), value  :: m_to_L         !< A constant that translates lengths in
+                                                           !! meters to the units of horizontal
+                                                           !! lengths [L m-1 ~> 1]
+      real(c_double), intent(in), value  :: m_s_to_L_T     !< Convert lateral velocities from m s-1
+                                                           !! to L T-1 [L s T-1 m-1 ~> 1]
+      type(CorAdv_opts_CS_C), intent(in) :: CS             !< Options used in the Coriolis and
+                                                           !! momentum advection calculations
+      type(RealArray_C), intent(in)      :: por_face_areaU !< fractional open area of U-faces
+                                                           !! [nondim]
+      type(RealArray_C), intent(in)      :: por_face_areaV !< fractional open area of V-faces
+                                                           !! [nondim]
+      type(c_ptr), intent(in), value     :: Waves          !< An optional pointer to Stokes drift CS
+      logical(c_bool), intent(in), value :: Stokes_VF      !< If true, include the Stokes drift
+    end subroutine turbotmp_coradcalc_tr_bridge
+  end interface
+
 contains
 
 !> Converts a Coriolis_scheme_CS to its bind(C) mirror.
@@ -302,6 +681,69 @@ function CorAdv_AD_to_c(AD_a) result(cdesc)
   cdesc%rv_x_u = AD_a%rv_x_u_a%to_c()
 end function CorAdv_AD_to_c
 #endif
+
+!> Records the members of a Coriolis_scheme_CS in a capture file, with names starting with
+!! prefix.
+subroutine record_Coriolis_scheme_CS(rec, prefix, opts)
+  type(io_recorder),        intent(inout) :: rec    !< The capture file being written
+  character(len=*),         intent(in)    :: prefix !< The start of each record name
+  type(Coriolis_scheme_CS), intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_Coriolis_Scheme", opts%Coriolis_Scheme)
+  call rec%add(prefix//"_Coriolis_En_Dis", opts%Coriolis_En_Dis)
+end subroutine record_Coriolis_scheme_CS
+
+!> Records the members of a CorAdv_opts_CS in a capture file, with names starting with prefix.
+subroutine record_CorAdv_opts_CS(rec, prefix, opts)
+  type(io_recorder),     intent(inout) :: rec    !< The capture file being written
+  character(len=*),      intent(in)    :: prefix !< The start of each record name
+  type(CorAdv_opts_CS),  intent(in)    :: opts   !< The options to record
+
+  call record_Coriolis_scheme_CS(rec, prefix//"_Coriolis_scheme_CS", opts%Coriolis_scheme_CS)
+  call rec%add(prefix//"_KE_Scheme", opts%KE_Scheme)
+  call rec%add(prefix//"_KE_use_limiter", opts%KE_use_limiter)
+  call rec%add(prefix//"_PV_Adv_Scheme", opts%PV_Adv_Scheme)
+  call rec%add(prefix//"_nkblock", opts%nkblock)
+  call rec%add(prefix//"_F_eff_max_blend", opts%F_eff_max_blend)
+  call rec%add(prefix//"_wt_lin_blend", opts%wt_lin_blend)
+  call rec%add(prefix//"_no_slip", opts%no_slip)
+  call rec%add(prefix//"_bound_Coriolis", opts%bound_Coriolis)
+  call rec%add(prefix//"_weno_velocity_smooth", opts%weno_velocity_smooth)
+  call rec%add(prefix//"_do_CAS_diag", opts%do_CAS_diag)
+  call rec%add(prefix//"_do_RV_diag", opts%do_RV_diag)
+  call rec%add(prefix//"_do_PV_diag", opts%do_PV_diag)
+end subroutine record_CorAdv_opts_CS
+
+!> Records which acceleration diagnostics in a CorAdv_AD_type are allocated (with an empty
+!! suffix), or the values of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_CorAdv_AD(rec, prefix, AD_a, suffix)
+  type(io_recorder),     intent(inout) :: rec    !< The capture file being written
+  character(len=*),      intent(in)    :: prefix !< The start of each record name
+  type(CorAdv_AD_type),  intent(in)    :: AD_a   !< Copies of the acceleration diagnostics
+  character(len=*),      intent(in)    :: suffix !< The end of each value record name, or empty
+                                                 !! to record which diagnostics are allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_gradKEu_allocated", AD_a%gradKEu_a%associated())
+  elseif (AD_a%gradKEu_a%associated()) then
+    call rec%add(prefix//"_gradKEu"//suffix, AD_a%gradKEu_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_gradKEv_allocated", AD_a%gradKEv_a%associated())
+  elseif (AD_a%gradKEv_a%associated()) then
+    call rec%add(prefix//"_gradKEv"//suffix, AD_a%gradKEv_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_rv_x_v_allocated", AD_a%rv_x_v_a%associated())
+  elseif (AD_a%rv_x_v_a%associated()) then
+    call rec%add(prefix//"_rv_x_v"//suffix, AD_a%rv_x_v_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_rv_x_u_allocated", AD_a%rv_x_u_a%associated())
+  elseif (AD_a%rv_x_u_a%associated()) then
+    call rec%add(prefix//"_rv_x_u"//suffix, AD_a%rv_x_u_a)
+  endif
+end subroutine record_CorAdv_AD
 
 !> Calculates the Coriolis and momentum advection contributions to the acceleration.
 subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Waves)
@@ -390,9 +832,10 @@ end subroutine CorAdCalc
 !> The implementation of CorAdCalc (the root of its call tree): sets up the k-invariant fields,
 !! then loops over iteration tiles, calling the setup, the selected scheme and the common terms
 !! for each one.
-subroutine CorAdCalc_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, CAu_a, CAv_a, RV_a, PV_a, CAuS_a, &
-                        CAvS_a, OBC, AD_a, Gcore, Gobc, nz, H_subroundoff, Angstrom_H, m_to_L, &
-                        m_s_to_L_T, CS, por_face_areaU_a, por_face_areaV_a, Waves, Stokes_VF)
+subroutine CorAdCalc_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, CAu_a, CAv_a, RV_a, PV_a, &
+                                CAuS_a, CAvS_a, OBC, AD_a, Gcore, Gobc, nz, H_subroundoff, &
+                                Angstrom_H, m_to_L, m_s_to_L_T, CS, por_face_areaU_a, &
+                                por_face_areaV_a, Waves, Stokes_VF)
   type(Box_t),                                intent(in)    :: bxH0 !< The h-point box of the
                                                                     !! whole column,
                                                                     !! [isc:iec, jsc:jec, 1:nz]
@@ -722,15 +1165,209 @@ subroutine CorAdCalc_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, CAu_a, CAv_a, RV_
   !$omp target exit data map(from: CAuS, CAvS) if (Stokes_VF)
 
   call Area_q_a%free() ; call Area_h_a%free()
+end subroutine CorAdCalc_TR_fortran
+
+!> Runs CorAdCalc_TR_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADCALC_TR_MODE environment variable.
+subroutine CorAdCalc_TR(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, CAu_a, CAv_a, RV_a, PV_a, CAuS_a, &
+                        CAvS_a, OBC, AD_a, Gcore, Gobc, nz, H_subroundoff, Angstrom_H, m_to_L, &
+                        m_s_to_L_T, CS, por_face_areaU_a, por_face_areaV_a, Waves, Stokes_VF)
+  type(Box_t),                                intent(in)    :: bxH0 !< The h-point box of the
+                                                                    !! whole column,
+                                                                    !! [isc:iec, jsc:jec, 1:nz]
+  type(Box_t),                                intent(in)    :: bxQ0 !< The B-grid-index box of the
+                                                                    !! whole column,
+                                                                    !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(grid_core_type),                       intent(in)    :: Gcore !< Persistent copies of the
+                                                                     !! core ocean grid fields
+  type(grid_OBC_type),                        intent(in)    :: Gobc !< Persistent copies of the
+                                                                    !! ocean grid OBC mask fields
+  integer, intent(in) :: nz !< The number of layers/levels in the vertical
+  real, intent(in) :: H_subroundoff !< A thickness that is so small that it can be added to a
+                                    !! thickness of Angstrom or larger without changing it at the
+                                    !! bit level [H ~> m or kg m-2].
+  real, intent(in) :: Angstrom_H !< A one-Angstrom thickness in the model thickness units
+                                 !! [H ~> m or kg m-2].
+  type(RealArray_t),         intent(in)    :: u_a   !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t),         intent(in)    :: v_a   !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t),         intent(in)    :: h_a   !< Layer thickness [H ~> m or kg m-2]
+  type(RealArray_t),         intent(in)    :: uh_a  !< Zonal transport u*h*dy
+                                                    !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t),         intent(in)    :: vh_a  !< Meridional transport v*h*dx
+                                                    !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t),         intent(inout) :: CAu_a !< Zonal acceleration due to Coriolis
+                                                    !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t),         intent(inout) :: CAv_a !< Meridional acceleration due to Coriolis
+                                                    !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: RV_a     !< Diagnostic relative vorticity [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: PV_a     !< Diagnostic potential vorticity
+                                               !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(inout) :: CAuS_a   !< Stokes contribution to CAu [L T-2 ~> m s-2]
+  type(RealArray_t), intent(inout) :: CAvS_a   !< Stokes contribution to CAv [L T-2 ~> m s-2]
+  type(ocean_OBC_type),                       pointer       :: OBC !< Open boundary control structure
+  type(CorAdv_AD_type),                       intent(inout) :: AD_a !< Copies of the acceleration
+                                                                    !! diagnostics
+  real, intent(in) :: m_to_L !< A constant that translates lengths in meters to the units of
+                             !! horizontal lengths [L m-1 ~> 1]
+  real, intent(in) :: m_s_to_L_T !< Convert lateral velocities from m s-1 to L T-1
+                                 !! [L s T-1 m-1 ~> 1]
+  type(CorAdv_opts_CS),                       intent(in)    :: CS  !< Options used in the Coriolis
+                                                                   !! and momentum advection calculations
+  type(RealArray_t), intent(in) :: por_face_areaU_a !< fractional open area of U-faces [nondim]
+  type(RealArray_t), intent(in) :: por_face_areaV_a !< fractional open area of V-faces [nondim]
+  type(Wave_parameters_CS),         optional, pointer       :: Waves !< An optional pointer to Stokes drift CS
+  logical,                   intent(in)    :: Stokes_VF !< If true, include the Stokes drift
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxH0_c, bxQ0_c
+  type(RealArray_C)  :: u_c, v_c, h_c, uh_c, vh_c, CAu_c, CAv_c, RV_c, PV_c, CAuS_c, CAvS_c, &
+    por_face_areaU_c, por_face_areaV_c
+  type(c_ptr) :: OBC_c
+  type(CorAdv_AD_C) :: AD_a_c
+  integer(c_int) :: nz_c
+  type(CorAdv_opts_CS_C) :: CS_c
+  type(c_ptr) :: Waves_c
+  logical(c_bool) :: Stokes_VF_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradcalc_tr"
+  mode = getenv_mode("CORADCALC_TR_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxH0", bxH0)
+        call rec%add("_bxQ0", bxQ0)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_h", h_a)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_CAu_before", CAu_a)
+        call rec%add("_CAv_before", CAv_a)
+        call rec%add("_RV_before", RV_a)
+        call rec%add("_PV_before", PV_a)
+        call rec%add("_CAuS_before", CAuS_a)
+        call rec%add("_CAvS_before", CAvS_a)
+        call record_CorAdv_AD(rec, "_AD", AD_a, "")
+        call record_CorAdv_AD(rec, "_AD", AD_a, "_before")
+        call rec%add("_mask2dT", Gcore%mask2dT)
+        call rec%add("_areaT", Gcore%areaT)
+        call rec%add("_areaCu", Gcore%areaCu)
+        call rec%add("_areaCv", Gcore%areaCv)
+        call rec%add("_IareaT", Gcore%IareaT)
+        call rec%add("_mask2dCu", Gcore%mask2dCu)
+        call rec%add("_mask2dCv", Gcore%mask2dCv)
+        call rec%add("_dyCv", Gcore%dyCv)
+        call rec%add("_dxCu", Gcore%dxCu)
+        call rec%add("_dy_Cu", Gcore%dy_Cu)
+        call rec%add("_dx_Cv", Gcore%dx_Cv)
+        call rec%add("_dyBu", Gcore%dyBu)
+        call rec%add("_dxBu", Gcore%dxBu)
+        call rec%add("_mask2dBu", Gcore%mask2dBu)
+        call rec%add("_IareaBu", Gcore%IareaBu)
+        call rec%add("_CoriolisBu", Gcore%CoriolisBu)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_IdxCv", Gcore%IdxCv)
+        call rec%add("_IdyCu", Gcore%IdyCu)
+        call rec%add("_IdxCu_OBCmask", Gobc%IdxCu_OBCmask)
+        call rec%add("_IdyCv_OBCmask", Gobc%IdyCv_OBCmask)
+        call rec%add("_nz", nz)
+        call rec%add("_H_subroundoff", H_subroundoff)
+        call rec%add("_Angstrom_H", Angstrom_H)
+        call rec%add("_m_to_L", m_to_L)
+        call rec%add("_m_s_to_L_T", m_s_to_L_T)
+        call record_CorAdv_opts_CS(rec, "_CS", CS)
+        call rec%add("_por_face_areaU", por_face_areaU_a)
+        call rec%add("_por_face_areaV", por_face_areaV_a)
+        call rec%add("_Stokes_VF", Stokes_VF)
+      endif
+
+      call CorAdCalc_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, CAu_a, CAv_a, RV_a, PV_a, &
+                                CAuS_a, CAvS_a, OBC, AD_a, Gcore, Gobc, nz, H_subroundoff, &
+                                Angstrom_H, m_to_L, m_s_to_L_T, CS, por_face_areaU_a, &
+                                por_face_areaV_a, Waves, Stokes_VF)
+
+      if (capture) then
+        call rec%add("_CAu_after", CAu_a)
+        call rec%add("_CAv_after", CAv_a)
+        call rec%add("_RV_after", RV_a)
+        call rec%add("_PV_after", PV_a)
+        call rec%add("_CAuS_after", CAuS_a)
+        call rec%add("_CAvS_after", CAvS_a)
+        call record_CorAdv_AD(rec, "_AD", AD_a, "_after")
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxH0_c = bxH0%to_c()
+      bxQ0_c = bxQ0%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      h_c = h_a%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      CAu_c = CAu_a%to_c()
+      CAv_c = CAv_a%to_c()
+      RV_c = RV_a%to_c()
+      PV_c = PV_a%to_c()
+      CAuS_c = CAuS_a%to_c()
+      CAvS_c = CAvS_a%to_c()
+      if (associated(OBC)) then
+        OBC_c = c_loc(OBC)
+      else
+        OBC_c = c_null_ptr
+      endif
+      AD_a_c = CorAdv_AD_to_c(AD_a)
+      nz_c = nz
+      CS_c = CorAdv_opts_CS_to_c(CS)
+      por_face_areaU_c = por_face_areaU_a%to_c()
+      por_face_areaV_c = por_face_areaV_a%to_c()
+      if (Stokes_VF) then
+        Waves_c = c_loc(Waves)
+      else
+        Waves_c = c_null_ptr
+      endif
+      Stokes_VF_c = Stokes_VF
+      call turbotmp_coradcalc_tr_bridge(bxH0_c, bxQ0_c, u_c, v_c, h_c, uh_c, vh_c, CAu_c, CAv_c, &
+                                        RV_c, PV_c, CAuS_c, CAvS_c, OBC_c, AD_a_c, Gcore%C, &
+                                        Gobc%C, nz_c, H_subroundoff, Angstrom_H, m_to_L, &
+                                        m_s_to_L_T, CS_c, por_face_areaU_c, por_face_areaV_c, &
+                                        Waves_c, Stokes_VF_c)
+#endif
+
+    case default
+      call CorAdCalc_TR_fortran(bxH0, bxQ0, u_a, v_a, h_a, uh_a, vh_a, CAu_a, CAv_a, RV_a, PV_a, &
+                                CAuS_a, CAvS_a, OBC, AD_a, Gcore, Gobc, nz, H_subroundoff, &
+                                Angstrom_H, m_to_L, m_s_to_L_T, CS, por_face_areaU_a, &
+                                por_face_areaV_a, Waves, Stokes_VF)
+
+  end select
+
 end subroutine CorAdCalc_TR
 
 
 !> Calculates the potential vorticity and the related quantities at q points that every
 !! Coriolis scheme uses, over one iteration tile.
-subroutine CorAdv_setup(bxH, bxQ, bxU, bxV, bxQs, u_a, v_a, h_a, OBC, AD_a, por_face_areaU_a, &
-                        por_face_areaV_a, Waves, Gcore, Area_h_a, Area_q_a, Stokes_VF, use_weno, &
-                        vol_neglect, area_neglect, q_a, Ih_q_a, abs_vort_a, h_q_a, qS_a, q2_a, &
-                        uh_center_a, vh_center_a, RV_a, PV_a, CS)
+subroutine CorAdv_setup_fortran(bxH, bxQ, bxU, bxV, bxQs, u_a, v_a, h_a, OBC, AD_a, &
+                                por_face_areaU_a, por_face_areaV_a, Waves, Gcore, Area_h_a, &
+                                Area_q_a, Stokes_VF, use_weno, vol_neglect, area_neglect, q_a, &
+                                Ih_q_a, abs_vort_a, h_q_a, qS_a, q2_a, uh_center_a, vh_center_a, &
+                                RV_a, PV_a, CS)
   type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),             intent(in)    :: bxH !< The h-point iteration box of this tile,
                                                 !! [isc:iec, jsc:jec, ksc:kec]
@@ -1143,13 +1780,213 @@ subroutine CorAdv_setup(bxH, bxQ, bxU, bxV, bxQs, u_a, v_a, h_a, OBC, AD_a, por_
   !$omp target exit data map(delete: dvSdx, duSdy, stk_vort) if (Stokes_VF)
   call bxUx%free() ; call bxVx%free()
   call bxH_mij%free() ; call bxQ_gij%free() ; call bxQs_pi%free() ; call bxQs_pj%free()
+end subroutine CorAdv_setup_fortran
+
+!> Runs CorAdv_setup_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADV_SETUP_MODE environment variable.
+subroutine CorAdv_setup(bxH, bxQ, bxU, bxV, bxQs, u_a, v_a, h_a, OBC, AD_a, por_face_areaU_a, &
+                        por_face_areaV_a, Waves, Gcore, Area_h_a, Area_q_a, Stokes_VF, use_weno, &
+                        vol_neglect, area_neglect, q_a, Ih_q_a, abs_vort_a, h_q_a, qS_a, q2_a, &
+                        uh_center_a, vh_center_a, RV_a, PV_a, CS)
+  type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  type(Box_t),             intent(in)    :: bxH !< The h-point iteration box of this tile,
+                                                !! [isc:iec, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxQ !< The B-grid-index iteration box of this tile,
+                                                !! [IscB:IecB, JscB:JecB, ksc:kec]
+  type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
+                                                !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxV !< The v-point iteration box of this tile,
+                                                !! [isc:iec, JscB:JecB, ksc:kec]
+  type(Box_t),             intent(in)    :: bxQs !< The scheme-dependent vorticity-point box,
+                                                 !! [Is_q:Ie_q, Js_q:Je_q, ksc:kec]
+  type(RealArray_t), intent(in)    :: u_a         !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_a         !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: h_a         !< Layer thickness [H ~> m or kg m-2]
+  type(ocean_OBC_type),    pointer       :: OBC !< Open boundary control structure
+  type(CorAdv_AD_type),    intent(in)    :: AD_a !< Copies of the acceleration diagnostics
+  type(RealArray_t), intent(in)    :: por_face_areaU_a !< fractional open area of U-faces [nondim]
+  type(RealArray_t), intent(in)    :: por_face_areaV_a !< fractional open area of V-faces [nondim]
+  type(Wave_parameters_CS), optional, pointer :: Waves !< An optional pointer to Stokes drift CS
+  type(RealArray_t), intent(in)    :: Area_h_a    !< The ocean area at h points [L2 ~> m2]
+  type(RealArray_t), intent(in)    :: Area_q_a    !< The sum of the ocean areas at the 4
+                                                  !! adjacent thickness points [L2 ~> m2]
+  logical,                 intent(in)    :: Stokes_VF !< If true, include the Stokes drift
+  logical,                 intent(in)    :: use_weno  !< True if using one of the WENO schemes
+  real,                    intent(in)    :: vol_neglect !< A negligible volume [H L2 ~> m3 or kg]
+  real,                    intent(in)    :: area_neglect !< A negligible area [L2 ~> m2]
+  type(RealArray_t), intent(inout) :: q_a         !< Layer potential vorticity
+                                                  !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(inout) :: Ih_q_a      !< Inverse of thickness interpolated to q points
+                                                  !! [H-1 ~> m-1 or m2 kg-1]
+  type(RealArray_t), intent(inout) :: abs_vort_a  !< Absolute vorticity at q-points [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: h_q_a       !< Thickness interpolated to q points
+                                                  !! [H ~> m or kg m-2]
+  type(RealArray_t), intent(inout) :: qS_a        !< Layer Stokes vorticity
+                                                  !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(inout) :: q2_a        !< Relative vorticity over thickness
+                                                  !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(inout) :: uh_center_a !< Transport based on arithmetic mean h at
+                                                  !! u-points
+                                                  !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(inout) :: vh_center_a !< Transport based on arithmetic mean h at
+                                                  !! v-points
+                                                  !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(inout) :: RV_a        !< Diagnostic relative vorticity [T-1 ~> s-1]
+  type(RealArray_t), intent(inout) :: PV_a        !< Diagnostic potential vorticity
+                                                  !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(CorAdv_opts_CS),    intent(in)    :: CS  !< Options used in the Coriolis and momentum
+                                                !! advection calculations
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxH_c, bxQ_c, bxU_c, bxV_c, bxQs_c
+  type(RealArray_C)  :: u_c, v_c, h_c, por_face_areaU_c, por_face_areaV_c, Area_h_c, Area_q_c, &
+    q_c, Ih_q_c, abs_vort_c, h_q_c, qS_c, q2_c, uh_center_c, vh_center_c, RV_c, PV_c
+  type(c_ptr) :: OBC_c
+  type(CorAdv_AD_C) :: AD_a_c
+  type(c_ptr) :: Waves_c
+  logical(c_bool) :: Stokes_VF_c
+  logical(c_bool) :: use_weno_c
+  type(CorAdv_opts_CS_C) :: CS_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradv_setup"
+  mode = getenv_mode("CORADV_SETUP_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxH", bxH)
+        call rec%add("_bxQ", bxQ)
+        call rec%add("_bxU", bxU)
+        call rec%add("_bxV", bxV)
+        call rec%add("_bxQs", bxQs)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_h", h_a)
+        call record_CorAdv_AD(rec, "_AD", AD_a, "")
+        call rec%add("_por_face_areaU", por_face_areaU_a)
+        call rec%add("_por_face_areaV", por_face_areaV_a)
+        call rec%add("_dyCv", Gcore%dyCv)
+        call rec%add("_dxCu", Gcore%dxCu)
+        call rec%add("_dy_Cu", Gcore%dy_Cu)
+        call rec%add("_dx_Cv", Gcore%dx_Cv)
+        call rec%add("_dyBu", Gcore%dyBu)
+        call rec%add("_dxBu", Gcore%dxBu)
+        call rec%add("_mask2dBu", Gcore%mask2dBu)
+        call rec%add("_IareaBu", Gcore%IareaBu)
+        call rec%add("_CoriolisBu", Gcore%CoriolisBu)
+        call rec%add("_Area_h", Area_h_a)
+        call rec%add("_Area_q", Area_q_a)
+        call rec%add("_Stokes_VF", Stokes_VF)
+        call rec%add("_use_weno", use_weno)
+        call rec%add("_vol_neglect", vol_neglect)
+        call rec%add("_area_neglect", area_neglect)
+        call rec%add("_q_before", q_a)
+        call rec%add("_Ih_q_before", Ih_q_a)
+        call rec%add("_abs_vort_before", abs_vort_a)
+        call rec%add("_h_q_before", h_q_a)
+        call rec%add("_qS_before", qS_a)
+        call rec%add("_q2_before", q2_a)
+        call rec%add("_uh_center_before", uh_center_a)
+        call rec%add("_vh_center_before", vh_center_a)
+        call rec%add("_RV_before", RV_a)
+        call rec%add("_PV_before", PV_a)
+        call record_CorAdv_opts_CS(rec, "_CS", CS)
+      endif
+
+      call CorAdv_setup_fortran(bxH, bxQ, bxU, bxV, bxQs, u_a, v_a, h_a, OBC, AD_a, &
+                                por_face_areaU_a, por_face_areaV_a, Waves, Gcore, Area_h_a, &
+                                Area_q_a, Stokes_VF, use_weno, vol_neglect, area_neglect, q_a, &
+                                Ih_q_a, abs_vort_a, h_q_a, qS_a, q2_a, uh_center_a, vh_center_a, &
+                                RV_a, PV_a, CS)
+
+      if (capture) then
+        call rec%add("_q_after", q_a)
+        call rec%add("_Ih_q_after", Ih_q_a)
+        call rec%add("_abs_vort_after", abs_vort_a)
+        call rec%add("_h_q_after", h_q_a)
+        call rec%add("_qS_after", qS_a)
+        call rec%add("_q2_after", q2_a)
+        call rec%add("_uh_center_after", uh_center_a)
+        call rec%add("_vh_center_after", vh_center_a)
+        call rec%add("_RV_after", RV_a)
+        call rec%add("_PV_after", PV_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxH_c = bxH%to_c()
+      bxQ_c = bxQ%to_c()
+      bxU_c = bxU%to_c()
+      bxV_c = bxV%to_c()
+      bxQs_c = bxQs%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      h_c = h_a%to_c()
+      if (associated(OBC)) then
+        OBC_c = c_loc(OBC)
+      else
+        OBC_c = c_null_ptr
+      endif
+      AD_a_c = CorAdv_AD_to_c(AD_a)
+      por_face_areaU_c = por_face_areaU_a%to_c()
+      por_face_areaV_c = por_face_areaV_a%to_c()
+      if (Stokes_VF) then
+        Waves_c = c_loc(Waves)
+      else
+        Waves_c = c_null_ptr
+      endif
+      Area_h_c = Area_h_a%to_c()
+      Area_q_c = Area_q_a%to_c()
+      Stokes_VF_c = Stokes_VF
+      use_weno_c = use_weno
+      q_c = q_a%to_c()
+      Ih_q_c = Ih_q_a%to_c()
+      abs_vort_c = abs_vort_a%to_c()
+      h_q_c = h_q_a%to_c()
+      qS_c = qS_a%to_c()
+      q2_c = q2_a%to_c()
+      uh_center_c = uh_center_a%to_c()
+      vh_center_c = vh_center_a%to_c()
+      RV_c = RV_a%to_c()
+      PV_c = PV_a%to_c()
+      CS_c = CorAdv_opts_CS_to_c(CS)
+      call turbotmp_coradv_setup_bridge(bxH_c, bxQ_c, bxU_c, bxV_c, bxQs_c, u_c, v_c, h_c, OBC_c, &
+                                        AD_a_c, por_face_areaU_c, por_face_areaV_c, Waves_c, &
+                                        Gcore%C, Area_h_c, Area_q_c, Stokes_VF_c, use_weno_c, &
+                                        vol_neglect, area_neglect, q_c, Ih_q_c, abs_vort_c, h_q_c, &
+                                        qS_c, q2_c, uh_center_c, vh_center_c, RV_c, PV_c, CS_c)
+#endif
+
+    case default
+      call CorAdv_setup_fortran(bxH, bxQ, bxU, bxV, bxQs, u_a, v_a, h_a, OBC, AD_a, &
+                                por_face_areaU_a, por_face_areaV_a, Waves, Gcore, Area_h_a, &
+                                Area_q_a, Stokes_VF, use_weno, vol_neglect, area_neglect, q_a, &
+                                Ih_q_a, abs_vort_a, h_q_a, qS_a, q2_a, uh_center_a, vh_center_a, &
+                                RV_a, PV_a, CS)
+
+  end select
+
 end subroutine CorAdv_setup
 
 
 !> Calculates the Coriolis and momentum advection accelerations with the Sadourny (1975)
 !! energy- or enstrophy-conserving schemes (SADOURNY75_ENERGY, SADOURNY75_ENSTRO), over one tile.
-subroutine CorAdv_sadourny(bxH, bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, uh_center_a, vh_center_a, &
-                           Gcore, CAu_a, CAv_a, CS)
+subroutine CorAdv_sadourny_fortran(bxH, bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, uh_center_a, &
+                                   vh_center_a, Gcore, CAu_a, CAv_a, CS)
   type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),             intent(in)    :: bxH !< The h-point iteration box of this tile,
                                                 !! [isc:iec, jsc:jec, ksc:kec]
@@ -1350,13 +2187,123 @@ subroutine CorAdv_sadourny(bxH, bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, uh_center_a
   !$omp target exit data map(delete: uh_min, vh_min) if (CS%Coriolis_En_Dis)
   !$omp target exit data map(delete: uh_max, vh_max) if (CS%Coriolis_En_Dis)
   call bxUx%free() ; call bxVx%free()
+end subroutine CorAdv_sadourny_fortran
+
+!> Runs CorAdv_sadourny_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADV_SADOURNY_MODE environment variable.
+subroutine CorAdv_sadourny(bxH, bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, uh_center_a, vh_center_a, &
+                           Gcore, CAu_a, CAv_a, CS)
+  type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  type(Box_t),             intent(in)    :: bxH !< The h-point iteration box of this tile,
+                                                !! [isc:iec, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
+                                                !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxV !< The v-point iteration box of this tile,
+                                                !! [isc:iec, JscB:JecB, ksc:kec]
+  type(RealArray_t), intent(in)    :: u_a         !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_a         !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: uh_a        !< Zonal transport u*h*dy
+                                                  !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: vh_a        !< Meridional transport v*h*dx
+                                                  !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: q_a         !< Layer potential vorticity
+                                                  !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(in)    :: uh_center_a !< Transport based on arithmetic mean h at
+                                                  !! u-points
+                                                  !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: vh_center_a !< Transport based on arithmetic mean h at
+                                                  !! v-points
+                                                  !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(inout) :: CAu_a       !< Zonal acceleration due to Coriolis
+                                                  !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: CAv_a       !< Meridional acceleration due to Coriolis
+                                                  !! and momentum advection [L T-2 ~> m s-2].
+  type(Coriolis_scheme_CS), intent(in)  :: CS  !< Options selecting the Coriolis discretization
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxH_c, bxU_c, bxV_c
+  type(RealArray_C)  :: u_c, v_c, uh_c, vh_c, q_c, uh_center_c, vh_center_c, CAu_c, CAv_c
+  type(Coriolis_scheme_CS_C) :: CS_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradv_sadourny"
+  mode = getenv_mode("CORADV_SADOURNY_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxH", bxH)
+        call rec%add("_bxU", bxU)
+        call rec%add("_bxV", bxV)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_q", q_a)
+        call rec%add("_uh_center", uh_center_a)
+        call rec%add("_vh_center", vh_center_a)
+        call rec%add("_dy_Cu", Gcore%dy_Cu)
+        call rec%add("_dx_Cv", Gcore%dx_Cv)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_CAu_before", CAu_a)
+        call rec%add("_CAv_before", CAv_a)
+        call record_Coriolis_scheme_CS(rec, "_CS", CS)
+      endif
+
+      call CorAdv_sadourny_fortran(bxH, bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, uh_center_a, &
+                                   vh_center_a, Gcore, CAu_a, CAv_a, CS)
+
+      if (capture) then
+        call rec%add("_CAu_after", CAu_a)
+        call rec%add("_CAv_after", CAv_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxH_c = bxH%to_c()
+      bxU_c = bxU%to_c()
+      bxV_c = bxV%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      q_c = q_a%to_c()
+      uh_center_c = uh_center_a%to_c()
+      vh_center_c = vh_center_a%to_c()
+      CAu_c = CAu_a%to_c()
+      CAv_c = CAv_a%to_c()
+      CS_c = Coriolis_scheme_CS_to_c(CS)
+      call turbotmp_coradv_sadourny_bridge(bxH_c, bxU_c, bxV_c, u_c, v_c, uh_c, vh_c, q_c, &
+                                           uh_center_c, vh_center_c, Gcore%C, CAu_c, CAv_c, CS_c)
+#endif
+
+    case default
+      call CorAdv_sadourny_fortran(bxH, bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, uh_center_a, &
+                                   vh_center_a, Gcore, CAu_a, CAv_a, CS)
+
+  end select
+
 end subroutine CorAdv_sadourny
 
 
 !> Calculates the Coriolis and momentum advection accelerations with the Arakawa & Hsu (1990),
 !! Arakawa & Lamb (1981) or blended (ARAKAWA_LAMB_BLEND) schemes, over one tile.
-subroutine CorAdv_arakawa(bxH, bxQ, bxU, bxV, uh_a, vh_a, q_a, Ih_q_a, Fe_m2, rat_lin, Gcore, &
-                          CAu_a, CAv_a, wt_lin_blend, CS)
+subroutine CorAdv_arakawa_fortran(bxH, bxQ, bxU, bxV, uh_a, vh_a, q_a, Ih_q_a, Fe_m2, rat_lin, &
+                                  Gcore, CAu_a, CAv_a, wt_lin_blend, CS)
   type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),             intent(in)    :: bxH !< The h-point iteration box of this tile,
                                                 !! [isc:iec, jsc:jec, ksc:kec]
@@ -1538,13 +2485,122 @@ subroutine CorAdv_arakawa(bxH, bxQ, bxU, bxV, uh_a, vh_a, q_a, Ih_q_a, Fe_m2, ra
   !$omp target exit data map(delete: a, b, c, d, ep_u, ep_v)
   call bxVx%free()
   call bxQ_pij%free() ; call bxQ_pj%free()
+end subroutine CorAdv_arakawa_fortran
+
+!> Runs CorAdv_arakawa_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADV_ARAKAWA_MODE environment variable.
+subroutine CorAdv_arakawa(bxH, bxQ, bxU, bxV, uh_a, vh_a, q_a, Ih_q_a, Fe_m2, rat_lin, Gcore, &
+                          CAu_a, CAv_a, wt_lin_blend, CS)
+  type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  type(Box_t),             intent(in)    :: bxH !< The h-point iteration box of this tile,
+                                                !! [isc:iec, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxQ !< The B-grid-index iteration box of this tile,
+                                                !! [IscB:IecB, JscB:JecB, ksc:kec]
+  type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
+                                                !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxV !< The v-point iteration box of this tile,
+                                                !! [isc:iec, JscB:JecB, ksc:kec]
+  type(RealArray_t), intent(in)    :: uh_a   !< Zonal transport u*h*dy
+                                             !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: vh_a   !< Meridional transport v*h*dx
+                                             !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: q_a    !< Layer potential vorticity
+                                             !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(in)    :: Ih_q_a !< Inverse of thickness interpolated to q points
+                                             !! [H-1 ~> m-1 or m2 kg-1]
+  real,                    intent(in)    :: Fe_m2   !< ARAKAWA_LAMB_BLEND blending parameter [nondim]
+  real,                    intent(in)    :: rat_lin !< ARAKAWA_LAMB_BLEND blending parameter [nondim]
+  type(RealArray_t), intent(inout) :: CAu_a  !< Zonal acceleration due to Coriolis
+                                             !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: CAv_a  !< Meridional acceleration due to Coriolis
+                                             !! and momentum advection [L T-2 ~> m s-2].
+  real,                    intent(in)    :: wt_lin_blend !< A weighting value beyond which the
+                                          !! blending between Sadourny and Arakawa & Hsu goes
+                                          !! linearly to 0 [nondim].
+  type(Coriolis_scheme_CS), intent(in)  :: CS  !< Options selecting the Coriolis discretization
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxH_c, bxQ_c, bxU_c, bxV_c
+  type(RealArray_C)  :: uh_c, vh_c, q_c, Ih_q_c, CAu_c, CAv_c
+  type(Coriolis_scheme_CS_C) :: CS_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradv_arakawa"
+  mode = getenv_mode("CORADV_ARAKAWA_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxH", bxH)
+        call rec%add("_bxQ", bxQ)
+        call rec%add("_bxU", bxU)
+        call rec%add("_bxV", bxV)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_q", q_a)
+        call rec%add("_Ih_q", Ih_q_a)
+        call rec%add("_Fe_m2", Fe_m2)
+        call rec%add("_rat_lin", rat_lin)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_CAu_before", CAu_a)
+        call rec%add("_CAv_before", CAv_a)
+        call rec%add("_wt_lin_blend", wt_lin_blend)
+        call record_Coriolis_scheme_CS(rec, "_CS", CS)
+      endif
+
+      call CorAdv_arakawa_fortran(bxH, bxQ, bxU, bxV, uh_a, vh_a, q_a, Ih_q_a, Fe_m2, rat_lin, &
+                                  Gcore, CAu_a, CAv_a, wt_lin_blend, CS)
+
+      if (capture) then
+        call rec%add("_CAu_after", CAu_a)
+        call rec%add("_CAv_after", CAv_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxH_c = bxH%to_c()
+      bxQ_c = bxQ%to_c()
+      bxU_c = bxU%to_c()
+      bxV_c = bxV%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      q_c = q_a%to_c()
+      Ih_q_c = Ih_q_a%to_c()
+      CAu_c = CAu_a%to_c()
+      CAv_c = CAv_a%to_c()
+      CS_c = Coriolis_scheme_CS_to_c(CS)
+      call turbotmp_coradv_arakawa_bridge(bxH_c, bxQ_c, bxU_c, bxV_c, uh_c, vh_c, q_c, Ih_q_c, &
+                                          Fe_m2, rat_lin, Gcore%C, CAu_c, CAv_c, wt_lin_blend, &
+                                          CS_c)
+#endif
+
+    case default
+      call CorAdv_arakawa_fortran(bxH, bxQ, bxU, bxV, uh_a, vh_a, q_a, Ih_q_a, Fe_m2, rat_lin, &
+                                  Gcore, CAu_a, CAv_a, wt_lin_blend, CS)
+
+  end select
+
 end subroutine CorAdv_arakawa
 
 
 !> Calculates the Coriolis and momentum advection accelerations with the pseudo-enstrophy
 !! scheme that is robust to vanishing layers (ROBUST_ENSTRO), over one tile.
-subroutine CorAdv_robust_enstro(bxU, bxV, u_a, v_a, h_a, uh_a, vh_a, abs_vort_a, eps_vel, h_tiny, &
-                                Gcore, CAu_a, CAv_a, PV_Adv_Scheme)
+subroutine CorAdv_robust_enstro_fortran(bxU, bxV, u_a, v_a, h_a, uh_a, vh_a, abs_vort_a, eps_vel, &
+                                        h_tiny, Gcore, CAu_a, CAv_a, PV_Adv_Scheme)
   type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
                                                 !! [IscB:IecB, jsc:jec, ksc:kec]
@@ -1650,14 +2706,118 @@ subroutine CorAdv_robust_enstro(bxU, bxV, u_a, v_a, h_a, uh_a, vh_a, abs_vort_a,
                      (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * IdyCv(i,J)
       endif
     enddo
+end subroutine CorAdv_robust_enstro_fortran
+
+!> Runs CorAdv_robust_enstro_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADV_ROBUST_ENSTRO_MODE environment variable.
+subroutine CorAdv_robust_enstro(bxU, bxV, u_a, v_a, h_a, uh_a, vh_a, abs_vort_a, eps_vel, h_tiny, &
+                                Gcore, CAu_a, CAv_a, PV_Adv_Scheme)
+  type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
+                                                !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxV !< The v-point iteration box of this tile,
+                                                !! [isc:iec, JscB:JecB, ksc:kec]
+  type(RealArray_t), intent(in)    :: u_a        !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_a        !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: h_a        !< Layer thickness [H ~> m or kg m-2]
+  type(RealArray_t), intent(in)    :: uh_a       !< Zonal transport u*h*dy
+                                                 !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: vh_a       !< Meridional transport v*h*dx
+                                                 !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: abs_vort_a !< Absolute vorticity at q-points [T-1 ~> s-1]
+  real,                    intent(in)    :: eps_vel !< A tiny, positive velocity [L T-1 ~> m s-1]
+  real,                    intent(in)    :: h_tiny  !< A very small thickness [H ~> m or kg m-2]
+  type(RealArray_t), intent(inout) :: CAu_a      !< Zonal acceleration due to Coriolis
+                                                 !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: CAv_a      !< Meridional acceleration due to Coriolis
+                                                 !! and momentum advection [L T-2 ~> m s-2].
+  integer,                 intent(in)    :: PV_Adv_Scheme !< Selects the discretization for PV
+                                          !! advection: PV_ADV_CENTERED or PV_ADV_UPWIND1
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxU_c, bxV_c
+  type(RealArray_C)  :: u_c, v_c, h_c, uh_c, vh_c, abs_vort_c, CAu_c, CAv_c
+  integer(c_int) :: PV_Adv_Scheme_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradv_robust_enstro"
+  mode = getenv_mode("CORADV_ROBUST_ENSTRO_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxU", bxU)
+        call rec%add("_bxV", bxV)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_h", h_a)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_abs_vort", abs_vort_a)
+        call rec%add("_eps_vel", eps_vel)
+        call rec%add("_h_tiny", h_tiny)
+        call rec%add("_IdxCv", Gcore%IdxCv)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_IdyCu", Gcore%IdyCu)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_CAu_before", CAu_a)
+        call rec%add("_CAv_before", CAv_a)
+        call rec%add("_PV_Adv_Scheme", PV_Adv_Scheme)
+      endif
+
+      call CorAdv_robust_enstro_fortran(bxU, bxV, u_a, v_a, h_a, uh_a, vh_a, abs_vort_a, eps_vel, &
+                                        h_tiny, Gcore, CAu_a, CAv_a, PV_Adv_Scheme)
+
+      if (capture) then
+        call rec%add("_CAu_after", CAu_a)
+        call rec%add("_CAv_after", CAv_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxU_c = bxU%to_c()
+      bxV_c = bxV%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      h_c = h_a%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      abs_vort_c = abs_vort_a%to_c()
+      CAu_c = CAu_a%to_c()
+      CAv_c = CAv_a%to_c()
+      PV_Adv_Scheme_c = PV_Adv_Scheme
+      call turbotmp_coradv_robust_enstro_bridge(bxU_c, bxV_c, u_c, v_c, h_c, uh_c, vh_c, &
+                                                abs_vort_c, eps_vel, h_tiny, Gcore%C, CAu_c, &
+                                                CAv_c, PV_Adv_Scheme_c)
+#endif
+
+    case default
+      call CorAdv_robust_enstro_fortran(bxU, bxV, u_a, v_a, h_a, uh_a, vh_a, abs_vort_a, eps_vel, &
+                                        h_tiny, Gcore, CAu_a, CAv_a, PV_Adv_Scheme)
+
+  end select
+
 end subroutine CorAdv_robust_enstro
 
 
 !> Calculates the Coriolis and momentum advection accelerations with the WENO PV-reconstruction
 !! schemes (WENOVI7TH/5TH/3RD_PV_ENSTRO), over one tile.  Near land the reconstruction falls back to
 !! narrower stencils, down to first-order upwind.
-subroutine CorAdv_weno(bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, abs_vort_a, h_q_a, Gcore, &
-                       H_subroundoff, CAu_a, CAv_a, weno_velocity_smooth, CS)
+subroutine CorAdv_weno_fortran(bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, abs_vort_a, h_q_a, Gcore, &
+                               H_subroundoff, CAu_a, CAv_a, weno_velocity_smooth, CS)
   type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   real, intent(in) :: H_subroundoff !< A thickness that is so small that it can be added to a
                                     !! thickness of Angstrom or larger without changing it at the
@@ -1943,14 +3103,128 @@ subroutine CorAdv_weno(bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, abs_vort_a, h_q_a, G
 
     enddo
   endif
+end subroutine CorAdv_weno_fortran
+
+!> Runs CorAdv_weno_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADV_WENO_MODE environment variable.
+subroutine CorAdv_weno(bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, abs_vort_a, h_q_a, Gcore, &
+                       H_subroundoff, CAu_a, CAv_a, weno_velocity_smooth, CS)
+  type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  real, intent(in) :: H_subroundoff !< A thickness that is so small that it can be added to a
+                                    !! thickness of Angstrom or larger without changing it at the
+                                    !! bit level [H ~> m or kg m-2].
+  type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
+                                                !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxV !< The v-point iteration box of this tile,
+                                                !! [isc:iec, JscB:JecB, ksc:kec]
+  type(RealArray_t), intent(in)    :: u_a        !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_a        !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: uh_a       !< Zonal transport u*h*dy
+                                                 !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: vh_a       !< Meridional transport v*h*dx
+                                                 !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: q_a        !< Layer potential vorticity
+                                                 !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(in)    :: abs_vort_a !< Absolute vorticity at q-points [T-1 ~> s-1]
+  type(RealArray_t), intent(in)    :: h_q_a      !< Thickness interpolated to q points
+                                                 !! [H ~> m or kg m-2]
+  type(RealArray_t), intent(inout) :: CAu_a      !< Zonal acceleration due to Coriolis
+                                                 !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: CAv_a      !< Meridional acceleration due to Coriolis
+                                                 !! and momentum advection [L T-2 ~> m s-2].
+  logical,                 intent(in)    :: weno_velocity_smooth !< If true, use velocity to
+                                          !! compute the smoothness indicator for WENO
+  type(Coriolis_scheme_CS), intent(in)  :: CS  !< Options selecting the Coriolis discretization
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxU_c, bxV_c
+  type(RealArray_C)  :: u_c, v_c, uh_c, vh_c, q_c, abs_vort_c, h_q_c, CAu_c, CAv_c
+  logical(c_bool) :: weno_velocity_smooth_c
+  type(Coriolis_scheme_CS_C) :: CS_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradv_weno"
+  mode = getenv_mode("CORADV_WENO_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxU", bxU)
+        call rec%add("_bxV", bxV)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_q", q_a)
+        call rec%add("_abs_vort", abs_vort_a)
+        call rec%add("_h_q", h_q_a)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_mask2dCu", Gcore%mask2dCu)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_mask2dCv", Gcore%mask2dCv)
+        call rec%add("_H_subroundoff", H_subroundoff)
+        call rec%add("_CAu_before", CAu_a)
+        call rec%add("_CAv_before", CAv_a)
+        call rec%add("_weno_velocity_smooth", weno_velocity_smooth)
+        call record_Coriolis_scheme_CS(rec, "_CS", CS)
+      endif
+
+      call CorAdv_weno_fortran(bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, abs_vort_a, h_q_a, Gcore, &
+                               H_subroundoff, CAu_a, CAv_a, weno_velocity_smooth, CS)
+
+      if (capture) then
+        call rec%add("_CAu_after", CAu_a)
+        call rec%add("_CAv_after", CAv_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxU_c = bxU%to_c()
+      bxV_c = bxV%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      q_c = q_a%to_c()
+      abs_vort_c = abs_vort_a%to_c()
+      h_q_c = h_q_a%to_c()
+      CAu_c = CAu_a%to_c()
+      CAv_c = CAv_a%to_c()
+      weno_velocity_smooth_c = weno_velocity_smooth
+      CS_c = Coriolis_scheme_CS_to_c(CS)
+      call turbotmp_coradv_weno_bridge(bxU_c, bxV_c, u_c, v_c, uh_c, vh_c, q_c, abs_vort_c, h_q_c, &
+                                       Gcore%C, H_subroundoff, CAu_c, CAv_c, &
+                                       weno_velocity_smooth_c, CS_c)
+#endif
+
+    case default
+      call CorAdv_weno_fortran(bxU, bxV, u_a, v_a, uh_a, vh_a, q_a, abs_vort_a, h_q_a, Gcore, &
+                               H_subroundoff, CAu_a, CAv_a, weno_velocity_smooth, CS)
+
+  end select
+
 end subroutine CorAdv_weno
 
 
 !> Adds the terms that are common to every Coriolis scheme to the accelerations over one tile:
 !! the Stokes-drift diagnostic, the optional bounding of the Coriolis terms and the kinetic energy
 !! gradient, and the diagnostics of the kinetic energy gradient and relative-vorticity terms.
-subroutine CorAdv_common_terms(bxU, bxV, u_a, v_a, uh_a, vh_a, abs_vort_a, qS_a, q2_a, KEx_a, &
-                               KEy_a, Stokes_VF, Gcore, CAu_a, CAv_a, CAuS_a, CAvS_a, AD_a, CS)
+subroutine CorAdv_common_terms_fortran(bxU, bxV, u_a, v_a, uh_a, vh_a, abs_vort_a, qS_a, q2_a, &
+                                       KEx_a, KEy_a, Stokes_VF, Gcore, CAu_a, CAv_a, CAuS_a, &
+                                       CAvS_a, AD_a, CS)
   type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
                                                 !! [IscB:IecB, jsc:jec, ksc:kec]
@@ -2131,6 +3405,139 @@ subroutine CorAdv_common_terms(bxU, bxV, u_a, v_a, uh_a, vh_a, abs_vort_a, qS_a,
       endif
     endif
   endif
+end subroutine CorAdv_common_terms_fortran
+
+!> Runs CorAdv_common_terms_fortran, a capture of its inputs and outputs, or the C++/AMReX bridge,
+!! as selected by the CORADV_COMMON_TERMS_MODE environment variable.
+subroutine CorAdv_common_terms(bxU, bxV, u_a, v_a, uh_a, vh_a, abs_vort_a, qS_a, q2_a, KEx_a, &
+                               KEy_a, Stokes_VF, Gcore, CAu_a, CAv_a, CAuS_a, CAvS_a, AD_a, CS)
+  type(grid_core_type),    intent(in)    :: Gcore !< Persistent copies of the core ocean grid fields
+  type(Box_t),             intent(in)    :: bxU !< The u-point iteration box of this tile,
+                                                !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),             intent(in)    :: bxV !< The v-point iteration box of this tile,
+                                                !! [isc:iec, JscB:JecB, ksc:kec]
+  type(RealArray_t), intent(in)    :: u_a        !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_a        !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: uh_a       !< Zonal transport u*h*dy
+                                                 !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: vh_a       !< Meridional transport v*h*dx
+                                                 !! [H L2 T-1 ~> m3 s-1 or kg s-1]
+  type(RealArray_t), intent(in)    :: abs_vort_a !< Absolute vorticity at q-points [T-1 ~> s-1]
+  type(RealArray_t), intent(in)    :: qS_a       !< Layer Stokes vorticity
+                                                 !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(in)    :: q2_a       !< Relative vorticity over thickness
+                                                 !! [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1]
+  type(RealArray_t), intent(in)    :: KEx_a      !< Zonal gradient of kinetic energy per unit mass
+                                                 !! [L T-2 ~> m s-2]
+  type(RealArray_t), intent(in)    :: KEy_a      !< Meridional gradient of kinetic energy per unit
+                                                 !! mass
+                                                 !! [L T-2 ~> m s-2]
+  logical,                 intent(in)    :: Stokes_VF !< If true, include the Stokes drift
+  type(RealArray_t), intent(inout) :: CAu_a      !< Zonal acceleration due to Coriolis
+                                                 !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: CAv_a      !< Meridional acceleration due to Coriolis
+                                                 !! and momentum advection [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: CAuS_a     !< Stokes contribution to CAu [L T-2 ~> m s-2]
+  type(RealArray_t), intent(inout) :: CAvS_a     !< Stokes contribution to CAv [L T-2 ~> m s-2]
+  type(CorAdv_AD_type),    intent(inout) :: AD_a !< Copies of the acceleration diagnostics
+  type(CorAdv_opts_CS),    intent(in)    :: CS  !< Options used in the Coriolis and momentum
+                                                !! advection calculations
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxU_c, bxV_c
+  type(RealArray_C)  :: u_c, v_c, uh_c, vh_c, abs_vort_c, qS_c, q2_c, KEx_c, KEy_c, CAu_c, CAv_c, &
+    CAuS_c, CAvS_c
+  logical(c_bool) :: Stokes_VF_c
+  type(CorAdv_AD_C) :: AD_a_c
+  type(CorAdv_opts_CS_C) :: CS_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "coradv_common_terms"
+  mode = getenv_mode("CORADV_COMMON_TERMS_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxU", bxU)
+        call rec%add("_bxV", bxV)
+        call rec%add("_u", u_a)
+        call rec%add("_v", v_a)
+        call rec%add("_uh", uh_a)
+        call rec%add("_vh", vh_a)
+        call rec%add("_abs_vort", abs_vort_a)
+        call rec%add("_qS", qS_a)
+        call rec%add("_q2", q2_a)
+        call rec%add("_KEx", KEx_a)
+        call rec%add("_KEy", KEy_a)
+        call rec%add("_Stokes_VF", Stokes_VF)
+        call rec%add("_IdxCu", Gcore%IdxCu)
+        call rec%add("_IdyCv", Gcore%IdyCv)
+        call rec%add("_CAu_before", CAu_a)
+        call rec%add("_CAv_before", CAv_a)
+        call rec%add("_CAuS_before", CAuS_a)
+        call rec%add("_CAvS_before", CAvS_a)
+        call record_CorAdv_AD(rec, "_AD", AD_a, "")
+        call record_CorAdv_AD(rec, "_AD", AD_a, "_before")
+        call record_CorAdv_opts_CS(rec, "_CS", CS)
+      endif
+
+      call CorAdv_common_terms_fortran(bxU, bxV, u_a, v_a, uh_a, vh_a, abs_vort_a, qS_a, q2_a, &
+                                       KEx_a, KEy_a, Stokes_VF, Gcore, CAu_a, CAv_a, CAuS_a, &
+                                       CAvS_a, AD_a, CS)
+
+      if (capture) then
+        call rec%add("_CAu_after", CAu_a)
+        call rec%add("_CAv_after", CAv_a)
+        call rec%add("_CAuS_after", CAuS_a)
+        call rec%add("_CAvS_after", CAvS_a)
+        call record_CorAdv_AD(rec, "_AD", AD_a, "_after")
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxU_c = bxU%to_c()
+      bxV_c = bxV%to_c()
+      u_c = u_a%to_c()
+      v_c = v_a%to_c()
+      uh_c = uh_a%to_c()
+      vh_c = vh_a%to_c()
+      abs_vort_c = abs_vort_a%to_c()
+      qS_c = qS_a%to_c()
+      q2_c = q2_a%to_c()
+      KEx_c = KEx_a%to_c()
+      KEy_c = KEy_a%to_c()
+      Stokes_VF_c = Stokes_VF
+      CAu_c = CAu_a%to_c()
+      CAv_c = CAv_a%to_c()
+      CAuS_c = CAuS_a%to_c()
+      CAvS_c = CAvS_a%to_c()
+      AD_a_c = CorAdv_AD_to_c(AD_a)
+      CS_c = CorAdv_opts_CS_to_c(CS)
+      call turbotmp_coradv_common_terms_bridge(bxU_c, bxV_c, u_c, v_c, uh_c, vh_c, abs_vort_c, &
+                                               qS_c, q2_c, KEx_c, KEy_c, Stokes_VF_c, Gcore%C, &
+                                               CAu_c, CAv_c, CAuS_c, CAvS_c, AD_a_c, CS_c)
+#endif
+
+    case default
+      call CorAdv_common_terms_fortran(bxU, bxV, u_a, v_a, uh_a, vh_a, abs_vort_a, qS_a, q2_a, &
+                                       KEx_a, KEy_a, Stokes_VF, Gcore, CAu_a, CAv_a, CAuS_a, &
+                                       CAvS_a, AD_a, CS)
+
+  end select
+
 end subroutine CorAdv_common_terms
 
 
@@ -2199,8 +3606,8 @@ end subroutine CorAdv_finalize_diagnostics
 
 
 !> Calculates the acceleration due to the gradient of kinetic energy over one iteration tile.
-subroutine gradKE(bxQ, bxU, bxV, u_a, v_a, KE_a, KEx_a, KEy_a, Gcore, Gobc, KE_Scheme, &
-                  KE_use_limiter)
+subroutine gradKE_fortran(bxQ, bxU, bxV, u_a, v_a, KE_a, KEx_a, KEy_a, Gcore, Gobc, KE_Scheme, &
+                          KE_use_limiter)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core
                                                                    !! ocean grid fields
   type(grid_OBC_type),                        intent(in)  :: Gobc !< Persistent copies of the ocean
@@ -2379,6 +3786,107 @@ subroutine gradKE(bxQ, bxU, bxV, u_a, v_a, KE_a, KEx_a, KEy_a, Gcore, Gobc, KE_S
     KEy(i,J,k) = (KE(i,j+1,k) - KE(i,j,k)) * IdyCv_OBCmask(i,J)
   enddo
   call bxQ_pij%free()
+end subroutine gradKE_fortran
+
+!> Calculates the acceleration due to the gradient of kinetic energy over one iteration tile,
+!! with the Fortran implementation, a capture of its inputs and outputs, or the C++/AMReX
+!! bridge, as selected by the GRADKE_MODE environment variable.
+subroutine gradKE(bxQ, bxU, bxV, u_a, v_a, KE_a, KEx_a, KEy_a, Gcore, Gobc, KE_Scheme, &
+                  KE_use_limiter)
+  type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core
+                                                                   !! ocean grid fields
+  type(grid_OBC_type),                        intent(in)  :: Gobc !< Persistent copies of the ocean
+                                                                  !! grid OBC mask fields
+  type(Box_t),                                intent(in)  :: bxQ !< The B-grid-index iteration box of
+                                                                 !! this tile, [IscB:IecB, JscB:JecB, ksc:kec]
+  type(Box_t),                   intent(in)  :: bxU !< The u-point iteration box of this tile,
+                                                    !! [IscB:IecB, jsc:jec, ksc:kec]
+  type(Box_t),                   intent(in)  :: bxV !< The v-point iteration box of this tile,
+                                                    !! [isc:iec, JscB:JecB, ksc:kec]
+  type(RealArray_t), intent(in)    :: u_a   !< Zonal velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(in)    :: v_a   !< Meridional velocity [L T-1 ~> m s-1]
+  type(RealArray_t), intent(inout) :: KE_a  !< Kinetic energy per unit mass [L2 T-2 ~> m2 s-2]
+  type(RealArray_t), intent(inout) :: KEx_a !< Zonal acceleration due to kinetic
+                                            !! energy gradient [L T-2 ~> m s-2]
+  type(RealArray_t), intent(inout) :: KEy_a !< Meridional acceleration due to kinetic
+                                            !! energy gradient [L T-2 ~> m s-2]
+  integer,                                    intent(in)  :: KE_Scheme !< Selects the discretization
+                                                   !! for the kinetic energy: KE_ARAKAWA,
+                                                   !! KE_SIMPLE_GUDONOV, KE_GUDONOV or KE_UP3
+  logical,                                    intent(in)  :: KE_use_limiter !< If true, use the
+                                                   !! Koren limiter for the KE_UP3 scheme
+  ! Local variables
+  integer            :: mode, rc
+  type(Box_C)        :: bxQ_c, bxU_c, bxV_c
+  type(RealArray_C)  :: u_c, v_c, KE_c, KEx_c, KEy_c
+  integer(c_int)     :: KE_Scheme_c
+  logical(c_bool)    :: KE_use_limiter_c
+  type(io_recorder)  :: rec
+  logical            :: capture
+  character(len=80)  :: kernel
+  character(len=100) :: dir
+  character(len=256) :: binFile, metaFile
+
+  kernel = "gradke"
+  mode = getenv_mode("GRADKE_MODE", default=TIMH_runFORTRAN)
+
+  select case (mode)
+
+    case (TIMH_capture)
+      capture = (.not. already_recorded(trim(kernel))) .and. is_root_pe()
+      if (capture) then
+        dir = "capture"
+        rc = mkdir_posix(trim(dir) // c_null_char, int(o'755', c_int))
+        binFile  = trim(dir) // "/" // trim(kernel) // ".bin"
+        metaFile = trim(dir) // "/" // trim(kernel) // ".meta"
+        call rec%open_write(binFile, metaFile)
+        call rec%add("_bxQ",            bxQ)
+        call rec%add("_bxU",            bxU)
+        call rec%add("_bxV",            bxV)
+        call rec%add("_u",              u_a)
+        call rec%add("_v",              v_a)
+        call rec%add("_KE_before",      KE_a)
+        call rec%add("_KEx_before",     KEx_a)
+        call rec%add("_KEy_before",     KEy_a)
+        call rec%add("_areaCu",         Gcore%areaCu)
+        call rec%add("_areaCv",         Gcore%areaCv)
+        call rec%add("_IareaT",         Gcore%IareaT)
+        call rec%add("_mask2dCu",       Gcore%mask2dCu)
+        call rec%add("_mask2dCv",       Gcore%mask2dCv)
+        call rec%add("_IdxCu_OBCmask",  Gobc%IdxCu_OBCmask)
+        call rec%add("_IdyCv_OBCmask",  Gobc%IdyCv_OBCmask)
+        call rec%add("_KE_Scheme",      KE_Scheme)
+        call rec%add("_KE_use_limiter", KE_use_limiter)
+      endif
+
+      call gradKE_fortran(bxQ, bxU, bxV, u_a, v_a, KE_a, KEx_a, KEy_a, Gcore, Gobc, KE_Scheme, &
+                          KE_use_limiter)
+
+      if (capture) then
+        call rec%add("_KE_after",  KE_a)
+        call rec%add("_KEx_after", KEx_a)
+        call rec%add("_KEy_after", KEy_a)
+        call rec%close()
+        call mark_recorded(trim(kernel))
+      endif
+
+#ifdef _TIM
+    case (TIMH_runAMREX)
+      bxQ_c = bxQ%to_c() ; bxU_c = bxU%to_c() ; bxV_c = bxV%to_c()
+      u_c   = u_a%to_c() ; v_c = v_a%to_c()
+      KE_c  = KE_a%to_c() ; KEx_c = KEx_a%to_c() ; KEy_c = KEy_a%to_c()
+      KE_Scheme_c      = KE_Scheme
+      KE_use_limiter_c = KE_use_limiter
+      call turbotmp_gradke_bridge(bxQ_c, bxU_c, bxV_c, u_c, v_c, KE_c, KEx_c, KEy_c, Gcore%C, &
+                                  Gobc%C, KE_Scheme_c, KE_use_limiter_c)
+#endif
+
+    case default
+      call gradKE_fortran(bxQ, bxU, bxV, u_a, v_a, KE_a, KEx_a, KEy_a, Gcore, Gobc, KE_Scheme, &
+                          KE_use_limiter)
+
+  end select
+
 end subroutine gradKE
 
 !> Reconstruct the scalar (e.g., pv, vorticity) onto point i-1/2 using a third-order upwind scheme
