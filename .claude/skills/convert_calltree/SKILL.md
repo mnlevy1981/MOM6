@@ -193,6 +193,9 @@ direction rule; record any deviation the survey justifies.
 10. **`convert_loops_to_box_iterators`**, once the tree is stable; one bit-for-bit checkpoint
     per core box. Serial loop nests nobody has converted go first through
     `convert_serial_loops_to_do_concurrent`, as their own checkpoint.
+11. **`consolidate_iteration_boxes`**, cleanup before the readiness audit and Phase 3: base boxes
+    at the root, one commented grow per local box, purpose names; one checkpoint per new root box,
+    then per group of kernels for the local boxes left (its "Staging" section).
 
 **Phase 3 execution order** is computed from 1b's call graph over every subroutine except the
 wrapper and the per-point kernels (a subroutine calling only per-point kernels is a leaf): a
