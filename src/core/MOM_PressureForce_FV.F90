@@ -135,8 +135,9 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, &
-                                     Gcore, GV, US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
+subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
+                                     PFv_a, G, Gcore, GV, US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, &
+                                     eta_a)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
@@ -147,6 +148,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PF
                                              !! [isc:iec, JscB:JecB, 1:nz]
   type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
+  type(Box_t),          intent(in)  :: bxHkint !< The interior interfaces of the whole column,
+                                               !! [isc:iec, jsc:jec, 2:nz]
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
@@ -932,7 +935,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PF
 
   if (pbce_a%associated()) then
     call Rlay_a%alloc(lb=LBOUND(GV%Rlay), ub=UBOUND(GV%Rlay), source=GV%Rlay)
-    call set_pbce_nonBouss(bxH0, bxQ0, p_a, tv_tmp, G%isd, GV%g_Earth, GV%H_to_RZ, &
+    call set_pbce_nonBouss(bxH0, bxQ0, bxHkint, p_a, tv_tmp, G%isd, GV%g_Earth, GV%H_to_RZ, &
                            GV%H_subroundoff, Rlay_a, CS%GFS_scale, pbce_a, &
                            alpha_star_a=alpha_star_a_none)
     call Rlay_a%free()
