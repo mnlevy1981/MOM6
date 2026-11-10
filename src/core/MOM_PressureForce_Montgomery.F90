@@ -29,6 +29,7 @@ implicit none ; private
 
 public PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss, Set_pbce_Bouss
 public Set_pbce_nonBouss, PressureForce_Mont_init
+public PressureForce_Mont_Bouss_cap, PressureForce_Mont_nonBouss_cap
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
@@ -61,6 +62,68 @@ type, public :: PressureForce_Mont_CS ; private
 end type PressureForce_Mont_CS
 
 contains
+
+!> Calls PressureForce_Mont_nonBouss and does the Fortran-only work around that call.
+subroutine PressureForce_Mont_nonBouss_cap(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, &
+                                           Gcore, US, CS, p_atm_a, pbce_a, eta_a, Rlay_a, g_Earth, &
+                                           H_to_RZ, H_subroundoff, nk_rho_varies)
+  type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
+                                             !! [isc:iec, jsc:jec, 1:nz]
+  type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
+                                             !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
+                                              !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
+  type(Box_t),          intent(in)  :: bxHkint !< The interior interfaces of the whole column,
+                                               !! [isc:iec, jsc:jec, 2:nz]
+  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
+  type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
+  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness, [H ~> kg m-2].
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables.
+  type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration due to pressure gradients
+                                                                 !! (equal to -dM/dx) [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration due to pressure gradients
+                                                                 !! (equal to -dM/dy) [L T-2 ~> m s-2].
+  type(PressureForce_Mont_CS),                intent(inout) :: CS  !< Control structure for Montgomery potential PGF
+  type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean or
+                                                                 !! atmosphere-ocean [R L2 T-2 ~> Pa].
+  type(RealArray_t), intent(inout) :: pbce_a !< The baroclinic pressure anomaly in
+                                                                 !! each layer due to free surface height anomalies,
+                                                                 !! [L2 T-2 H-1 ~> m s-2 or m4 kg-1 s-2].
+  type(RealArray_t), intent(inout) :: eta_a !< The total column mass used to calculate
+                                                                 !! PFu and PFv [H ~> kg m-2].
+  type(RealArray_t), intent(in) :: Rlay_a !< The target coordinate value (potential density) in each
+                                          !! layer [R ~> kg m-3].
+  real,              intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
+  real,              intent(in) :: H_to_RZ !< A constant that translates thickness units to the
+                                           !! units of mass per unit area [R Z H-1 ~> kg m-3 or 1].
+  real,              intent(in) :: H_subroundoff !< A thickness that is so small that it can be
+                                                 !! added to a thickness of Angstrom or larger
+                                                 !! without changing it at the bit level
+                                                 !! [H ~> m or kg m-2]. If Angstrom is 0 or
+                                                 !! exceedingly small, this is negligible compared
+                                                 !! to 1e-17 m.
+  integer,           intent(in) :: nk_rho_varies !< The number of layers at the top where the
+                                                 !! density does not track any target density.
+  ! Local variables
+  logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
+
+  use_EOS = associated(tv%eqn_of_state)
+
+  if (.not.CS%initialized) call MOM_error(FATAL, &
+      "MOM_PressureForce_Mont: Module must be initialized before it is used.")
+
+  if (use_EOS) then
+    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
+      "PressureForce_Mont_nonBouss: The Montgomery form of the pressure force "//&
+      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
+  endif
+
+  call PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, Gcore, &
+                                   US, CS, p_atm_a, pbce_a, eta_a, Rlay_a, g_Earth, H_to_RZ, &
+                                   H_subroundoff, nk_rho_varies)
+
+end subroutine PressureForce_Mont_nonBouss_cap
 
 !> \brief Non-Boussinesq Montgomery-potential form of pressure gradient
 !!
@@ -190,15 +253,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
   use_p_atm = associated(p_atm)
   is_split = pbce_a%associated()
   use_EOS = associated(tv%eqn_of_state)
-
-  if (.not.CS%initialized) call MOM_error(FATAL, &
-      "MOM_PressureForce_Mont: Module must be initialized before it is used.")
-
-  if (use_EOS) then
-    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
-      "PressureForce_Mont_nonBouss: The Montgomery form of the pressure force "//&
-      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
-  endif
 
   I_gEarth = 1.0 / g_Earth
   dp_neglect = g_Earth * H_to_RZ * H_subroundoff
@@ -422,6 +476,72 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
 
 end subroutine PressureForce_Mont_nonBouss
 
+!> Calls PressureForce_Mont_Bouss and does the Fortran-only work around that call.
+subroutine PressureForce_Mont_Bouss_cap(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
+                                        CS, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, g_Earth, &
+                                        H_to_Z, Z_to_H, Rho0, dZ_subroundoff, nk_rho_varies)
+  type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
+                                             !! [isc:iec, jsc:jec, 1:nz]
+  type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
+                                             !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
+                                              !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
+  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
+  type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
+  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> m].
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables.
+  type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration due to pressure gradients
+                                                                 !! (equal to -dM/dx) [L T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration due to pressure gradients
+                                                                 !! (equal to -dM/dy) [L T-2 ~> m s-2].
+  type(PressureForce_Mont_CS),                intent(inout) :: CS  !< Control structure for Montgomery potential PGF
+  type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean or
+                                                                !! atmosphere-ocean [R L2 T-2 ~> Pa].
+  type(RealArray_t), intent(inout) :: pbce_a !< The baroclinic pressure anomaly in
+                                                                !! each layer due to free surface height anomalies
+                                                                !! [L2 T-2 H-1 ~> m s-2].
+  type(RealArray_t), intent(inout) :: eta_a !< Free surface height [H ~> m].
+  type(RealArray_t), intent(in) :: Rlay_a !< The target coordinate value (potential density) in each
+                                          !! layer [R ~> kg m-3].
+  type(RealArray_t), intent(in) :: g_prime_a !< The reduced gravity at each interface
+                                             !! [L2 Z-1 T-2 ~> m s-2].
+  real,              intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
+  real,              intent(in) :: H_to_Z !< A constant that translates thickness units to the units
+                                          !! of depth [Z H-1 ~> 1 or m3 kg-1].
+  real,              intent(in) :: Z_to_H !< A constant that translates depth units to thickness
+                                          !! units depth [H Z-1 ~> 1 or kg m-3].
+  real,              intent(in) :: Rho0 !< The density used in the Boussinesq approximation or
+                                        !! nominal density used to convert depths into mass units
+                                        !! [R ~> kg m-3].
+  real,              intent(in) :: dZ_subroundoff !< A thickness in height units that is so small
+                                                  !! that it can be added to a vertical distance of
+                                                  !! Angstrom_Z or 1e-17 m without changing it at
+                                                  !! the bit level [Z ~> m].  This is the height
+                                                  !! equivalent of H_subroundoff.
+  integer,           intent(in) :: nk_rho_varies !< The number of layers at the top where the
+                                                 !! density does not track any target density.
+  ! Local variables
+  logical :: use_EOS         ! If true, density is calculated from T & S using
+                             ! an equation of state.
+
+  use_EOS = associated(tv%eqn_of_state)
+
+  if (.not.CS%initialized) call MOM_error(FATAL, &
+       "MOM_PressureForce_Mont: Module must be initialized before it is used.")
+
+  if (use_EOS) then
+    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
+      "PressureForce_Mont_Bouss: The Montgomery form of the pressure force "//&
+      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
+  endif
+
+  call PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, CS, &
+                                p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, g_Earth, H_to_Z, &
+                                Z_to_H, Rho0, dZ_subroundoff, nk_rho_varies)
+
+end subroutine PressureForce_Mont_Bouss_cap
+
 !> \brief Boussinesq Montgomery-potential form of pressure gradient
 !!
 !! Determines the acceleration due to pressure forces.
@@ -546,15 +666,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G
   use_p_atm = associated(p_atm)
   is_split = pbce_a%associated()
   use_EOS = associated(tv%eqn_of_state)
-
-  if (.not.CS%initialized) call MOM_error(FATAL, &
-       "MOM_PressureForce_Mont: Module must be initialized before it is used.")
-
-  if (use_EOS) then
-    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
-      "PressureForce_Mont_Bouss: The Montgomery form of the pressure force "//&
-      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
-  endif
 
   dz_neglect = dZ_subroundoff
   I_Rho0 = 1.0/CS%Rho0

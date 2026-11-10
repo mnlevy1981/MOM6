@@ -10,10 +10,10 @@ use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, log_version, param_file_type
 use MOM_grid, only : ocean_grid_type
-use MOM_PressureForce_FV, only : PressureForce_FV_Bouss, PressureForce_FV_nonBouss
+use MOM_PressureForce_FV, only : PressureForce_FV_Bouss_cap, PressureForce_FV_nonBouss_cap
 use MOM_PressureForce_FV, only : PressureForce_FV_init
 use MOM_PressureForce_FV, only : PressureForce_FV_CS
-use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss
+use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss_cap, PressureForce_Mont_nonBouss_cap
 use MOM_PressureForce_Mont, only : PressureForce_Mont_init
 use MOM_PressureForce_Mont, only : PressureForce_Mont_CS
 use MOM_self_attr_load, only : SAL_CS
@@ -209,27 +209,28 @@ subroutine PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PF
 
   if (CS%Analytic_FV_PGF) then
     if (Boussinesq) then
-      call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                                  GV, US, CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, pbce_a, &
-                                  eta_a, Rlay_a, g_prime_a, Z_ref, g_Earth, H_to_Z, Z_to_H, &
-                                  H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, nk_rho_varies)
+      call PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, &
+                                      Gcore, GV, US, CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, &
+                                      pbce_a, eta_a, Rlay_a, g_prime_a, Z_ref, g_Earth, H_to_Z, &
+                                      Z_to_H, H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, &
+                                      nk_rho_varies)
     else
-      call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
-                                     PFv_a, G, Gcore, GV, US, CS%PressureForce_FV, ALE_CSp, ADp, &
-                                     p_atm_a, pbce_a, eta_a, Rlay_a, Z_ref, g_Earth, H_to_RZ, &
-                                     H_subroundoff, nk_rho_varies, semi_Boussinesq)
+      call PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
+                                         PFv_a, G, Gcore, GV, US, CS%PressureForce_FV, ALE_CSp, &
+                                         ADp, p_atm_a, pbce_a, eta_a, Rlay_a, Z_ref, g_Earth, &
+                                         H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
     endif
   else
     if (Boussinesq) then
-      call PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
-                                    CS%PressureForce_Mont, p_atm_a, pbce_a, eta_a, Rlay_a, &
-                                    g_prime_a, g_Earth, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, &
-                                    nk_rho_varies)
+      call PressureForce_Mont_Bouss_cap(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
+                                        CS%PressureForce_Mont, p_atm_a, pbce_a, eta_a, Rlay_a, &
+                                        g_prime_a, g_Earth, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, &
+                                        nk_rho_varies)
     else
-      call PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, &
-                                       Gcore, US, CS%PressureForce_Mont, p_atm_a, pbce_a, &
-                                       eta_a, Rlay_a, g_Earth, H_to_RZ, H_subroundoff, &
-                                       nk_rho_varies)
+      call PressureForce_Mont_nonBouss_cap(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, &
+                                           Gcore, US, CS%PressureForce_Mont, p_atm_a, pbce_a, &
+                                           eta_a, Rlay_a, g_Earth, H_to_RZ, H_subroundoff, &
+                                           nk_rho_varies)
     endif
   endif
 
