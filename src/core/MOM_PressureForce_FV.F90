@@ -29,6 +29,7 @@ use MOM_density_integrals, only : diagnose_mass_weight_Z, diagnose_mass_weight_p
 use MOM_ALE, only : TS_PLM_edge_values, TS_PPM_edge_values, TS_PLM_WLS_edge_values, ALE_CS
 use array_mod, only : RealArray_t
 use box_mod, only : Box_t
+use, intrinsic :: iso_c_binding, only : c_ptr, c_loc, c_f_pointer
 
 implicit none ; private
 
@@ -125,6 +126,15 @@ type, public :: PressureForce_FV_CS ; private
   type(tidal_forcing_CS), pointer :: tides_CSp => NULL() !< Tides control structure
 end type PressureForce_FV_CS
 
+!> Pointers to the Fortran-only objects (grid, unit scaling and control structure) that the
+!! host helpers of the PressureForce_FV forms use; each cap builds one and passes its address
+!! down as host.
+type :: PressureForce_FV_host_type
+  type(ocean_grid_type), pointer :: G => NULL() !< Ocean grid structure
+  type(unit_scale_type), pointer :: US => NULL() !< A dimensional unit scaling type
+  type(PressureForce_FV_CS), pointer :: CS => NULL() !< Finite volume PGF control structure
+end type PressureForce_FV_host_type
+
 contains
 
 !> Calls PressureForce_FV_nonBouss and does the Fortran-only work around that call.
@@ -144,15 +154,15 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(Box_t),          intent(in)  :: bxHkint !< The interior interfaces of the whole column,
                                                !! [isc:iec, jsc:jec, 2:nz]
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
+  type(ocean_grid_type), target,              intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
-  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
+  type(unit_scale_type), target,              intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> kg m-2]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
   type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
-  type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
+  type(PressureForce_FV_CS), target,          intent(in)  :: CS  !< Finite volume PGF control structure
   type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
   type(accel_diag_ptrs),                      pointer     :: ADp !< Acceleration diagnostic pointers
   type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean
@@ -183,6 +193,8 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
                                                    !! certain height changes.  This only applies if
                                                    !! BOUSSINESQ is false.
   ! Local variables
+  type(PressureForce_FV_host_type), target :: ctx ! What the host helpers use
+  type(c_ptr) :: host ! The address of ctx
   type(RealArray_t) :: e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a
   type(RealArray_t) :: MassWt_u_a, MassWt_v_a
   real, dimension(:,:), contiguous, pointer :: e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide
@@ -208,9 +220,12 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
                           ub=[h_a%ub(1),PFv_a%ub(2),h_a%ub(3)])
   endif
 
+  ctx%G => G ; ctx%US => US ; ctx%CS => CS
+  host = c_loc(ctx)
+
   call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, &
-                                 G, Gcore, GV, US, CS, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, &
-                                 e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
+                                 G, Gcore, GV, US, CS, host, ALE_CSp, p_atm_a, pbce_a, eta_a, &
+                                 Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
                                  MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, H_to_RZ, H_subroundoff, &
                                  nk_rho_varies, semi_Boussinesq)
 
@@ -288,8 +303,8 @@ end subroutine PressureForce_FV_nonBouss_cap
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
-                                     PFv_a, G, Gcore, GV, US, CS, ALE_CSp, p_atm_a, pbce_a, eta_a, &
-                                     Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                     PFv_a, G, Gcore, GV, US, CS, host, ALE_CSp, p_atm_a, pbce_a, &
+                                     eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
                                      e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, &
                                      H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
@@ -313,6 +328,9 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
   type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
   type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grid, unit scaling and control
+                                         !! structure) that the host helpers use
   type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
   type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean
                                                            !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
@@ -665,7 +683,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         pbot(i,j) = p(i,j,nz+1)
       enddo ; enddo
-      call calc_SAL(pbot, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+      call PressureForce_FV_calc_SAL_host(host, pbot, e_sal)
     else
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -673,7 +691,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
         ! Remove above sea level topography at floodable cells
         SSH(i,j) = SSH(i,j) - max(-bathyT(i,j)-meanSL(i,j), 0.0)
       enddo ; enddo
-      call calc_SAL(SSH, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+      call PressureForce_FV_calc_SAL_host(host, SSH, e_sal)
     endif
 
     ! This gives new answers after the change of separating SAL from tidal forcing module.
@@ -688,15 +706,15 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   ! Calculate and add tidal geopotential height anomaly to interface height.
   if (CS%tides) then
     if ((CS%tides_answer_date>20230630) .or. (.not.semi_Boussinesq)) then
-      call calc_tidal_forcing(CS%Time, e_tidal_eq, e_tidal_sal, G, US, CS%tides_CSp)
+      call PressureForce_FV_tides_host(host, e_tidal_eq, e_tidal_sal)
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         za(i,j,1) = za(i,j,1) - g_Earth * (e_tidal_eq(i,j) + e_tidal_sal(i,j))
       enddo ; enddo
     else  ! This block recreates older answers with tides.
       if (.not.CS%calculate_SAL) e_sal(:,:) = 0.0
-      call calc_tidal_forcing_legacy(CS%Time, e_sal, e_sal_and_tide, e_tidal_eq, e_tidal_sal, &
-                                     G, US, CS%tides_CSp)
+      call PressureForce_FV_tides_legacy_host(host, e_sal, e_sal_and_tide, e_tidal_eq, &
+                                              e_tidal_sal)
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         za(i,j,1) = za(i,j,1) - g_Earth * e_sal_and_tide(i,j)
@@ -1155,15 +1173,15 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
                                              !! [isc:iec, JscB:JecB, 1:nz]
   type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
+  type(ocean_grid_type), target,              intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
-  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
+  type(unit_scale_type), target,              intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> m]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
   type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
-  type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
+  type(PressureForce_FV_CS), target,          intent(in)  :: CS  !< Finite volume PGF control structure
   type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
   type(accel_diag_ptrs),                      pointer     :: ADp !< Acceleration diagnostic pointers
   type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean
@@ -1204,6 +1222,8 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   integer,           intent(in) :: nk_rho_varies !< The number of layers at the top where the
                                                  !! density does not track any target density.
   ! Local variables
+  type(PressureForce_FV_host_type), target :: ctx ! What the host helpers use
+  type(c_ptr) :: host ! The address of ctx
   type(RealArray_t) :: e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a
   type(RealArray_t) :: MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a
   real, dimension(:,:), contiguous, pointer :: e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide
@@ -1246,9 +1266,12 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   call intx_dpa_a%alloc(lb=[PFu_a%lb(1),h_a%lb(2),h_a%lb(3)], ub=[PFu_a%ub(1),h_a%ub(2),h_a%ub(3)])
   call inty_dpa_a%alloc(lb=[h_a%lb(1),PFv_a%lb(2),h_a%lb(3)], ub=[h_a%ub(1),PFv_a%ub(2),h_a%ub(3)])
 
+  ctx%G => G ; ctx%US => US ; ctx%CS => CS
+  host = c_loc(ctx)
+
   call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, &
-                              US, CS, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, e_sal_a, &
-                              e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
+                              US, CS, host, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, &
+                              e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
                               MassWt_v_a, intx_dpa_a, inty_dpa_a, Z_ref, g_Earth, H_to_Z, Z_to_H, &
                               H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, nk_rho_varies)
 
@@ -1418,11 +1441,11 @@ end subroutine PressureForce_FV_Bouss_cap
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                                  GV, US, CS, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, &
-                                  e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
-                                  MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, Z_ref, g_Earth, &
-                                  H_to_Z, Z_to_H, H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, &
-                                  nk_rho_varies)
+                                  GV, US, CS, host, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, &
+                                  g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                  e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, &
+                                  inty_dpa_a, Z_ref, g_Earth, H_to_Z, Z_to_H, H_to_RZ, Rho0, &
+                                  H_subroundoff, dZ_subroundoff, nk_rho_varies)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
@@ -1442,6 +1465,9 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
   type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
   type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grid, unit scaling and control
+                                         !! structure) that the host helpers use
   type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
   type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean
                                                          !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
@@ -1708,7 +1734,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
         SSH(i,j) = SSH(i,j) + h(i,j,k)*H_to_Z
       enddo ; enddo
     enddo
-    call calc_SAL(SSH, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+    call PressureForce_FV_calc_SAL_host(host, SSH, e_sal)
 
     if (CS%tides_answer_date>20230630) then ! answers_date between [20230701, 20250131]
       !$OMP parallel do default(shared)
@@ -1725,15 +1751,15 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
     !$omp target update from(e(:,:,nz+1))
 
     if (CS%tides_answer_date>20230630) then ! answers_date between [20230701, 20250131]
-      call calc_tidal_forcing(CS%Time, e_tidal_eq, e_tidal_sal, G, US, CS%tides_CSp)
+      call PressureForce_FV_tides_host(host, e_tidal_eq, e_tidal_sal)
      !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         e(i,j,nz+1) = e(i,j,nz+1) - (e_tidal_eq(i,j) + e_tidal_sal(i,j))
       enddo ; enddo
     else  ! answers_date before 20230701
       if (.not.CS%calculate_SAL) e_sal(:,:) = 0.0
-      call calc_tidal_forcing_legacy(CS%Time, e_sal, e_sal_and_tide, e_tidal_eq, e_tidal_sal, &
-                                     G, US, CS%tides_CSp)
+      call PressureForce_FV_tides_legacy_host(host, e_sal, e_sal_and_tide, e_tidal_eq, &
+                                              e_tidal_sal)
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         e(i,j,nz+1) = e(i,j,nz+1) - e_sal_and_tide(i,j)
@@ -1928,7 +1954,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         pbot(i,j) = pa(i,j,nz+1) - GxRho_ref * (e(i,j,nz+1) - Z_ref)
       enddo ; enddo
-      call calc_SAL(pbot, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+      call PressureForce_FV_calc_SAL_host(host, pbot, e_sal)
     else
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -1936,7 +1962,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
         ! Remove above sea level topography at floodable cells
         SSH(i,j) = SSH(i,j) - max(-bathyT(i,j)-meanSL(i,j), 0.0)
       enddo ; enddo
-      call calc_SAL(SSH, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+      call PressureForce_FV_calc_SAL_host(host, SSH, e_sal)
     endif
     if (.not.CS%bq_sal_tides) then ; do K=1,nz+1
       !$OMP parallel do default(shared)
@@ -1949,7 +1975,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
 
   ! Calculate and add tidal geopotential anomaly to interface height (new answers)
   if (CS%tides .and. CS%tides_answer_date>20250131) then
-    call calc_tidal_forcing(CS%Time, e_tidal_eq, e_tidal_sal, G, US, CS%tides_CSp)
+    call PressureForce_FV_tides_host(host, e_tidal_eq, e_tidal_sal)
     if (.not.CS%bq_sal_tides) then ; do K=1,nz+1
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -2545,6 +2571,84 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
   call e_a%free()
 
 end subroutine PressureForce_FV_Bouss
+
+!> Calls calc_SAL with the grid, unit scaling and SAL control structure that host points to.
+subroutine PressureForce_FV_calc_SAL_host(host, eta, eta_sal)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grid, unit scaling and control
+                                         !! structure) that the host helpers use
+  real, dimension(:,:), contiguous, intent(in) :: eta !< The sea surface height anomaly from a
+                                                      !! time-mean geoid or total bottom pressure
+                                                      !! [Z ~> m] or [R L2 T-2 ~> Pa].
+  real, dimension(:,:), contiguous, intent(out) :: eta_sal !< The geopotential height anomaly from
+                                                           !! self-attraction and loading [Z ~> m].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+  type(PressureForce_FV_CS), pointer :: CS
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US ; CS => ctx%CS
+
+  call calc_SAL(eta, eta_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+
+end subroutine PressureForce_FV_calc_SAL_host
+
+!> Calls calc_tidal_forcing with the clock, grid, unit scaling and tidal forcing control
+!! structure that host points to.
+subroutine PressureForce_FV_tides_host(host, e_tide_eq, e_tide_sal)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grid, unit scaling and control
+                                         !! structure) that the host helpers use
+  real, dimension(:,:), contiguous, intent(out) :: e_tide_eq !< The geopotential height anomalies
+                                                             !! due to the equilibrium tides
+                                                             !! [Z ~> m].
+  real, dimension(:,:), contiguous, intent(out) :: e_tide_sal !< The geopotential height anomalies
+                                                              !! due to the tidal SAL [Z ~> m].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+  type(PressureForce_FV_CS), pointer :: CS
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US ; CS => ctx%CS
+
+  call calc_tidal_forcing(CS%Time, e_tide_eq, e_tide_sal, G, US, CS%tides_CSp)
+
+end subroutine PressureForce_FV_tides_host
+
+!> Calls calc_tidal_forcing_legacy with the clock, grid, unit scaling and tidal forcing
+!! control structure that host points to.
+subroutine PressureForce_FV_tides_legacy_host(host, e_sal, e_sal_tide, e_tide_eq, e_tide_sal)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grid, unit scaling and control
+                                         !! structure) that the host helpers use
+  real, dimension(:,:), contiguous, intent(in) :: e_sal !< The self-attraction and loading fields
+                                                        !! calculated previously used to initialized
+                                                        !! e_sal_tide [Z ~> m].
+  real, dimension(:,:), contiguous, intent(out) :: e_sal_tide !< The total geopotential height
+                                                              !! anomalies due to both SAL and tidal
+                                                              !! forcings [Z ~> m].
+  real, dimension(:,:), contiguous, intent(out) :: e_tide_eq !< The geopotential height anomalies
+                                                             !! due to the equilibrium tides
+                                                             !! [Z ~> m].
+  real, dimension(:,:), contiguous, intent(out) :: e_tide_sal !< The geopotential height anomalies
+                                                              !! due to the tidal SAL [Z ~> m].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+  type(PressureForce_FV_CS), pointer :: CS
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US ; CS => ctx%CS
+
+  call calc_tidal_forcing_legacy(CS%Time, e_sal, e_sal_tide, e_tide_eq, e_tide_sal, &
+                                 G, US, CS%tides_CSp)
+
+end subroutine PressureForce_FV_tides_legacy_host
 
 !> Initializes the finite volume pressure gradient control structure
 subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL_CSp, tides_CSp)
