@@ -135,12 +135,16 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, US, CS, &
-                                     ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
+subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, &
+                                     US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
                                              !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),          intent(in)  :: bxU0  !< The u-point box of the whole column,
+                                             !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),          intent(in)  :: bxV0  !< The v-point box of the whole column,
+                                             !! [isc:iec, JscB:JecB, 1:nz]
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
@@ -162,6 +166,10 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   ! Local variables
   type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
                          ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
+  type(Box_t) :: bxU0_pk  ! bxU0 grown by one point at the end in k,
+                         ! [IscB:IecB, jsc:jec, 1:nz+1]
+  type(Box_t) :: bxV0_pk  ! bxV0 grown by one point at the end in k,
+                         ! [isc:iec, JscB:JecB, 1:nz+1]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv, mask2dCu, mask2dCv
@@ -299,6 +307,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
+  bxU0_pk = bxU0%growHi(dim=3, n=1)
+  bxV0_pk = bxV0%growHi(dim=3, n=1)
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
   EOSdom_u(1) = Isq - (G%IsdB-1) ; EOSdom_u(2) = Ieq - (G%IsdB-1)
   EOSdom_v(1) = is - (G%isd-1)   ; EOSdom_v(2) = ie - (G%isd-1)
@@ -631,12 +641,13 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     T_int_W(:,:) = 0.0 ; S_int_W(:,:) = 0.0 ; p_int_W(:,:) = 0.0
     T_int_E(:,:) = 0.0 ; S_int_E(:,:) = 0.0 ; p_int_E(:,:) = 0.0
     intx_za_nonlin(:,:) = 0.0 ; intx_za_cor_ri(:,:) = 0.0 ; dp_int_x(:,:) = 0.0
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       seek_x_cor(I,j) = (mask2dCu(I,j) > 0.)
       delta_p_x(I,j)  = 0.0
     enddo
 
-    do concurrent (j=js:je, I=Isq:Ieq) ; if (seek_x_cor(I,j)) then
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                   I=bxU0%idxS(1):bxU0%idxE(1)) ; if (seek_x_cor(I,j)) then
       if ((p(i+1,j,2) >= p(i,j,1)) .and. (p(i,j,2) >= p(i+1,j,1))) then
         ! This is the typical case in the open ocean, so use the topmost interface.
         T_int_W(I,j) = T_top(i,j) ; T_int_E(I,j) = T_top(i+1,j)
@@ -697,7 +708,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
         endif ; enddo ; enddo
       else
         ! There are still points where a correction is needed, so use the top interface.
-        do concurrent (j=js:je, I=Isq:Ieq) ; if (seek_x_cor(I,j)) then
+        do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), &
+                       I=bxU0%idxS(1):bxU0%idxE(1)) ; if (seek_x_cor(I,j)) then
           T_int_W(I,j) = T_top(i,j) ; T_int_E(I,j) = T_top(i+1,j)
           S_int_W(I,j) = S_top(i,j) ; S_int_E(I,j) = S_top(i+1,j)
           p_int_W(I,j) = p(i,j,1) ; p_int_E(I,j) = p(i+1,j,1)
@@ -734,12 +746,13 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     T_int_S(:,:) = 0.0 ; S_int_S(:,:) = 0.0 ; p_int_S(:,:) = 0.0
     T_int_N(:,:) = 0.0 ; S_int_N(:,:) = 0.0 ; p_int_N(:,:) = 0.0
     inty_za_nonlin(:,:) = 0.0 ; inty_za_cor_ri(:,:) = 0.0 ; dp_int_y(:,:) = 0.0
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       seek_y_cor(i,J) = (mask2dCv(i,J) > 0.)
       delta_p_y(i,J) = 0.0
     enddo
 
-    do concurrent (J=Jsq:Jeq, i=is:ie) ; if (seek_y_cor(i,J)) then
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                   i=bxV0%idxS(1):bxV0%idxE(1)) ; if (seek_y_cor(i,J)) then
       if ((p(i,j+1,2) >= p(i,j,1)) .and. (p(i,j,2) >= p(i,j+1,1))) then
         ! This is the typical case in the open ocean, so use the topmost interface.
         T_int_S(i,J) = T_top(i,j) ; T_int_N(i,J) = T_top(i,j+1)
@@ -799,7 +812,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
         endif ; enddo ; enddo
       else
         ! There are still points where a correction is needed, so use the top interface.
-        do concurrent (J=Jsq:Jeq, i=is:ie) ; if (seek_y_cor(i,J)) then
+        do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), &
+                       i=bxV0%idxS(1):bxV0%idxE(1)) ; if (seek_y_cor(i,J)) then
           T_int_S(i,J) = T_top(i,j) ; T_int_N(i,J) = T_top(i,j+1)
           S_int_S(i,J) = S_top(i,j) ; S_int_N(i,J) = S_top(i,j+1)
           p_int_S(i,J) = p(i,j,1) ; p_int_N(i,J) = p(i,j+1,1)
@@ -844,11 +858,13 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     endif
 
     ! Correct intx_pa and inty_pa at each interface using vertically constant corrections.
-    do concurrent (K=1:nz+1, j=js:je, I=Isq:Ieq)
+    do concurrent (K=bxU0_pk%idxS(3):bxU0_pk%idxE(3), j=bxU0_pk%idxS(2):bxU0_pk%idxE(2), &
+                   I=bxU0_pk%idxS(1):bxU0_pk%idxE(1))
       intx_za(I,j,K) = intx_za(I,j,K) + intx_za_cor_ri(I,j)
     enddo
 
-    do concurrent (K=1:nz+1, J=Jsq:Jeq, i=is:ie)
+    do concurrent (K=bxV0_pk%idxS(3):bxV0_pk%idxE(3), J=bxV0_pk%idxS(2):bxV0_pk%idxE(2), &
+                   i=bxV0_pk%idxS(1):bxV0_pk%idxE(1))
       inty_za(i,J,K) = inty_za(i,J,K) + inty_za_cor_ri(i,J)
     enddo
 
@@ -961,10 +977,14 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
                                         i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
     enddo ; endif
-    if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+    if (associated(ADp%sal_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
+                                                     j=bxU0%idxS(2):bxU0%idxE(2), &
+                                                     I=bxU0%idxS(1):bxU0%idxE(1))
       ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * IdxCu(I,j)
     enddo ; endif
-    if (associated(ADp%sal_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+    if (associated(ADp%sal_v)) then ; do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), &
+                                                     J=bxV0%idxS(2):bxV0%idxE(2), &
+                                                     i=bxV0%idxS(1):bxV0%idxE(1))
       ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * IdyCv(i,J)
     enddo ; endif
     if (CS%id_sal_u>0) call post_data(CS%id_sal_u, ADp%sal_u, CS%diag)
@@ -972,10 +992,14 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   endif
 
   if (CS%tides .and. (associated(ADp%tides_u) .or. associated(ADp%tides_v))) then
-    if (associated(ADp%tides_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+    if (associated(ADp%tides_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
+                                                       j=bxU0%idxS(2):bxU0%idxE(2), &
+                                                       I=bxU0%idxS(1):bxU0%idxE(1))
       ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * IdxCu(I,j)
     enddo ; endif
-    if (associated(ADp%tides_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+    if (associated(ADp%tides_v)) then ; do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), &
+                                                       J=bxV0%idxS(2):bxV0%idxE(2), &
+                                                       i=bxV0%idxS(1):bxV0%idxE(1))
       ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * IdyCv(i,J)
     enddo ; endif
     if (CS%id_tides_u>0) call post_data(CS%id_tides_u, ADp%tides_u, CS%diag)
@@ -984,6 +1008,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
 
   call p_a%free()
   call bxQ0_pij%free()
+  call bxU0_pk%free() ; call bxV0_pk%free()
 
 end subroutine PressureForce_FV_nonBouss
 
@@ -1697,7 +1722,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
     T_int_W(:,:) = 0.0 ; S_int_W(:,:) = 0.0 ; p_int_W(:,:) = 0.0
     T_int_E(:,:) = 0.0 ; S_int_E(:,:) = 0.0 ; p_int_E(:,:) = 0.0
     intx_pa_nonlin(:,:) = 0.0 ; dgeo_x(:,:) = 0.0 ; intx_pa_cor_ri(:,:) = 0.0
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       seek_x_cor(I,j) = (mask2dCu(I,j) > 0.)
       delta_z_x(I,j)  = 0.0
     enddo
@@ -1807,7 +1832,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
     T_int_S(:,:) = 0.0 ; S_int_S(:,:) = 0.0 ; p_int_S(:,:) = 0.0
     T_int_N(:,:) = 0.0 ; S_int_N(:,:) = 0.0 ; p_int_N(:,:) = 0.0
     inty_pa_nonlin(:,:) = 0.0 ; dgeo_y(:,:) = 0.0 ; inty_pa_cor_ri(:,:) = 0.0
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       seek_y_cor(i,J) = (mask2dCv(i,J) > 0.)
       delta_z_y(i,J)  = 0.0
     enddo
@@ -2155,19 +2180,27 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
     enddo ; endif
     if (CS%bq_sal_tides) then
       ! sal_u = ( e(i+1) - e(i) ) * g / dx
-      if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+      if (associated(ADp%sal_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
+                                                       j=bxU0%idxS(2):bxU0%idxE(2), &
+                                                       I=bxU0%idxS(1):bxU0%idxE(1))
         ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * IdxCu(I,j)
       enddo ; endif
-      if (associated(ADp%sal_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+      if (associated(ADp%sal_v)) then ; do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), &
+                                                       J=bxV0%idxS(2):bxV0%idxE(2), &
+                                                       i=bxV0%idxS(1):bxV0%idxE(1))
         ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * IdyCv(i,J)
       enddo ; endif
     else
       ! sal_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
-      if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+      if (associated(ADp%sal_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
+                                                       j=bxU0%idxS(2):bxU0%idxE(2), &
+                                                       I=bxU0%idxS(1):bxU0%idxE(1))
         ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * IdxCu(I,j) * I_Rho0 * &
           (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
       enddo ; endif
-      if (associated(ADp%sal_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+      if (associated(ADp%sal_v)) then ; do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), &
+                                                       J=bxV0%idxS(2):bxV0%idxE(2), &
+                                                       i=bxV0%idxS(1):bxV0%idxE(1))
         ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * IdyCv(i,J) * I_Rho0 * &
           (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
       enddo ; endif
@@ -2179,19 +2212,27 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
   if (CS%tides .and. ((associated(ADp%tides_u) .or. associated(ADp%tides_v)))) then
     if (CS%bq_sal_tides) then
       ! tides_u = ( e(i+1) - e(i) ) * g / dx
-      if (associated(ADp%tides_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+      if (associated(ADp%tides_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
+                                                         j=bxU0%idxS(2):bxU0%idxE(2), &
+                                                         I=bxU0%idxS(1):bxU0%idxE(1))
         ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * IdxCu(I,j)
       enddo ; endif
-      if (associated(ADp%tides_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+      if (associated(ADp%tides_v)) then ; do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), &
+                                                         J=bxV0%idxS(2):bxV0%idxE(2), &
+                                                         i=bxV0%idxS(1):bxV0%idxE(1))
         ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * IdyCv(i,J)
       enddo ; endif
     else
       ! tides_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
-      if (associated(ADp%tides_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+      if (associated(ADp%tides_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
+                                                         j=bxU0%idxS(2):bxU0%idxE(2), &
+                                                         I=bxU0%idxS(1):bxU0%idxE(1))
         ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * IdxCu(I,j) * I_Rho0 * &
           (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
       enddo ; endif
-      if (associated(ADp%tides_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+      if (associated(ADp%tides_v)) then ; do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), &
+                                                         J=bxV0%idxS(2):bxV0%idxE(2), &
+                                                         i=bxV0%idxS(1):bxV0%idxE(1))
         ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * IdyCv(i,J) * I_Rho0 * &
           (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
       enddo ; endif

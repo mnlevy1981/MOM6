@@ -1,7 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
-!!SKILLS: 0.3.2
+!!SKILLS: 0.4.0
 
 !> A thin wrapper for Boussinesq/non-Boussinesq forms of the pressure force calculation.
 module MOM_PressureForce
@@ -142,8 +142,8 @@ subroutine PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a, G, Gc
       call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, &
                                   US, CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
     else
-      call PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, US, &
-                                     CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
+      call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, &
+                                     US, CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
     endif
   else
     if (GV%Boussinesq) then
