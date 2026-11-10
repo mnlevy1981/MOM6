@@ -98,6 +98,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   ! Local variables
   type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
                          ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
+  type(Box_t) :: bxH0_nmk ! bxH0 shrunk by one point at the start in k,
+                         ! [isc:iec, jsc:jec, 2:nz]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv
@@ -158,6 +160,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
   bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
+  bxH0_nmk = bxH0%growLo(dim=3, n=-1)
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
   call h_a%view(h) ; call PFu_a%view(PFu) ; call PFv_a%view(PFv)
@@ -186,8 +189,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
 
   I_gEarth = 1.0 / GV%g_Earth
   dp_neglect = GV%g_Earth * GV%H_to_RZ * GV%H_subroundoff
-  do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (GV%Rlay(k)) ; enddo
-  do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+  do concurrent (k=bxH0%idxS(3):bxH0%idxE(3)) ; alpha_Lay(k) = 1.0 / (GV%Rlay(k)) ; enddo
+  do concurrent (k=bxH0_nmk%idxS(3):bxH0_nmk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
     !$OMP parallel do default(shared)
@@ -354,7 +357,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (pbce_a%associated()) then
     call Rlay_a%alloc(lb=LBOUND(GV%Rlay), ub=UBOUND(GV%Rlay), source=GV%Rlay)
-    call Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv_tmp, G%isd, GV%ke, GV%g_Earth, GV%H_to_RZ, &
+    call Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv_tmp, G%isd, GV%g_Earth, GV%H_to_RZ, &
                            GV%H_subroundoff, Rlay_a, CS%GFS_scale, pbce_a, alpha_star_a)
     call Rlay_a%free()
   endif
@@ -406,6 +409,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
 
   call p_a%free() ; call alpha_star_a%free()
   call bxQ0_pij%free()
+  call bxH0_nmk%free()
 
 end subroutine PressureForce_Mont_nonBouss
 
@@ -635,7 +639,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
 
   if (pbce_a%associated()) then
     call g_prime_a%alloc(lb=LBOUND(GV%g_prime), ub=UBOUND(GV%g_prime), source=GV%g_prime)
-    call Set_pbce_Bouss(bxH0, bxQ0, e_a, tv_tmp, Gcore, G%isd, G%jsd, GV%ke, GV%H_to_Z, &
+    call Set_pbce_Bouss(bxH0, bxQ0, e_a, tv_tmp, Gcore, G%isd, G%jsd, GV%H_to_Z, &
                         GV%g_Earth, GV%Rho0, GV%dZ_subroundoff, g_prime_a, CS%Rho0, &
                         CS%GFS_scale, pbce_a, rho_star_a, 1)
     call g_prime_a%free()
@@ -714,7 +718,7 @@ end subroutine PressureForce_Mont_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
-subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, ke, H_to_Z, g_Earth, GV_Rho0, &
+subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth, GV_Rho0, &
                           dZ_subroundoff, g_prime_a, Rho0, GFS_scale, pbce_a, rho_star_a, nkblock)
   type(Box_t),          intent(in)  :: bxH0 !< The h-point box of the whole column,
                                             !! [isc:iec, jsc:jec, 1:nz]
@@ -725,7 +729,6 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, ke, H_to_Z, g_Ea
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   integer, intent(in) :: isd !< The start i-index of cell centers within the data domain
   integer, intent(in) :: jsd !< The start j-index of cell centers within the data domain
-  integer, intent(in) :: ke  !< The number of layers/levels in the vertical
   real,    intent(in) :: H_to_Z !< A constant that translates thickness units to the units of
                                 !! depth [Z H-1 ~> 1 or m3 kg-1].
   real,    intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
@@ -783,7 +786,7 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, ke, H_to_Z, g_Ea
   if (rho_star_a%associated()) call rho_star_a%view(rho_star)
 
   !$omp target data map(alloc: Ihtot)
-  Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = ke
+  Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = bxH0%idxE(3)
   iec = bxH0%idxE(1) ; jec = bxH0%idxE(2)
   bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
@@ -872,7 +875,7 @@ end subroutine Set_pbce_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the column mass.
-subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_subroundoff, &
+subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, g_Earth, H_to_RZ, H_subroundoff, &
                              Rlay_a, GFS_scale, pbce_a, alpha_star_a)
   type(Box_t),          intent(in)  :: bxH0 !< The h-point box of the whole column,
                                             !! [isc:iec, jsc:jec, 1:nz]
@@ -881,7 +884,6 @@ subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_s
   type(RealArray_t), intent(in) :: p_a !< Interface pressures [R L2 T-2 ~> Pa].
   type(thermo_var_ptrs),                intent(in)  :: tv !< Thermodynamic variables
   integer, intent(in) :: isd !< The start i-index of cell centers within the data domain
-  integer, intent(in) :: ke  !< The number of layers/levels in the vertical
   real,    intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
   real,    intent(in) :: H_to_RZ !< A constant that translates thickness units to the units of
                                  !! mass per unit area [R Z H-1 ~> kg m-3 or 1].
@@ -900,6 +902,8 @@ subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_s
   type(RealArray_t), intent(in) :: alpha_star_a !< The layer specific volumes
                                                           !! (maybe compressibility compensated) [R-1 ~> m3 kg-1].
   ! Local variables
+  type(Box_t) :: bxH0_nmk ! bxH0 shrunk by one point at the start in k,
+                         ! [isc:iec, jsc:jec, 2:nz]
   real, dimension(:,:,:), contiguous, pointer :: p, pbce, alpha_star
   real, dimension(:), contiguous, pointer :: Rlay
   real, dimension(p_a%lb(1):p_a%ub(1),p_a%lb(2):p_a%ub(2)) :: &
@@ -925,8 +929,9 @@ subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_s
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
   integer :: iec
 
-  Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = ke
+  Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = bxH0%idxE(3)
   iec = bxH0%idxE(1)
+  bxH0_nmk = bxH0%growLo(dim=3, n=-1)
   EOSdom(1) = Isq - (isd-1) ;  EOSdom(2) = iec+1 - (isd-1)
 
   call p_a%view(p) ; call pbce_a%view(pbce) ; call Rlay_a%view(Rlay)
@@ -978,8 +983,8 @@ subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_s
     endif
   else ! not use_EOS
 
-    do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-    do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+    do concurrent (k=bxH0%idxS(3):bxH0%idxE(3)) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
+    do concurrent (k=bxH0_nmk%idxS(3):bxH0_nmk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1
@@ -1004,6 +1009,7 @@ subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_s
       pbce(i,j,k) = pbce(i,j,k) + dpbce(i,j)
     enddo ; enddo ; enddo
   endif
+  call bxH0_nmk%free()
 
 end subroutine Set_pbce_nonBouss
 
