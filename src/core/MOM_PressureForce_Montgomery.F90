@@ -96,6 +96,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   type(RealArray_t), intent(inout) :: eta_a !< The total column mass used to calculate
                                                                  !! PFu and PFv [H ~> kg m-2].
   ! Local variables
+  type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
+                         ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv
@@ -155,6 +157,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
   call h_a%view(h) ; call PFu_a%view(PFu) ; call PFv_a%view(PFv)
@@ -269,7 +272,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
     if (nkmb>0) then
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -288,7 +291,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
     else
       tv_tmp%T => tv%T ; tv_tmp%S => tv%S
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = 0 ; enddo
+      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = 0 ; enddo
     endif
     !$OMP parallel do default(shared) private(rho_in_situ)
     do k=1,nz ; do j=Jsq,Jeq+1
@@ -402,6 +405,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
 
   call p_a%free() ; call alpha_star_a%free()
+  call bxQ0_pij%free()
 
 end subroutine PressureForce_Mont_nonBouss
 
@@ -436,6 +440,8 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
                                                                 !! [L2 T-2 H-1 ~> m s-2].
   type(RealArray_t), intent(inout) :: eta_a !< Free surface height [H ~> m].
   ! Local variables
+  type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
+                         ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv
@@ -487,6 +493,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
   call h_a%view(h) ; call PFu_a%view(PFu) ; call PFv_a%view(PFv)
@@ -568,7 +575,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
 
-      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -588,7 +595,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
     else
       tv_tmp%T => tv%T ; tv_tmp%S => tv%S
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = 0.0 ; enddo
+      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = 0.0 ; enddo
     endif
 
     ! This no longer includes any pressure dependency, since this routine
@@ -701,6 +708,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
   if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
 
   call e_a%free() ; call rho_star_a%free()
+  call bxQ0_pij%free()
 
 end subroutine PressureForce_Mont_Bouss
 

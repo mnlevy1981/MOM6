@@ -160,6 +160,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   type(RealArray_t), intent(inout) :: eta_a !< The total column mass used to
                                                            !! calculate PFu and PFv [H ~> kg m-2].
   ! Local variables
+  type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
+                         ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv, mask2dCu, mask2dCv
@@ -296,6 +298,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
   EOSdom_u(1) = Isq - (G%IsdB-1) ; EOSdom_u(2) = Ieq - (G%IsdB-1)
   EOSdom_v(1) = is - (G%isd-1)   ; EOSdom_v(2) = ie - (G%isd-1)
@@ -357,7 +360,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     if (nkmb>0) then
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -390,7 +393,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   elseif ( use_ALE .and. (CS%Recon_Scheme == 3) ) then
       call TS_PLM_WLS_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h)
   elseif (CS%reset_intxpa_integral) then
-    do concurrent (k=1:nz, j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    do concurrent (k=bxQ0_pij%idxS(3):bxQ0_pij%idxE(3), j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
+                   i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
       T_b(i,j,k) = tv%T(i,j,k) ; S_b(i,j,k) = tv%S(i,j,k)
     enddo
   endif
@@ -526,11 +530,11 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   if (CS%correction_intxpa .or. CS%reset_intxpa_integral) then
     ! Determine surface temperature and salinity for use in the pressure gradient corrections
     if (use_ALE .and. (CS%Recon_Scheme > 0)) then
-      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
         T_top(i,j) = T_t(i,j,1) ; S_top(i,j) = S_t(i,j,1)
       enddo
     else
-      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
         T_top(i,j) = tv%T(i,j,1) ; S_top(i,j) = tv%S(i,j,1)
       enddo
     endif
@@ -941,7 +945,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   if (CS%id_e_tide>0) then
     ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
     ! New diagnostics are given for each individual field.
-    if (CS%tides_answer_date>20230630) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    if (CS%tides_answer_date>20230630) then ; do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
+                                                             i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
       e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
     enddo ; endif
     call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
@@ -952,7 +957,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
   if (CS%calculate_SAL .and. (associated(ADp%sal_u) .or. associated(ADp%sal_v))) then
-    if (CS%tides) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    if (CS%tides) then ; do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
+                                        i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
     enddo ; endif
     if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
@@ -977,6 +983,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   endif
 
   call p_a%free()
+  call bxQ0_pij%free()
 
 end subroutine PressureForce_FV_nonBouss
 
@@ -1297,7 +1304,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
 
-      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -1504,7 +1511,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
         T_top(i,j) = T_t(i,j,1) ; S_top(i,j) = S_t(i,j,1)
       enddo ; enddo
     else
-      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
         T_top(i,j) = tv%T(i,j,1) ; S_top(i,j) = tv%S(i,j,1)
       enddo
     endif
@@ -2130,7 +2137,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
   if (CS%id_e_tide>0) then
     ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
     ! New diagnostics are given for each individual field.
-    if (CS%tides_answer_date>20230630) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    if (CS%tides_answer_date>20230630) then ; do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
+                                                             i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
       e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
     enddo ; endif
     call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
@@ -2141,7 +2149,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
   if (CS%calculate_SAL .and. ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
-    if (CS%tides) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    if (CS%tides) then ; do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
+                                        i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
     enddo ; endif
     if (CS%bq_sal_tides) then
