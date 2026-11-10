@@ -1,7 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
-!!SKILLS: 0.3.2
+!!SKILLS: 0.4.0
 
 !> Finite volume pressure gradient (integrated by quadrature or analytically)
 module MOM_PressureForce_FV
@@ -357,7 +357,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     if (nkmb>0) then
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -390,9 +390,9 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   elseif ( use_ALE .and. (CS%Recon_Scheme == 3) ) then
       call TS_PLM_WLS_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h)
   elseif (CS%reset_intxpa_integral) then
-    do k=1,nz ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (k=1:nz, j=Jsq:Jeq+1, i=Isq:Ieq+1)
       T_b(i,j,k) = tv%T(i,j,k) ; S_b(i,j,k) = tv%S(i,j,k)
-    enddo ; enddo ; enddo
+    enddo
   endif
 
   !$OMP parallel do default(shared) private(alpha_anom,dp)
@@ -526,13 +526,13 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   if (CS%correction_intxpa .or. CS%reset_intxpa_integral) then
     ! Determine surface temperature and salinity for use in the pressure gradient corrections
     if (use_ALE .and. (CS%Recon_Scheme > 0)) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         T_top(i,j) = T_t(i,j,1) ; S_top(i,j) = S_t(i,j,1)
-      enddo ; enddo
+      enddo
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         T_top(i,j) = tv%T(i,j,1) ; S_top(i,j) = tv%S(i,j,1)
-      enddo ; enddo
+      enddo
     endif
   endif
 
@@ -627,12 +627,12 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     T_int_W(:,:) = 0.0 ; S_int_W(:,:) = 0.0 ; p_int_W(:,:) = 0.0
     T_int_E(:,:) = 0.0 ; S_int_E(:,:) = 0.0 ; p_int_E(:,:) = 0.0
     intx_za_nonlin(:,:) = 0.0 ; intx_za_cor_ri(:,:) = 0.0 ; dp_int_x(:,:) = 0.0
-    do j=js,je ; do I=Isq,Ieq
+    do concurrent (j=js:je, I=Isq:Ieq)
       seek_x_cor(I,j) = (mask2dCu(I,j) > 0.)
       delta_p_x(I,j)  = 0.0
-    enddo ; enddo
+    enddo
 
-    do j=js,je ; do I=Isq,Ieq ; if (seek_x_cor(I,j)) then
+    do concurrent (j=js:je, I=Isq:Ieq) ; if (seek_x_cor(I,j)) then
       if ((p(i+1,j,2) >= p(i,j,1)) .and. (p(i,j,2) >= p(i+1,j,1))) then
         ! This is the typical case in the open ocean, so use the topmost interface.
         T_int_W(I,j) = T_top(i,j) ; T_int_E(I,j) = T_top(i+1,j)
@@ -642,7 +642,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
         dp_int_x(I,j) = p(i+1,j,1)-p(i,j,1)
         seek_x_cor(I,j) = .false.
       endif
-    endif ; enddo ; enddo
+    endif ; enddo
 
     do k=1,nz
       do_more_k = .false.
@@ -693,14 +693,14 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
         endif ; enddo ; enddo
       else
         ! There are still points where a correction is needed, so use the top interface.
-        do j=js,je ; do I=Isq,Ieq ; if (seek_x_cor(I,j)) then
+        do concurrent (j=js:je, I=Isq:Ieq) ; if (seek_x_cor(I,j)) then
           T_int_W(I,j) = T_top(i,j) ; T_int_E(I,j) = T_top(i+1,j)
           S_int_W(I,j) = S_top(i,j) ; S_int_E(I,j) = S_top(i+1,j)
           p_int_W(I,j) = p(i,j,1) ; p_int_E(I,j) = p(i+1,j,1)
           intx_za_nonlin(I,j) = intx_za(I,j,1) - 0.5*(za(i,j,1) + za(i+1,j,1))
           dp_int_x(I,j) = p(i+1,j,1)-p(i,j,1)
           seek_x_cor(I,j) = .false.
-        endif ; enddo ; enddo
+        endif ; enddo
       endif
     endif
 
@@ -730,12 +730,12 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     T_int_S(:,:) = 0.0 ; S_int_S(:,:) = 0.0 ; p_int_S(:,:) = 0.0
     T_int_N(:,:) = 0.0 ; S_int_N(:,:) = 0.0 ; p_int_N(:,:) = 0.0
     inty_za_nonlin(:,:) = 0.0 ; inty_za_cor_ri(:,:) = 0.0 ; dp_int_y(:,:) = 0.0
-    do J=Jsq,Jeq ; do i=is,ie
+    do concurrent (J=Jsq:Jeq, i=is:ie)
       seek_y_cor(i,J) = (mask2dCv(i,J) > 0.)
       delta_p_y(i,J) = 0.0
-    enddo ; enddo
+    enddo
 
-    do J=Jsq,Jeq ; do i=is,ie ; if (seek_y_cor(i,J)) then
+    do concurrent (J=Jsq:Jeq, i=is:ie) ; if (seek_y_cor(i,J)) then
       if ((p(i,j+1,2) >= p(i,j,1)) .and. (p(i,j,2) >= p(i,j+1,1))) then
         ! This is the typical case in the open ocean, so use the topmost interface.
         T_int_S(i,J) = T_top(i,j) ; T_int_N(i,J) = T_top(i,j+1)
@@ -745,7 +745,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
         dp_int_y(i,J) = p(i,j+1,1) - p(i,j,1)
         seek_y_cor(i,J) = .false.
       endif
-    endif ; enddo ; enddo
+    endif ; enddo
 
     do k=1,nz
       do_more_k = .false.
@@ -795,14 +795,14 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
         endif ; enddo ; enddo
       else
         ! There are still points where a correction is needed, so use the top interface.
-        do J=Jsq,Jeq ; do i=is,ie ; if (seek_y_cor(i,J)) then
+        do concurrent (J=Jsq:Jeq, i=is:ie) ; if (seek_y_cor(i,J)) then
           T_int_S(i,J) = T_top(i,j) ; T_int_N(i,J) = T_top(i,j+1)
           S_int_S(i,J) = S_top(i,j) ; S_int_N(i,J) = S_top(i,j+1)
           p_int_S(i,J) = p(i,j,1) ; p_int_N(i,J) = p(i,j+1,1)
           inty_za_nonlin(i,J) = inty_za(i,J,1) - 0.5*(za(i,j,1) + za(i,j+1,1))
           dp_int_y(i,J) = p(i,j+1,1) - p(i,j,1)
           seek_y_cor(i,J) = .false.
-        endif ; enddo ; enddo
+        endif ; enddo
       endif
     endif
 
@@ -840,13 +840,13 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
     endif
 
     ! Correct intx_pa and inty_pa at each interface using vertically constant corrections.
-    do K=1,nz+1 ; do j=js,je ; do I=Isq,Ieq
+    do concurrent (K=1:nz+1, j=js:je, I=Isq:Ieq)
       intx_za(I,j,K) = intx_za(I,j,K) + intx_za_cor_ri(I,j)
-    enddo ; enddo ; enddo
+    enddo
 
-    do K=1,nz+1 ; do J=Jsq,Jeq ; do i=is,ie
+    do concurrent (K=1:nz+1, J=Jsq:Jeq, i=is:ie)
       inty_za(i,J,K) = inty_za(i,J,K) + inty_za_cor_ri(i,J)
-    enddo ; enddo ; enddo
+    enddo
 
     if (CS%debug) then
       call uvchksum("Post-reset int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
@@ -941,9 +941,9 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
   if (CS%id_e_tide>0) then
     ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
     ! New diagnostics are given for each individual field.
-    if (CS%tides_answer_date>20230630) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    if (CS%tides_answer_date>20230630) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
-    enddo ; enddo ; endif
+    enddo ; endif
     call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
   endif
   if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
@@ -952,26 +952,26 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
   if (CS%calculate_SAL .and. (associated(ADp%sal_u) .or. associated(ADp%sal_v))) then
-    if (CS%tides) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    if (CS%tides) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
-    enddo ; enddo ; endif
-    if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+    enddo ; endif
+    if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
       ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * IdxCu(I,j)
-    enddo ; enddo ; enddo ; endif
-    if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+    enddo ; endif
+    if (associated(ADp%sal_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
       ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * IdyCv(i,J)
-    enddo ; enddo ; enddo ; endif
+    enddo ; endif
     if (CS%id_sal_u>0) call post_data(CS%id_sal_u, ADp%sal_u, CS%diag)
     if (CS%id_sal_v>0) call post_data(CS%id_sal_v, ADp%sal_v, CS%diag)
   endif
 
   if (CS%tides .and. (associated(ADp%tides_u) .or. associated(ADp%tides_v))) then
-    if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+    if (associated(ADp%tides_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
       ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * IdxCu(I,j)
-    enddo ; enddo ; enddo ; endif
-    if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+    enddo ; endif
+    if (associated(ADp%tides_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
       ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * IdyCv(i,J)
-    enddo ; enddo ; enddo ; endif
+    enddo ; endif
     if (CS%id_tides_u>0) call post_data(CS%id_tides_u, ADp%tides_u, CS%diag)
     if (CS%id_tides_v>0) call post_data(CS%id_tides_v, ADp%tides_v, CS%diag)
   endif
@@ -1297,7 +1297,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
 
-      do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -1504,9 +1504,9 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
         T_top(i,j) = T_t(i,j,1) ; S_top(i,j) = S_t(i,j,1)
       enddo ; enddo
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         T_top(i,j) = tv%T(i,j,1) ; S_top(i,j) = tv%S(i,j,1)
-      enddo ; enddo
+      enddo
     endif
   endif
 
@@ -1690,10 +1690,10 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
     T_int_W(:,:) = 0.0 ; S_int_W(:,:) = 0.0 ; p_int_W(:,:) = 0.0
     T_int_E(:,:) = 0.0 ; S_int_E(:,:) = 0.0 ; p_int_E(:,:) = 0.0
     intx_pa_nonlin(:,:) = 0.0 ; dgeo_x(:,:) = 0.0 ; intx_pa_cor_ri(:,:) = 0.0
-    do j=js,je ; do I=Isq,Ieq
+    do concurrent (j=js:je, I=Isq:Ieq)
       seek_x_cor(I,j) = (mask2dCu(I,j) > 0.)
       delta_z_x(I,j)  = 0.0
-    enddo ; enddo
+    enddo
 
     do j=js,je ; do I=Isq,Ieq ; if (seek_x_cor(I,j)) then
       if ((e(i+1,j,2) <= e(i,j,1)) .and. (e(i,j,2) <= e(i+1,j,1))) then
@@ -1800,10 +1800,10 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
     T_int_S(:,:) = 0.0 ; S_int_S(:,:) = 0.0 ; p_int_S(:,:) = 0.0
     T_int_N(:,:) = 0.0 ; S_int_N(:,:) = 0.0 ; p_int_N(:,:) = 0.0
     inty_pa_nonlin(:,:) = 0.0 ; dgeo_y(:,:) = 0.0 ; inty_pa_cor_ri(:,:) = 0.0
-    do J=Jsq,Jeq ; do i=is,ie
+    do concurrent (J=Jsq:Jeq, i=is:ie)
       seek_y_cor(i,J) = (mask2dCv(i,J) > 0.)
       delta_z_y(i,J)  = 0.0
-    enddo ; enddo
+    enddo
 
     do J=Jsq,Jeq ; do i=is,ie ; if (seek_y_cor(i,J)) then
       if ((e(i,j+1,2) <= e(i,j,1)) .and. (e(i,j,2) <= e(i,j+1,1))) then
@@ -2130,9 +2130,9 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
   if (CS%id_e_tide>0) then
     ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
     ! New diagnostics are given for each individual field.
-    if (CS%tides_answer_date>20230630) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    if (CS%tides_answer_date>20230630) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
-    enddo ; enddo ; endif
+    enddo ; endif
     call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
   endif
   if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
@@ -2141,27 +2141,27 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
   if (CS%calculate_SAL .and. ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
-    if (CS%tides) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    if (CS%tides) then ; do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
-    enddo ; enddo ; endif
+    enddo ; endif
     if (CS%bq_sal_tides) then
       ! sal_u = ( e(i+1) - e(i) ) * g / dx
-      if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
         ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * IdxCu(I,j)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      enddo ; endif
+      if (associated(ADp%sal_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
         ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * IdyCv(i,J)
-      enddo ; enddo ; enddo ; endif
+      enddo ; endif
     else
       ! sal_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
-      if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      if (associated(ADp%sal_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
         ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * IdxCu(I,j) * I_Rho0 * &
           (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      enddo ; endif
+      if (associated(ADp%sal_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
         ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * IdyCv(i,J) * I_Rho0 * &
           (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
+      enddo ; endif
     endif
     if (CS%id_sal_u>0) call post_data(CS%id_sal_u, ADp%sal_u, CS%diag)
     if (CS%id_sal_v>0) call post_data(CS%id_sal_v, ADp%sal_v, CS%diag)
@@ -2170,22 +2170,22 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, tv, PFu_a, PFv_a,
   if (CS%tides .and. ((associated(ADp%tides_u) .or. associated(ADp%tides_v)))) then
     if (CS%bq_sal_tides) then
       ! tides_u = ( e(i+1) - e(i) ) * g / dx
-      if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      if (associated(ADp%tides_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
         ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * IdxCu(I,j)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      enddo ; endif
+      if (associated(ADp%tides_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
         ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * IdyCv(i,J)
-      enddo ; enddo ; enddo ; endif
+      enddo ; endif
     else
       ! tides_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
-      if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+      if (associated(ADp%tides_u)) then ; do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
         ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * IdxCu(I,j) * I_Rho0 * &
           (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+      enddo ; endif
+      if (associated(ADp%tides_v)) then ; do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
         ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * IdyCv(i,J) * I_Rho0 * &
           (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
+      enddo ; endif
     endif
     if (CS%id_tides_u>0) call post_data(CS%id_tides_u, ADp%tides_u, CS%diag)
     if (CS%id_tides_v>0) call post_data(CS%id_tides_v, ADp%tides_v, CS%diag)

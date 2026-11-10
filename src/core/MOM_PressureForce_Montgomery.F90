@@ -1,7 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
-!!SKILLS: 0.3.2
+!!SKILLS: 0.4.0
 
 !> Provides the Montgomery potential form of pressure gradient
 module MOM_PressureForce_Mont
@@ -183,8 +183,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
 
   I_gEarth = 1.0 / GV%g_Earth
   dp_neglect = GV%g_Earth * GV%H_to_RZ * GV%H_subroundoff
-  do k=1,nz ; alpha_Lay(k) = 1.0 / (GV%Rlay(k)) ; enddo
-  do k=2,nz ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+  do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (GV%Rlay(k)) ; enddo
+  do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
     !$OMP parallel do default(shared)
@@ -269,7 +269,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
     if (nkmb>0) then
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -288,7 +288,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
     else
       tv_tmp%T => tv%T ; tv_tmp%S => tv%S
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = 0 ; enddo
+      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = 0 ; enddo
     endif
     !$OMP parallel do default(shared) private(rho_in_situ)
     do k=1,nz ; do j=Jsq,Jeq+1
@@ -568,7 +568,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
 
-      do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -588,7 +588,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
     else
       tv_tmp%T => tv%T ; tv_tmp%S => tv%S
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = 0.0 ; enddo
+      do concurrent (i=Isq:Ieq+1) ; p_ref(i) = 0.0 ; enddo
     endif
 
     ! This no longer includes any pressure dependency, since this routine
@@ -970,8 +970,8 @@ subroutine Set_pbce_nonBouss(bxH0, bxQ0, p_a, tv, isd, ke, g_Earth, H_to_RZ, H_s
     endif
   else ! not use_EOS
 
-    do k=1,nz ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-    do k=2,nz ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+    do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
+    do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1
