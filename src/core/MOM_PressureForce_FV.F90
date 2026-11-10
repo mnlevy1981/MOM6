@@ -227,10 +227,10 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
   host = c_loc(ctx)
 
   call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, &
-                                 G, Gcore, US, CS, host, associated(ALE_CSp), p_atm_a, pbce_a, &
-                                 eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
-                                 e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, &
-                                 H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
+                                 Gcore, CS, host, associated(ALE_CSp), p_atm_a, pbce_a, eta_a, &
+                                 Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
+                                 MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, H_to_RZ, H_subroundoff, &
+                                 nk_rho_varies, semi_Boussinesq)
 
   call Gcore%IdxCu%view(IdxCu) ; call Gcore%IdyCv%view(IdyCv)
   call e_sal_a%view(e_sal) ; call e_tidal_eq_a%view(e_tidal_eq)
@@ -306,8 +306,8 @@ end subroutine PressureForce_FV_nonBouss_cap
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
-                                     PFv_a, G, Gcore, US, CS, host, ALE_CSp_associated, p_atm_a, &
-                                     pbce_a, eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                     PFv_a, Gcore, CS, host, ALE_CSp_associated, p_atm_a, pbce_a, &
+                                     eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
                                      e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, &
                                      H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
@@ -322,9 +322,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(Box_t),          intent(in)  :: bxHkint !< The interior interfaces of the whole column,
                                                !! [isc:iec, jsc:jec, 2:nz]
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
-  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> kg m-2]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
@@ -712,8 +710,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   enddo
 
   if (CS%debug) then
-    call hchksum(za, "Pre-correction za", G%HI, haloshift=1, unscale=US%L_T_to_m_s**2)
-    call hchksum(p, "Pre-correction p", G%HI, haloshift=1, unscale=US%RL2_T2_to_Pa)
+    call PressureForce_FV_nonBouss_precorrection_chksum_host(host, h_a, za, p)
   endif
 
   !   With an ice-shelf or icebergs, this linearity condition might need to be applied
@@ -808,10 +805,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   enddo
 
   if (CS%debug) then
-    call uvchksum("Prelim int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
-                  symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
-    call uvchksum("Prelim int[xy]_dza", intx_dza, inty_dza, G%HI, haloshift=0, &
-                  symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+    call PressureForce_FV_nonBouss_prelim_chksum_host(host, h_a, PFu_a, PFv_a, intx_za, inty_za, &
+                                                      intx_dza, inty_dza)
   endif
 
   if (CS%reset_intxpa_integral) then
@@ -1028,14 +1023,10 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
     enddo
 
     if (CS%debug) then
-      call uvchksum("Pre-reset int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
-      call uvchksum("int[xy]_za_cor", intx_za_cor_ri, inty_za_cor_ri, G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
-      call uvchksum("int[xy]_za_nonlin", intx_za_nonlin, inty_za_nonlin, G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
-      call uvchksum("dp_int_[xy]", dp_int_x, dp_int_y, G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, unscale=US%RL2_T2_to_Pa)
+      call PressureForce_FV_nonBouss_prereset_chksum_host(host, h_a, PFu_a, PFv_a, intx_za, &
+                                                          inty_za, intx_za_cor_ri, inty_za_cor_ri, &
+                                                          intx_za_nonlin, inty_za_nonlin, &
+                                                          dp_int_x, dp_int_y)
     endif
 
     ! Correct intx_pa and inty_pa at each interface using vertically constant corrections.
@@ -1050,8 +1041,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
     enddo
 
     if (CS%debug) then
-      call uvchksum("Post-reset int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+      call PressureForce_FV_nonBouss_postreset_chksum_host(host, h_a, PFu_a, PFv_a, intx_za, &
+                                                           inty_za)
     endif
 
   endif ! intx_za and inty_za have now been reset to reflect the properties of an unimpeded interface.
@@ -1250,8 +1241,8 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   ctx%GV => GV ; ctx%ALE_CSp => ALE_CSp
   host = c_loc(ctx)
 
-  call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
-                              CS, host, associated(ALE_CSp), p_atm_a, pbce_a, eta_a, Rlay_a, &
+  call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, Gcore, CS, &
+                              host, associated(ALE_CSp), p_atm_a, pbce_a, eta_a, Rlay_a, &
                               g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
                               MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, Z_ref, g_Earth, &
                               H_to_Z, Z_to_H, H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, &
@@ -1422,9 +1413,9 @@ end subroutine PressureForce_FV_Bouss_cap
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                                  US, CS, host, ALE_CSp_associated, p_atm_a, pbce_a, eta_a, &
-                                  Rlay_a, g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, Gcore, &
+                                  CS, host, ALE_CSp_associated, p_atm_a, pbce_a, eta_a, Rlay_a, &
+                                  g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
                                   e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, &
                                   inty_dpa_a, Z_ref, g_Earth, H_to_Z, Z_to_H, H_to_RZ, Rho0, &
                                   H_subroundoff, dZ_subroundoff, nk_rho_varies)
@@ -1438,9 +1429,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
                                              !! [isc:iec, JscB:JecB, 1:nz]
   type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
-  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> m]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
@@ -1962,9 +1951,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
     enddo
 
     if (CS%debug) then
-      call hchksum(rho_top, "intx_pa rho_top", G%HI, haloshift=1, unscale=US%R_to_kg_m3)
-      call hchksum(e(:,:,1), "intx_pa e(1)", G%HI, haloshift=1, unscale=US%Z_to_m)
-      call hchksum(pa(:,:,1), "intx_pa pa(1)", G%HI, haloshift=1, unscale=US%RL2_T2_to_Pa)
+      call PressureForce_FV_Bouss_intx_pa_chksum_host(host, h_a, rho_top, e, pa)
     endif
 
     ! This version attempts to correct for hydrostatic variations in surface pressure under ice.
@@ -2081,10 +2068,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
     enddo ; enddo
 
     if (CS%debug) then
-      call uvchksum("int[xy]_pa_cor", intx_pa_cor, inty_pa_cor, G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%RL2_T2_to_Pa)
-      call uvchksum("int[xy]_pa(1)", intx_pa(:,:,1), inty_pa(:,:,1), G%HI, haloshift=0, &
-                    symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%RL2_T2_to_Pa)
+      call PressureForce_FV_Bouss_pa_cor_chksum_host(host, h_a, PFu_a, PFv_a, intx_pa_cor, &
+                                                     inty_pa_cor, intx_pa, inty_pa)
     endif
 
     ! TODO until moved to GPU
@@ -2909,6 +2894,216 @@ subroutine PressureForce_FV_TS_PLM_WLS_edge_host(host, S_t, S_b, T_t, T_b, tv, h
   call TS_PLM_WLS_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h)
 
 end subroutine PressureForce_FV_TS_PLM_WLS_edge_host
+
+!> Writes the "Pre-correction" debugging checksums of za and p, using the grid and unit scaling
+!! that host points to.
+subroutine PressureForce_FV_nonBouss_precorrection_chksum_host(host, h_a, za, p)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> kg m-2]
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: za !< The geopotential anomaly (i.e. g*e + alpha_0*pressure) at the interfaces
+                       !! [L2 T-2 ~> m2 s-2].
+  real, dimension(:,:,:), contiguous, pointer :: p !< Interface pressure [R L2 T-2 ~> Pa].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US
+
+  call hchksum(za, "Pre-correction za", G%HI, haloshift=1, unscale=US%L_T_to_m_s**2)
+  call hchksum(p, "Pre-correction p", G%HI, haloshift=1, unscale=US%RL2_T2_to_Pa)
+
+end subroutine PressureForce_FV_nonBouss_precorrection_chksum_host
+
+!> Writes the "Prelim" debugging checksums of int[xy]_za and int[xy]_dza, using the grid and unit
+!! scaling that host points to.
+subroutine PressureForce_FV_nonBouss_prelim_chksum_host(host, h_a, PFu_a, PFv_a, intx_za, inty_za, &
+                                                        intx_dza, inty_dza)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> kg m-2]
+  type(RealArray_t), intent(in) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
+  type(RealArray_t), intent(in) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: intx_za !< The zonal integral of the geopotential anomaly along the interfaces,
+                            !! divided by the grid spacing [L2 T-2 ~> m2 s-2].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: inty_za !< The meridional integral of the geopotential anomaly along the
+                            !! interfaces, divided by the grid spacing [L2 T-2 ~> m2 s-2].
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: intx_dza !< The change in intx_za through a layer [L2 T-2 ~> m2 s-2].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: inty_dza !< The change in inty_za through a layer [L2 T-2 ~> m2 s-2].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US
+
+  call uvchksum("Prelim int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+  call uvchksum("Prelim int[xy]_dza", intx_dza, inty_dza, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+
+end subroutine PressureForce_FV_nonBouss_prelim_chksum_host
+
+!> Writes the "Pre-reset" debugging checksums of the int[xy]_za corrections, using the grid and
+!! unit scaling that host points to.
+subroutine PressureForce_FV_nonBouss_prereset_chksum_host(host, h_a, PFu_a, PFv_a, intx_za, &
+                                                          inty_za, intx_za_cor_ri, inty_za_cor_ri, &
+                                                          intx_za_nonlin, inty_za_nonlin, &
+                                                          dp_int_x, dp_int_y)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> kg m-2]
+  type(RealArray_t), intent(in) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
+  type(RealArray_t), intent(in) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: intx_za !< The zonal integral of the geopotential anomaly along the interfaces,
+                            !! divided by the grid spacing [L2 T-2 ~> m2 s-2].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: inty_za !< The meridional integral of the geopotential anomaly along the
+                            !! interfaces, divided by the grid spacing [L2 T-2 ~> m2 s-2].
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):), contiguous, &
+      intent(in) :: intx_za_cor_ri !< The correction to intx_za based on the reference interface
+                                   !! calculations [L2 T-2 ~> m2 s-2]
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):), contiguous, &
+      intent(in) :: inty_za_cor_ri !< The correction to inty_za based on the reference interface
+                                   !! calculations [L2 T-2 ~> m2 s-2]
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):), contiguous, &
+      intent(in) :: intx_za_nonlin !< Deviations in the previous version of intx_pa for the
+                                   !! reference interface from the value that would be obtained from
+                                   !! assuming that pressure varies linearly with depth along that
+                                   !! interface [R L2 T-2 ~> Pa].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):), contiguous, &
+      intent(in) :: inty_za_nonlin !< Deviations in the previous version of intx_pa for the
+                                   !! reference interface from the value that would be obtained from
+                                   !! assuming that pressure varies linearly with depth along that
+                                   !! interface [L2 T-2 ~> m2 s-2].
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):), contiguous, &
+      intent(in) :: dp_int_x !< The change in x in pressure along the reference interface
+                             !! [R L2 T-2 ~> Pa]
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):), contiguous, &
+      intent(in) :: dp_int_y !< The change in y in geopotenial height along the reference interface
+                             !! [R L2 T-2 ~> Pa]
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US
+
+  call uvchksum("Pre-reset int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+  call uvchksum("int[xy]_za_cor", intx_za_cor_ri, inty_za_cor_ri, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+  call uvchksum("int[xy]_za_nonlin", intx_za_nonlin, inty_za_nonlin, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+  call uvchksum("dp_int_[xy]", dp_int_x, dp_int_y, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, unscale=US%RL2_T2_to_Pa)
+
+end subroutine PressureForce_FV_nonBouss_prereset_chksum_host
+
+!> Writes the "Post-reset" debugging checksums of int[xy]_za, using the grid and unit scaling that
+!! host points to.
+subroutine PressureForce_FV_nonBouss_postreset_chksum_host(host, h_a, PFu_a, PFv_a, intx_za, &
+                                                           inty_za)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> kg m-2]
+  type(RealArray_t), intent(in) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
+  type(RealArray_t), intent(in) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: intx_za !< The zonal integral of the geopotential anomaly along the interfaces,
+                            !! divided by the grid spacing [L2 T-2 ~> m2 s-2].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: inty_za !< The meridional integral of the geopotential anomaly along the
+                            !! interfaces, divided by the grid spacing [L2 T-2 ~> m2 s-2].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US
+
+  call uvchksum("Post-reset int[xy]_za", intx_za, inty_za, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%L_T_to_m_s**2)
+
+end subroutine PressureForce_FV_nonBouss_postreset_chksum_host
+
+!> Writes the "intx_pa" debugging checksums of rho_top, e and pa at the surface, using the grid
+!! and unit scaling that host points to.
+subroutine PressureForce_FV_Bouss_intx_pa_chksum_host(host, h_a, rho_top, e, pa)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> m]
+  real, dimension(h_a%lb(1):,h_a%lb(2):), contiguous, &
+      intent(in) :: rho_top !< Density anomaly of top layer used in calculating intx_pa_cor and
+                            !! inty_pa_cor
+  real, dimension(:,:,:), contiguous, pointer :: e !< Interface height in depth units [Z ~> m].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: pa !< The pressure anomaly (i.e. pressure + g*RHO_0*e) at the the interface atop
+                       !! a layer [R L2 T-2 ~> Pa].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US
+
+  call hchksum(rho_top, "intx_pa rho_top", G%HI, haloshift=1, unscale=US%R_to_kg_m3)
+  call hchksum(e(:,:,1), "intx_pa e(1)", G%HI, haloshift=1, unscale=US%Z_to_m)
+  call hchksum(pa(:,:,1), "intx_pa pa(1)", G%HI, haloshift=1, unscale=US%RL2_T2_to_Pa)
+
+end subroutine PressureForce_FV_Bouss_intx_pa_chksum_host
+
+!> Writes the debugging checksums of the int[xy]_pa corrections and int[xy]_pa at the surface,
+!! using the grid and unit scaling that host points to.
+subroutine PressureForce_FV_Bouss_pa_cor_chksum_host(host, h_a, PFu_a, PFv_a, intx_pa_cor, &
+                                                     inty_pa_cor, intx_pa, inty_pa)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> m]
+  type(RealArray_t), intent(in) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
+  type(RealArray_t), intent(in) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):), contiguous, &
+      intent(in) :: intx_pa_cor !< Correction for curvature in intx_pa [R L2 T-2 ~> Pa]
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):), contiguous, &
+      intent(in) :: inty_pa_cor !< Correction for curvature in inty_pa [R L2 T-2 ~> Pa]
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: intx_pa !< The zonal integral of the pressure anomaly along the interface atop a
+                            !! layer, divided by the grid spacing [R L2 T-2 ~> Pa].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: inty_pa !< The meridional integral of the pressure anomaly along the interface
+                            !! atop a layer, divided by the grid spacing [R L2 T-2 ~> Pa].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US
+
+  call uvchksum("int[xy]_pa_cor", intx_pa_cor, inty_pa_cor, G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%RL2_T2_to_Pa)
+  call uvchksum("int[xy]_pa(1)", intx_pa(:,:,1), inty_pa(:,:,1), G%HI, haloshift=0, &
+                symmetric=G%Domain%symmetric, scalar_pair=.true., unscale=US%RL2_T2_to_Pa)
+
+end subroutine PressureForce_FV_Bouss_pa_cor_chksum_host
 
 !> Initializes the finite volume pressure gradient control structure
 subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL_CSp, tides_CSp)
