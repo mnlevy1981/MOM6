@@ -67,7 +67,7 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
                  optional, intent(out) :: eta  !< The bottom mass used to calculate PFu and PFv,
                                                !! [H ~> m or kg m-2], with any tidal contributions.
 
-  type(RealArray_t) :: h_a, PFu_a, PFv_a, p_atm_a, pbce_a, eta_a
+  type(RealArray_t) :: h_a, PFu_a, PFv_a, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a
   type(grid_core_type), pointer :: Gcore ! Persistent copies of the core ocean grid fields
   type(Box_t) :: bxH0  ! The h-point box of the whole column, [isc:iec, jsc:jec, 1:nz]
                        ! with no halo. Set_pbce_Bouss and Set_pbce_nonBouss read its bounds,
@@ -109,9 +109,14 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   if (associated(p_atm)) call p_atm_a%alloc(lb=LBOUND(p_atm), ub=UBOUND(p_atm), source=p_atm)
   if (present(pbce)) call pbce_a%alloc(lb=LBOUND(pbce), ub=UBOUND(pbce), source=pbce)
   if (present(eta)) call eta_a%alloc(lb=LBOUND(eta), ub=UBOUND(eta), source=eta)
+  call Rlay_a%alloc(lb=LBOUND(GV%Rlay), ub=UBOUND(GV%Rlay), source=GV%Rlay)
+  call g_prime_a%alloc(lb=LBOUND(GV%g_prime), ub=UBOUND(GV%g_prime), source=GV%g_prime)
 
   call PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                        GV, US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
+                        GV, US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, &
+                        G%Z_ref, GV%g_Earth, GV%H_to_Z, GV%Z_to_H, GV%H_to_RZ, GV%Rho0, &
+                        GV%H_subroundoff, GV%dZ_subroundoff, GV%nk_rho_varies, GV%semi_Boussinesq, &
+                        GV%Boussinesq)
   call bxH0%free() ; call bxQ0%free()
   call bxU0%free() ; call bxV0%free()
   call bxHpgf%free()
@@ -122,13 +127,16 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   if (present(pbce)) call pbce_a%copy2F(pbce)
   if (present(eta)) call eta_a%copy2F(eta)
   call h_a%free() ; call PFu_a%free() ; call PFv_a%free() ; call p_atm_a%free()
-  call pbce_a%free() ; call eta_a%free()
+  call pbce_a%free() ; call eta_a%free() ; call Rlay_a%free() ; call g_prime_a%free()
 
 end subroutine PressureForce
 
 !> The implementation of PressureForce (the root of its call tree).
 subroutine PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, &
-                            Gcore, GV, US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
+                            Gcore, GV, US, CS, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a, Rlay_a, &
+                            g_prime_a, Z_ref, g_Earth, H_to_Z, Z_to_H, H_to_RZ, Rho0, &
+                            H_subroundoff, dZ_subroundoff, nk_rho_varies, semi_Boussinesq, &
+                            Boussinesq)
   type(Box_t),             intent(in)  :: bxH0 !< The h-point box of the whole column,
                                                !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),             intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
@@ -163,23 +171,65 @@ subroutine PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PF
   type(RealArray_t), &
                  intent(inout) :: eta_a  !< The bottom mass used to calculate PFu and PFv,
                                                !! [H ~> m or kg m-2], with any tidal contributions.
+  type(RealArray_t), intent(in) :: Rlay_a !< The target coordinate value (potential density) in each
+                                          !! layer [R ~> kg m-3].
+  type(RealArray_t), intent(in) :: g_prime_a !< The reduced gravity at each interface
+                                             !! [L2 Z-1 T-2 ~> m s-2].
+  real,              intent(in) :: Z_ref !< A reference value for all geometric height fields, such
+                                         !! as bathyT [Z ~> m].
+  real,              intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
+  real,              intent(in) :: H_to_Z !< A constant that translates thickness units to the units
+                                          !! of depth [Z H-1 ~> 1 or m3 kg-1].
+  real,              intent(in) :: Z_to_H !< A constant that translates depth units to thickness
+                                          !! units depth [H Z-1 ~> 1 or kg m-3].
+  real,              intent(in) :: H_to_RZ !< A constant that translates thickness units to the
+                                           !! units of mass per unit area [R Z H-1 ~> kg m-3 or 1].
+  real,              intent(in) :: Rho0 !< The density used in the Boussinesq approximation or
+                                        !! nominal density used to convert depths into mass units
+                                        !! [R ~> kg m-3].
+  real,              intent(in) :: H_subroundoff !< A thickness that is so small that it can be
+                                                 !! added to a thickness of Angstrom or larger
+                                                 !! without changing it at the bit level
+                                                 !! [H ~> m or kg m-2]. If Angstrom is 0 or
+                                                 !! exceedingly small, this is negligible compared
+                                                 !! to 1e-17 m.
+  real,              intent(in) :: dZ_subroundoff !< A thickness in height units that is so small
+                                                  !! that it can be added to a vertical distance of
+                                                  !! Angstrom_Z or 1e-17 m without changing it at
+                                                  !! the bit level [Z ~> m].  This is the height
+                                                  !! equivalent of H_subroundoff.
+  integer,           intent(in) :: nk_rho_varies !< The number of layers at the top where the
+                                                 !! density does not track any target density.
+  logical,           intent(in) :: semi_Boussinesq !< If true, do non-Boussinesq pressure force
+                                                   !! calculations and use mass-based "thicknesses,
+                                                   !! but use Rho0 to convert layer thicknesses into
+                                                   !! certain height changes.  This only applies if
+                                                   !! BOUSSINESQ is false.
+  logical,           intent(in) :: Boussinesq !< If true, make the Boussinesq approximation.
 
   if (CS%Analytic_FV_PGF) then
-    if (GV%Boussinesq) then
+    if (Boussinesq) then
       call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                                  GV, US, CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, pbce_a, eta_a)
+                                  GV, US, CS%PressureForce_FV, ALE_CSp, ADp, p_atm_a, pbce_a, &
+                                  eta_a, Rlay_a, g_prime_a, Z_ref, g_Earth, H_to_Z, Z_to_H, &
+                                  H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, nk_rho_varies)
     else
       call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
                                      PFv_a, G, Gcore, GV, US, CS%PressureForce_FV, ALE_CSp, ADp, &
-                                     p_atm_a, pbce_a, eta_a)
+                                     p_atm_a, pbce_a, eta_a, Rlay_a, Z_ref, g_Earth, H_to_RZ, &
+                                     H_subroundoff, nk_rho_varies, semi_Boussinesq)
     endif
   else
-    if (GV%Boussinesq) then
-      call PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, US, &
-                                    CS%PressureForce_Mont, p_atm_a, pbce_a, eta_a)
+    if (Boussinesq) then
+      call PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
+                                    CS%PressureForce_Mont, p_atm_a, pbce_a, eta_a, Rlay_a, &
+                                    g_prime_a, g_Earth, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, &
+                                    nk_rho_varies)
     else
       call PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, &
-                                       Gcore, GV, US, CS%PressureForce_Mont, p_atm_a, pbce_a, eta_a)
+                                       Gcore, US, CS%PressureForce_Mont, p_atm_a, pbce_a, &
+                                       eta_a, Rlay_a, g_Earth, H_to_RZ, H_subroundoff, &
+                                       nk_rho_varies)
     endif
   endif
 
