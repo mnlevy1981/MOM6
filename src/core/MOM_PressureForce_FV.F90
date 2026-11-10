@@ -169,10 +169,12 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   type(RealArray_t), intent(inout) :: eta_a !< The total column mass used to
                                                            !! calculate PFu and PFv [H ~> kg m-2].
   ! Local variables
-  type(Box_t) :: bxU0_pk  ! bxU0 grown by one point at the end in k,
-                         ! [IscB:IecB, jsc:jec, 1:nz+1]
-  type(Box_t) :: bxV0_pk  ! bxV0 grown by one point at the end in k,
-                         ! [isc:iec, JscB:JecB, 1:nz+1]
+  type(Box_t) :: bxUintf  ! u points at every interface, [IscB:IecB, jsc:jec, 1:nz+1], for the
+                          ! vertically constant intx_za correction, which applies at all nz+1
+                          ! interfaces; one grow of bxU0 in k.
+  type(Box_t) :: bxVintf  ! v points at every interface, [isc:iec, JscB:JecB, 1:nz+1], for the
+                          ! vertically constant inty_za correction, which applies at all nz+1
+                          ! interfaces; one grow of bxV0 in k.
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv, mask2dCu, mask2dCv
@@ -309,8 +311,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  bxU0_pk = bxU0%growHi(dim=3, n=1)
-  bxV0_pk = bxV0%growHi(dim=3, n=1)
+  bxUintf = bxU0%growHi(dim=3, n=1)
+  bxVintf = bxV0%growHi(dim=3, n=1)
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
   EOSdom_u(1) = Isq - (G%IsdB-1) ; EOSdom_u(2) = Ieq - (G%IsdB-1)
   EOSdom_v(1) = is - (G%isd-1)   ; EOSdom_v(2) = ie - (G%isd-1)
@@ -860,13 +862,13 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
     endif
 
     ! Correct intx_pa and inty_pa at each interface using vertically constant corrections.
-    do concurrent (K=bxU0_pk%idxS(3):bxU0_pk%idxE(3), j=bxU0_pk%idxS(2):bxU0_pk%idxE(2), &
-                   I=bxU0_pk%idxS(1):bxU0_pk%idxE(1))
+    do concurrent (K=bxUintf%idxS(3):bxUintf%idxE(3), j=bxUintf%idxS(2):bxUintf%idxE(2), &
+                   I=bxUintf%idxS(1):bxUintf%idxE(1))
       intx_za(I,j,K) = intx_za(I,j,K) + intx_za_cor_ri(I,j)
     enddo
 
-    do concurrent (K=bxV0_pk%idxS(3):bxV0_pk%idxE(3), J=bxV0_pk%idxS(2):bxV0_pk%idxE(2), &
-                   i=bxV0_pk%idxS(1):bxV0_pk%idxE(1))
+    do concurrent (K=bxVintf%idxS(3):bxVintf%idxE(3), J=bxVintf%idxS(2):bxVintf%idxE(2), &
+                   i=bxVintf%idxS(1):bxVintf%idxE(1))
       inty_za(i,J,K) = inty_za(i,J,K) + inty_za_cor_ri(i,J)
     enddo
 
@@ -1009,7 +1011,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   endif
 
   call p_a%free()
-  call bxU0_pk%free() ; call bxV0_pk%free()
+  call bxUintf%free() ; call bxVintf%free()
 
 end subroutine PressureForce_FV_nonBouss
 
