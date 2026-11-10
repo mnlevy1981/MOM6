@@ -131,8 +131,10 @@ end type PressureForce_FV_CS
 !! down as host.
 type :: PressureForce_FV_host_type
   type(ocean_grid_type), pointer :: G => NULL() !< Ocean grid structure
+  type(verticalGrid_type), pointer :: GV => NULL() !< Vertical grid structure
   type(unit_scale_type), pointer :: US => NULL() !< A dimensional unit scaling type
   type(PressureForce_FV_CS), pointer :: CS => NULL() !< Finite volume PGF control structure
+  type(ALE_CS), pointer :: ALE_CSp => NULL() !< ALE control structure
 end type PressureForce_FV_host_type
 
 contains
@@ -156,7 +158,7 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
                                                !! [isc:iec, jsc:jec, 2:nz]
   type(ocean_grid_type), target,              intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
-  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
+  type(verticalGrid_type), target,            intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type), target,              intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> kg m-2]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
@@ -221,13 +223,14 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
   endif
 
   ctx%G => G ; ctx%US => US ; ctx%CS => CS
+  ctx%GV => GV ; ctx%ALE_CSp => ALE_CSp
   host = c_loc(ctx)
 
   call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, &
-                                 G, Gcore, GV, US, CS, host, ALE_CSp, p_atm_a, pbce_a, eta_a, &
-                                 Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
-                                 MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, H_to_RZ, H_subroundoff, &
-                                 nk_rho_varies, semi_Boussinesq)
+                                 G, Gcore, US, CS, host, associated(ALE_CSp), p_atm_a, pbce_a, &
+                                 eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                 e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, &
+                                 H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
 
   call Gcore%IdxCu%view(IdxCu) ; call Gcore%IdyCv%view(IdyCv)
   call e_sal_a%view(e_sal) ; call e_tidal_eq_a%view(e_tidal_eq)
@@ -303,8 +306,8 @@ end subroutine PressureForce_FV_nonBouss_cap
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
-                                     PFv_a, G, Gcore, GV, US, CS, host, ALE_CSp, p_atm_a, pbce_a, &
-                                     eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                     PFv_a, G, Gcore, US, CS, host, ALE_CSp_associated, p_atm_a, &
+                                     pbce_a, eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
                                      e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, &
                                      H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
@@ -321,7 +324,6 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
                                                !! [isc:iec, jsc:jec, 2:nz]
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
-  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> kg m-2]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
@@ -331,7 +333,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
                                          !! the Fortran-only objects (grid, unit scaling and control
                                          !! structure) that the host helpers use
-  type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
+  logical, intent(in) :: ALE_CSp_associated !< True if the ALE control structure pointer is
+                                            !! associated
   type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean
                                                            !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
   type(RealArray_t), intent(inout) :: pbce_a !< The baroclinic pressure
@@ -534,7 +537,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   use_p_atm = associated(p_atm)
   use_EOS = associated(tv%eqn_of_state)
   use_ALE = .false.
-  if (associated(ALE_CSp)) use_ALE = CS%reconstruct .and. use_EOS
+  if (ALE_CSp_associated) use_ALE = CS%reconstruct .and. use_EOS
 
   H_to_RL2_T2 = g_Earth*H_to_RZ
   dp_neglect = g_Earth*H_to_RZ * H_subroundoff
@@ -598,11 +601,11 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   ! to top and bottom values within each layer (these are the only degrees
   ! of freedom needed to know the linear profile).
   if ( use_ALE .and. (CS%Recon_Scheme == 1) ) then
-      call TS_PLM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
+      call PressureForce_FV_TS_PLM_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
   elseif ( use_ALE .and. (CS%Recon_Scheme == 2) ) then
-      call TS_PPM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
+      call PressureForce_FV_TS_PPM_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
   elseif ( use_ALE .and. (CS%Recon_Scheme == 3) ) then
-      call TS_PLM_WLS_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h)
+      call PressureForce_FV_TS_PLM_WLS_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
   elseif (CS%reset_intxpa_integral) then
     do concurrent (k=bxHpgf%idxS(3):bxHpgf%idxE(3), j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
                    i=bxHpgf%idxS(1):bxHpgf%idxE(1))
@@ -615,33 +618,10 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
     ! Calculate 4 integrals through the layer that are required in the
     ! subsequent calculation.
     if (use_EOS) then
-      if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
-        if ( CS%Recon_Scheme == 1 .or. CS%Recon_Scheme == 3 ) then
-          call int_spec_vol_dp_generic_plm( T_t(:,:,k), T_b(:,:,k), S_t(:,:,k), S_b(:,:,k), &
-                    p(:,:,K), p(:,:,K+1), alpha_ref, dp_neglect, p(:,:,nz+1), G%HI, &
-                    tv%eqn_of_state, US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), inty_dza(:,:,k), &
-                    P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp, &
-                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
-        elseif ( CS%Recon_Scheme == 2 ) then
-          call MOM_error(FATAL, "PressureForce_FV_nonBouss: "//&
-                         "int_spec_vol_dp_generic_ppm does not exist yet.")
-        !  call int_spec_vol_dp_generic_ppm ( tv%T(:,:,k), T_t(:,:,k), T_b(:,:,k), &
-        !            tv%S(:,:,k), S_t(:,:,k), S_b(:,:,k), p(:,:,K), p(:,:,K+1), &
-        !            alpha_ref, G%HI, tv%eqn_of_state, dza(:,:,k), intp_dza(:,:,k), &
-        !            intx_dza(:,:,k), inty_dza(:,:,k), P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp)
-        endif
-      else
-        call int_specific_vol_dp(tv_tmp%T(:,:,k), tv_tmp%S(:,:,k), p(:,:,K), &
-                               p(:,:,K+1), alpha_ref, G%HI, tv%eqn_of_state, &
-                               US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), &
-                               inty_dza(:,:,k), bathyP=p(:,:,nz+1), P_surf=p(:,:,1), dP_tiny=dp_neglect, &
-                               MassWghtInterp=CS%MassWghtInterp, &
-                               MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
-      endif
-      if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) &
-        call diagnose_mass_weight_p(p(:,:,K), p(:,:,K+1), p(:,:,nz+1), p(:,:,1), dp_neglect, CS%MassWghtInterp, &
-                                    G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
-                                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
+      call PressureForce_FV_nonBouss_dza_host(host, h_a, PFu_a, PFv_a, use_ALE, k, nz, tv, tv_tmp, &
+                                              T_t, T_b, S_t, S_b, p, alpha_ref, dp_neglect, &
+                                              p_nonvanished, dza, intp_dza, intx_dza, inty_dza, &
+                                              MassWt_u, MassWt_v)
     else
       alpha_anom = 1.0 / Rlay(k) - alpha_ref
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -1175,7 +1155,7 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(ocean_grid_type), target,              intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
-  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
+  type(verticalGrid_type), target,            intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type), target,              intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> m]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
@@ -1267,13 +1247,15 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   call inty_dpa_a%alloc(lb=[h_a%lb(1),PFv_a%lb(2),h_a%lb(3)], ub=[h_a%ub(1),PFv_a%ub(2),h_a%ub(3)])
 
   ctx%G => G ; ctx%US => US ; ctx%CS => CS
+  ctx%GV => GV ; ctx%ALE_CSp => ALE_CSp
   host = c_loc(ctx)
 
-  call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, &
-                              US, CS, host, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, &
-                              e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
-                              MassWt_v_a, intx_dpa_a, inty_dpa_a, Z_ref, g_Earth, H_to_Z, Z_to_H, &
-                              H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, nk_rho_varies)
+  call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
+                              CS, host, associated(ALE_CSp), p_atm_a, pbce_a, eta_a, Rlay_a, &
+                              g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
+                              MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, Z_ref, g_Earth, &
+                              H_to_Z, Z_to_H, H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, &
+                              nk_rho_varies)
 
   is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; js = bxH0%idxS(2) ; je = bxH0%idxE(2) ; nz = bxH0%idxE(3)
   call h_a%view(h)
@@ -1441,8 +1423,8 @@ end subroutine PressureForce_FV_Bouss_cap
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                                  GV, US, CS, host, ALE_CSp, p_atm_a, pbce_a, eta_a, Rlay_a, &
-                                  g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                  US, CS, host, ALE_CSp_associated, p_atm_a, pbce_a, eta_a, &
+                                  Rlay_a, g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
                                   e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, &
                                   inty_dpa_a, Z_ref, g_Earth, H_to_Z, Z_to_H, H_to_RZ, Rho0, &
                                   H_subroundoff, dZ_subroundoff, nk_rho_varies)
@@ -1458,7 +1440,6 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
                                               !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
-  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(RealArray_t),                          intent(in)  :: h_a !< Layer thickness [H ~> m]
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
@@ -1468,7 +1449,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
   type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
                                          !! the Fortran-only objects (grid, unit scaling and control
                                          !! structure) that the host helpers use
-  type(ALE_CS),                               pointer     :: ALE_CSp !< ALE control structure
+  logical, intent(in) :: ALE_CSp_associated !< True if the ALE control structure pointer is
+                                            !! associated
   type(RealArray_t), intent(in) :: p_atm_a !< The pressure at the ice-ocean
                                                          !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
   type(RealArray_t), intent(inout) :: pbce_a !< The baroclinic pressure
@@ -1684,7 +1666,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
   use_p_atm = associated(p_atm)
   use_EOS = associated(tv%eqn_of_state)
   use_ALE = .false.
-  if (associated(ALE_CSp)) use_ALE = CS%reconstruct .and. use_EOS
+  if (ALE_CSp_associated) use_ALE = CS%reconstruct .and. use_EOS
 
   h_neglect = H_subroundoff
   dz_neglect = dZ_subroundoff
@@ -1814,11 +1796,11 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
   ! to top and bottom values within each layer (these are the only degrees
   ! of freedom needed to know the linear profile).
   if ( use_ALE .and. (CS%Recon_Scheme == 1) ) then
-    call TS_PLM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
+    call PressureForce_FV_TS_PLM_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
   elseif ( use_ALE .and. (CS%Recon_Scheme == 2) ) then
-    call TS_PPM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
+    call PressureForce_FV_TS_PPM_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
   elseif ( use_ALE .and. (CS%Recon_Scheme == 3) ) then
-      call TS_PLM_WLS_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h)
+      call PressureForce_FV_TS_PLM_WLS_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
   elseif (CS%reset_intxpa_integral) then
     do k=1,nz ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       T_b(i,j,k) = tv%T(i,j,k) ; S_b(i,j,k) = tv%S(i,j,k)
@@ -1875,49 +1857,17 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
     !$omp target enter data map(to: tv)
     do kstart=1,nz,nkblock
       kend = min(kstart+nkblock-1, nz)
-      if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
-        if ( CS%Recon_Scheme == 1 .or. CS%Recon_Scheme == 3 ) then
-          call int_density_dz_generic_plm(kstart, kend, tv, T_t, T_b, S_t, S_b, e, &
-                    rho_ref, rho0_int_density, g_Earth, dz_neglect, bathyT, &
-                    G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa, intz_dpa, &
-                    intx_dpa, inty_dpa, &
-                    MassWghtInterp=CS%MassWghtInterp, &
-                    use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p, &
-                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished, &
-                    niblock=CS%niblock_plm, njblock=CS%njblock_plm)
-        elseif ( CS%Recon_Scheme == 2 ) then
-          do k=kstart,kend
-          call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
-                    rho_ref, rho0_int_density, g_Earth, dz_neglect, bathyT, &
-                    G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa(:,:,k), intz_dpa(:,:,k), &
-                    intx_dpa(:,:,k), inty_dpa(:,:,k), &
-                    MassWghtInterp=CS%MassWghtInterp, Z_0p=Z_0p, &
-                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
-          enddo
-        endif
-        ! defensive update - not sure if it works
-        !$omp target update to(dpa, intx_dpa, inty_dpa, intz_dpa)
-      else
-        do k=kstart,kend
-        call int_density_dz(tv_tmp%T(:,:,k), tv_tmp%S(:,:,k), e(:,:,K), e(:,:,K+1), &
-                  rho_ref, rho0_int_density, g_Earth, G%HI, tv%eqn_of_state, US, dpa(:,:,k), &
-                  intz_dpa(:,:,k), intx_dpa(:,:,k), inty_dpa(:,:,k), bathyT, e(:,:,1), dz_neglect, &
-                  CS%MassWghtInterp, Z_0p=Z_0p, &
-                  MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
-        enddo
-      endif
+      call PressureForce_FV_Bouss_dpa_host(host, h_a, use_ALE, kstart, kend, tv, tv_tmp, T_t, T_b, &
+                                           S_t, S_b, e, Z_0p, bathyT, rho_ref, rho0_int_density, &
+                                           g_Earth, dz_neglect, dz_nonvanished, dpa, intz_dpa, &
+                                           intx_dpa, inty_dpa)
       if (Z_to_H /= 1.0) then
         do concurrent (k=kstart:kend, j=Jsq:Jeq+1, i=Isq:Ieq+1)
           intz_dpa(i,j,k) = intz_dpa(i,j,k)*Z_to_H
         enddo
       endif
-      if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
-        do k=kstart,kend
-        call diagnose_mass_weight_Z(e(:,:,K), e(:,:,K+1), bathyT, e(:,:,1), dz_neglect, CS%MassWghtInterp, &
-                                    G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
-                                    MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
-        enddo
-      endif
+      call PressureForce_FV_Bouss_MassWt_host(host, kstart, kend, e, bathyT, dz_neglect, MassWt_u, &
+                                              MassWt_v)
     enddo
     !$omp target exit data map(release: tv)
   else
@@ -2649,6 +2599,316 @@ subroutine PressureForce_FV_tides_legacy_host(host, e_sal, e_sal_tide, e_tide_eq
                                  G, US, CS%tides_CSp)
 
 end subroutine PressureForce_FV_tides_legacy_host
+
+!> Finds the specific volume integrals through layer k, and the mass weights for diagnostics,
+!! with the equation of state, using the grid, unit scaling and control structure that host
+!! points to.
+subroutine PressureForce_FV_nonBouss_dza_host(host, h_a, PFu_a, PFv_a, use_ALE, k, nz, tv, tv_tmp, &
+                                              T_t, T_b, S_t, S_b, p, alpha_ref, dp_neglect, &
+                                              p_nonvanished, dza, intp_dza, intx_dza, inty_dza, &
+                                              MassWt_u, MassWt_v)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> kg m-2]
+  type(RealArray_t), intent(in) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
+  type(RealArray_t), intent(in) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
+  logical, intent(in) :: use_ALE !< If true, use an ALE pressure reconstruction.
+  integer, intent(in) :: k !< The layer index
+  integer, intent(in) :: nz !< The number of layers
+  type(thermo_var_ptrs), intent(in) :: tv !< Thermodynamic variables
+  type(thermo_var_ptrs), intent(in) :: tv_tmp !< A structure of temporary T & S.
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: T_t !< Top and bottom edge values for linear reconstructions of temperature
+                        !! within each layer [C ~> degC].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: T_b !< Top and bottom edge values for linear reconstructions of temperature
+                        !! within each layer [C ~> degC].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: S_t !< Top and bottom edge values for linear reconstructions of salinity within
+                        !! each layer [S ~> ppt].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: S_b !< Top and bottom edge values for linear reconstructions of salinity within
+                        !! each layer [S ~> ppt].
+  real, dimension(:,:,:), contiguous, pointer :: p !< Interface pressure [R L2 T-2 ~> Pa].
+  real, intent(in) :: alpha_ref !< A reference specific volume [R-1 ~> m3 kg-1] that is used to
+                                !! reduce the impact of truncation errors.
+  real, intent(in) :: dp_neglect !< A thickness that is so small it is usually lost in roundoff and
+                                 !! can be neglected [R L2 T-2 ~> Pa].
+  real, intent(in) :: p_nonvanished !< nonvanshed pressure [R L2 T-2 ~> Pa]
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(inout) :: dza !< The change in geopotential anomaly between the top and bottom of a
+                           !! layer [L2 T-2 ~> m2 s-2].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(inout) :: intp_dza !< The vertical integral in depth of the pressure anomaly less the
+                                !! pressure anomaly at the top of the layer [R L4 T-4 ~> Pa m2 s-2].
+  real, dimension(PFu_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(inout) :: intx_dza !< The change in intx_za through a layer [L2 T-2 ~> m2 s-2].
+  real, dimension(h_a%lb(1):,PFv_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(inout) :: inty_dza !< The change in inty_za through a layer [L2 T-2 ~> m2 s-2].
+  real, dimension(:,:,:), contiguous, &
+      pointer :: MassWt_u !< The fractional mass weighting at a u-point [nondim].
+  real, dimension(:,:,:), contiguous, &
+      pointer :: MassWt_v !< The fractional mass weighting at a v-point [nondim].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(unit_scale_type), pointer :: US
+  type(PressureForce_FV_CS), pointer :: CS
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US ; CS => ctx%CS
+
+  if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
+    if ( CS%Recon_Scheme == 1 .or. CS%Recon_Scheme == 3 ) then
+      call int_spec_vol_dp_generic_plm( T_t(:,:,k), T_b(:,:,k), S_t(:,:,k), S_b(:,:,k), &
+                p(:,:,K), p(:,:,K+1), alpha_ref, dp_neglect, p(:,:,nz+1), G%HI, &
+                tv%eqn_of_state, US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), inty_dza(:,:,k), &
+                P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp, &
+                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
+    elseif ( CS%Recon_Scheme == 2 ) then
+      call MOM_error(FATAL, "PressureForce_FV_nonBouss: "//&
+                     "int_spec_vol_dp_generic_ppm does not exist yet.")
+    !  call int_spec_vol_dp_generic_ppm ( tv%T(:,:,k), T_t(:,:,k), T_b(:,:,k), &
+    !            tv%S(:,:,k), S_t(:,:,k), S_b(:,:,k), p(:,:,K), p(:,:,K+1), &
+    !            alpha_ref, G%HI, tv%eqn_of_state, dza(:,:,k), intp_dza(:,:,k), &
+    !            intx_dza(:,:,k), inty_dza(:,:,k), P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp)
+    endif
+  else
+    call int_specific_vol_dp(tv_tmp%T(:,:,k), tv_tmp%S(:,:,k), p(:,:,K), &
+                           p(:,:,K+1), alpha_ref, G%HI, tv%eqn_of_state, &
+                           US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), &
+                           inty_dza(:,:,k), bathyP=p(:,:,nz+1), P_surf=p(:,:,1), dP_tiny=dp_neglect, &
+                           MassWghtInterp=CS%MassWghtInterp, &
+                           MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
+  endif
+  if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) &
+    call diagnose_mass_weight_p(p(:,:,K), p(:,:,K+1), p(:,:,nz+1), p(:,:,1), dp_neglect, CS%MassWghtInterp, &
+                                G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
+                                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
+
+end subroutine PressureForce_FV_nonBouss_dza_host
+
+!> Finds the density integrals through layers kstart to kend with the equation of state, using
+!! the grids, unit scaling and control structure that host points to.
+subroutine PressureForce_FV_Bouss_dpa_host(host, h_a, use_ALE, kstart, kend, tv, tv_tmp, T_t, T_b, &
+                                           S_t, S_b, e, Z_0p, bathyT, rho_ref, rho0_int_density, &
+                                           g_Earth, dz_neglect, dz_nonvanished, dpa, intz_dpa, &
+                                           intx_dpa, inty_dpa)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  type(RealArray_t), intent(in) :: h_a !< Layer thickness [H ~> m]
+  logical, intent(in) :: use_ALE !< If true, use an ALE pressure reconstruction.
+  integer, intent(in) :: kstart !< The first layer in this block of layers
+  integer, intent(in) :: kend !< The last layer in this block of layers
+  type(thermo_var_ptrs), intent(in) :: tv !< Thermodynamic variables
+  type(thermo_var_ptrs), intent(in) :: tv_tmp !< A structure of temporary T & S.
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: T_t !< Top and bottom edge values for linear reconstructions of temperature
+                        !! within each layer [C ~> degC].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: T_b !< Top and bottom edge values for linear reconstructions of temperature
+                        !! within each layer [C ~> degC].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: S_t !< Top and bottom edge values for linear reconstructions of salinity within
+                        !! each layer [S ~> ppt].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(in) :: S_b !< Top and bottom edge values for linear reconstructions of salinity within
+                        !! each layer [S ~> ppt].
+  real, dimension(:,:,:), contiguous, pointer :: e !< Interface height in depth units [Z ~> m].
+  real, dimension(h_a%lb(1):,h_a%lb(2):), contiguous, &
+      intent(in) :: Z_0p !< The height at which the pressure used in the equation of state is 0
+                         !! [Z ~> m]
+  real, dimension(:,:), contiguous, pointer :: bathyT !< Ocean bottom depth, referenced to Z_ref at
+                                                      !! tracer points. bathyT is in depth units and
+                                                      !! positive *below* Z_ref [Z ~> m].
+  real, intent(in) :: rho_ref !< The reference density [R ~> kg m-3].
+  real, intent(in) :: rho0_int_density !< Rho0 used in int_density_dz_* subroutines [R ~> kg m-3]
+  real, intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
+  real, intent(in) :: dz_neglect !< A minimal thickness [Z ~> m], like e.
+  real, intent(in) :: dz_nonvanished !< A small thickness considered to be vanished for mass
+                                     !! weighting [Z ~> m]
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(inout) :: dpa !< The change in pressure anomaly between the top and bottom of a layer
+                           !! [R L2 T-2 ~> Pa].
+  real, dimension(h_a%lb(1):,h_a%lb(2):,h_a%lb(3):), contiguous, &
+      intent(inout) :: intz_dpa !< The vertical integral in depth of the pressure anomaly less the
+                                !! pressure anomaly at the top of the layer [H R L2 T-2 ~> m Pa].
+  real, dimension(:,:,:), contiguous, &
+      pointer :: intx_dpa !< The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+  real, dimension(:,:,:), contiguous, &
+      pointer :: inty_dpa !< The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(verticalGrid_type), pointer :: GV
+  type(unit_scale_type), pointer :: US
+  type(PressureForce_FV_CS), pointer :: CS
+  integer :: k ! The layer index
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; GV => ctx%GV ; US => ctx%US ; CS => ctx%CS
+
+  if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
+    if ( CS%Recon_Scheme == 1 .or. CS%Recon_Scheme == 3 ) then
+      call int_density_dz_generic_plm(kstart, kend, tv, T_t, T_b, S_t, S_b, e, &
+                rho_ref, rho0_int_density, g_Earth, dz_neglect, bathyT, &
+                G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa, intz_dpa, &
+                intx_dpa, inty_dpa, &
+                MassWghtInterp=CS%MassWghtInterp, &
+                use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p, &
+                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished, &
+                niblock=CS%niblock_plm, njblock=CS%njblock_plm)
+    elseif ( CS%Recon_Scheme == 2 ) then
+      do k=kstart,kend
+      call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
+                rho_ref, rho0_int_density, g_Earth, dz_neglect, bathyT, &
+                G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa(:,:,k), intz_dpa(:,:,k), &
+                intx_dpa(:,:,k), inty_dpa(:,:,k), &
+                MassWghtInterp=CS%MassWghtInterp, Z_0p=Z_0p, &
+                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
+      enddo
+    endif
+    ! defensive update - not sure if it works
+    !$omp target update to(dpa, intx_dpa, inty_dpa, intz_dpa)
+  else
+    do k=kstart,kend
+    call int_density_dz(tv_tmp%T(:,:,k), tv_tmp%S(:,:,k), e(:,:,K), e(:,:,K+1), &
+              rho_ref, rho0_int_density, g_Earth, G%HI, tv%eqn_of_state, US, dpa(:,:,k), &
+              intz_dpa(:,:,k), intx_dpa(:,:,k), inty_dpa(:,:,k), bathyT, e(:,:,1), dz_neglect, &
+              CS%MassWghtInterp, Z_0p=Z_0p, &
+              MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished)
+    enddo
+  endif
+
+end subroutine PressureForce_FV_Bouss_dpa_host
+
+!> Finds the fractional mass weights of layers kstart to kend for diagnostics with
+!! diagnose_mass_weight_Z, using the grid and control structure that host points to.
+subroutine PressureForce_FV_Bouss_MassWt_host(host, kstart, kend, e, bathyT, dz_neglect, MassWt_u, &
+                                              MassWt_v)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  integer, intent(in) :: kstart !< The first layer in this block of layers
+  integer, intent(in) :: kend !< The last layer in this block of layers
+  real, dimension(:,:,:), contiguous, pointer :: e !< Interface height in depth units [Z ~> m].
+  real, dimension(:,:), contiguous, pointer :: bathyT !< Ocean bottom depth, referenced to Z_ref at
+                                                      !! tracer points. bathyT is in depth units and
+                                                      !! positive *below* Z_ref [Z ~> m].
+  real, intent(in) :: dz_neglect !< A minimal thickness [Z ~> m], like e.
+  real, dimension(:,:,:), contiguous, &
+      pointer :: MassWt_u !< The fractional mass weighting at a u-point [nondim].
+  real, dimension(:,:,:), contiguous, &
+      pointer :: MassWt_v !< The fractional mass weighting at a v-point [nondim].
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(PressureForce_FV_CS), pointer :: CS
+  integer :: k ! The layer index
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; CS => ctx%CS
+
+  if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
+    do k=kstart,kend
+    call diagnose_mass_weight_Z(e(:,:,K), e(:,:,K+1), bathyT, e(:,:,1), dz_neglect, CS%MassWghtInterp, &
+                                G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
+                                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
+    enddo
+  endif
+
+end subroutine PressureForce_FV_Bouss_MassWt_host
+
+!> Calls TS_PLM_edge_values with the ALE control structure, grids and control structure that
+!! host points to.
+subroutine PressureForce_FV_TS_PLM_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: S_t !< Salinity at the top edge of each layer [S ~> ppt]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: S_b !< Salinity at the bottom edge of each layer [S ~> ppt]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: T_t !< Temperature at the top edge of each layer [C ~> degC]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: T_b !< Temperature at the bottom edge of each layer [C ~> degC]
+  type(thermo_var_ptrs), intent(in) :: tv !< thermodynamics structure
+  real, dimension(:,:,:), contiguous, intent(in) :: h !< layer thickness [H ~> m or kg m-2]
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(verticalGrid_type), pointer :: GV
+  type(PressureForce_FV_CS), pointer :: CS
+  type(ALE_CS), pointer :: ALE_CSp
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; GV => ctx%GV ; CS => ctx%CS ; ALE_CSp => ctx%ALE_CSp
+
+  call TS_PLM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
+
+end subroutine PressureForce_FV_TS_PLM_edge_host
+
+!> Calls TS_PPM_edge_values with the ALE control structure, grids and control structure that
+!! host points to.
+subroutine PressureForce_FV_TS_PPM_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: S_t !< Salinity at the top edge of each layer [S ~> ppt]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: S_b !< Salinity at the bottom edge of each layer [S ~> ppt]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: T_t !< Temperature at the top edge of each layer [C ~> degC]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: T_b !< Temperature at the bottom edge of each layer [C ~> degC]
+  type(thermo_var_ptrs), intent(in) :: tv !< thermodynamics structure
+  real, dimension(:,:,:), contiguous, intent(in) :: h !< layer thicknesses [H ~> m or kg m-2]
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(verticalGrid_type), pointer :: GV
+  type(PressureForce_FV_CS), pointer :: CS
+  type(ALE_CS), pointer :: ALE_CSp
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; GV => ctx%GV ; CS => ctx%CS ; ALE_CSp => ctx%ALE_CSp
+
+  call TS_PPM_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h, CS%boundary_extrap)
+
+end subroutine PressureForce_FV_TS_PPM_edge_host
+
+!> Calls TS_PLM_WLS_edge_values with the ALE control structure, grids and control structure that
+!! host points to.
+subroutine PressureForce_FV_TS_PLM_WLS_edge_host(host, S_t, S_b, T_t, T_b, tv, h)
+  type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
+                                         !! the Fortran-only objects (grids, unit scaling and
+                                         !! control structures) that the host helpers use
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: S_t !< Salinity at the top edge of each layer [S ~> ppt]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: S_b !< Salinity at the bottom edge of each layer [S ~> ppt]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: T_t !< Temperature at the top edge of each layer [C ~> degC]
+  real, dimension(:,:,:), contiguous, &
+      intent(inout) :: T_b !< Temperature at the bottom edge of each layer [C ~> degC]
+  type(thermo_var_ptrs), intent(in) :: tv !< thermodynamics structure
+  real, dimension(:,:,:), contiguous, intent(in) :: h !< layer thickness [H ~> m or kg m-2]
+  ! Local variables
+  type(PressureForce_FV_host_type), pointer :: ctx ! The objects that host points to
+  type(ocean_grid_type), pointer :: G
+  type(verticalGrid_type), pointer :: GV
+  type(ALE_CS), pointer :: ALE_CSp
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; GV => ctx%GV ; ALE_CSp => ctx%ALE_CSp
+
+  call TS_PLM_WLS_edge_values(ALE_CSp, S_t, S_b, T_t, T_b, G, GV, tv, h)
+
+end subroutine PressureForce_FV_TS_PLM_WLS_edge_host
 
 !> Initializes the finite volume pressure gradient control structure
 subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL_CSp, tides_CSp)
