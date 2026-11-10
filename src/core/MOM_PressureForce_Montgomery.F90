@@ -71,12 +71,14 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, US, CS, &
-                                       p_atm_a, pbce_a, eta_a)
+subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, &
+                                       US, CS, p_atm_a, pbce_a, eta_a)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
                                              !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
+                                              !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
@@ -96,8 +98,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   type(RealArray_t), intent(inout) :: eta_a !< The total column mass used to calculate
                                                                  !! PFu and PFv [H ~> kg m-2].
   ! Local variables
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
-                         ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(Box_t) :: bxH0_nmk ! bxH0 shrunk by one point at the start in k,
                          ! [isc:iec, jsc:jec, 2:nz]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
@@ -159,7 +159,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
   bxH0_nmk = bxH0%growLo(dim=3, n=-1)
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
@@ -275,7 +274,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
     if (nkmb>0) then
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -294,7 +293,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
     else
       tv_tmp%T => tv%T ; tv_tmp%S => tv%S
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = 0 ; enddo
+      do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1)) ; p_ref(i) = 0 ; enddo
     endif
     !$OMP parallel do default(shared) private(rho_in_situ)
     do k=1,nz ; do j=Jsq,Jeq+1
@@ -408,7 +407,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gco
   if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
 
   call p_a%free() ; call alpha_star_a%free()
-  call bxQ0_pij%free()
   call bxH0_nmk%free()
 
 end subroutine PressureForce_Mont_nonBouss
@@ -420,12 +418,14 @@ end subroutine PressureForce_Mont_nonBouss
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, US, CS, &
-                                    p_atm_a, pbce_a, eta_a)
+subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, GV, US, &
+                                    CS, p_atm_a, pbce_a, eta_a)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
                                              !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
+                                              !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
@@ -444,8 +444,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
                                                                 !! [L2 T-2 H-1 ~> m s-2].
   type(RealArray_t), intent(inout) :: eta_a !< Free surface height [H ~> m].
   ! Local variables
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
-                         ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv
@@ -497,7 +495,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
   EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
   call h_a%view(h) ; call PFu_a%view(PFu) ; call PFv_a%view(PFv)
@@ -579,7 +576,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
       tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
       tv_tmp%eqn_of_state => tv%eqn_of_state
 
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
+      do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1)) ; p_ref(i) = tv%P_Ref ; enddo
       !$OMP parallel do default(shared) private(Rho_cv_BL)
       do j=Jsq,Jeq+1
         do k=1,nkmb ; do i=Isq,Ieq+1
@@ -599,7 +596,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
     else
       tv_tmp%T => tv%T ; tv_tmp%S => tv%S
       tv_tmp%eqn_of_state => tv%eqn_of_state
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p_ref(i) = 0.0 ; enddo
+      do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1)) ; p_ref(i) = 0.0 ; enddo
     endif
 
     ! This no longer includes any pressure dependency, since this routine
@@ -639,7 +636,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
 
   if (pbce_a%associated()) then
     call g_prime_a%alloc(lb=LBOUND(GV%g_prime), ub=UBOUND(GV%g_prime), source=GV%g_prime)
-    call Set_pbce_Bouss(bxH0, bxQ0, e_a, tv_tmp, Gcore, G%isd, G%jsd, GV%H_to_Z, &
+    call Set_pbce_Bouss(bxH0, bxQ0, bxHpgf, e_a, tv_tmp, Gcore, G%isd, G%jsd, GV%H_to_Z, &
                         GV%g_Earth, GV%Rho0, GV%dZ_subroundoff, g_prime_a, CS%Rho0, &
                         CS%GFS_scale, pbce_a, rho_star_a, 1)
     call g_prime_a%free()
@@ -712,18 +709,19 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, h_a, tv, PFu_a, PFv_a, G, Gcore,
   if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
 
   call e_a%free() ; call rho_star_a%free()
-  call bxQ0_pij%free()
 
 end subroutine PressureForce_Mont_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
-subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth, GV_Rho0, &
+subroutine Set_pbce_Bouss(bxH0, bxQ0, bxHpgf, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth, GV_Rho0, &
                           dZ_subroundoff, g_prime_a, Rho0, GFS_scale, pbce_a, rho_star_a, nkblock)
   type(Box_t),          intent(in)  :: bxH0 !< The h-point box of the whole column,
                                             !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
                                             !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),          intent(in)  :: bxHpgf !< The h points the u and v pressure gradients
+                                              !! read, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(RealArray_t), intent(in) :: e_a !< Interface height [Z ~> m].
   type(thermo_var_ptrs),                intent(in)  :: tv   !< Thermodynamic variables
   type(grid_core_type), intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
@@ -777,8 +775,6 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
   integer :: EOSdom(3,2)     ! The computational domain for the equation of state
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k, kstart, kend, kk
   integer :: iec, jec
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown by one point at the end in i and j,
-                         ! [IscB:IecB+1, JscB:JecB+1, 1:nz]
 
   call e_a%view(e) ; call pbce_a%view(pbce)
   call Gcore%meanSL%view(meanSL) ; call g_prime_a%view(g_prime)
@@ -788,21 +784,20 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
   !$omp target data map(alloc: Ihtot)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = bxH0%idxE(3)
   iec = bxH0%idxE(1) ; jec = bxH0%idxE(2)
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
   use_EOS = associated(tv%eqn_of_state)
   dz_neglect = dZ_subroundoff
 
   if (use_EOS) then
     if (rho_star_a%associated()) then
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2))
-        do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2))
+        do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1))
           Ihtot(i,j) = H_to_Z / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
           pbce(i,j,1) = GFS_scale * rho_star(i,j,1) * H_to_Z
         enddo
 
         do k=2,nz
-          do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+          do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1))
             pbce(i,j,k) = pbce(i,j,k-1) + (rho_star(i,j,k) - rho_star(i,j,k-1)) &
                 * ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j))
           enddo
@@ -818,7 +813,7 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
 
       EOSdom(1,:) = [Isq - (isd-1), iec+1 - (isd-1)]
       EOSdom(2,:) = [Jsq - (jsd-1), jec+1 - (jsd-1)]
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), i=bxHpgf%idxS(1):bxHpgf%idxE(1))
         Ihtot(i,j) = H_to_Z / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
         press(i,j,1) = -Rho0xG * (e(i,j,1) - meanSL(i,j))
       enddo
@@ -826,7 +821,7 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
       call calculate_density(tv%T(:,:,1), tv%S(:,:,1), press(:,:,1), rho_in_situ, &
                              tv%eqn_of_state, EOSdom(1:2,:))
 
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), i=bxHpgf%idxS(1):bxHpgf%idxE(1))
         pbce(i,j,1) = G_Rho0 * (GFS_scale * rho_in_situ(i,j)) * H_to_Z
       enddo
 
@@ -843,8 +838,8 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
         call calculate_density_derivs(T_int, S_int, press, dR_dT, dR_dS, &
                                       tv%eqn_of_state, EOSdom)
 
-        do concurrent(j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2))
-          do k=kstart,kend ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+        do concurrent(j=bxHpgf%idxS(2):bxHpgf%idxE(2))
+          do k=kstart,kend ; do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1))
           kk=k-kstart+1
           pbce(i,j,k) = pbce(i,j,k-1) + G_Rho0 * &
              ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j)) * &
@@ -856,13 +851,13 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
       !$omp end target data
     endif
   else
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2))
+      do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1))
         Ihtot(i,j) = 1.0 / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
         pbce(i,j,1) = g_prime(1) * H_to_Z
       enddo
       do k=2,nz
-        do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+        do concurrent (i=bxHpgf%idxS(1):bxHpgf%idxE(1))
           pbce(i,j,k) = pbce(i,j,k-1) + (g_prime(K) * H_to_Z) &
               * ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j))
         enddo
@@ -870,7 +865,6 @@ subroutine Set_pbce_Bouss(bxH0, bxQ0, e_a, tv, Gcore, isd, jsd, H_to_Z, g_Earth,
     enddo
   endif
   !$omp end target data
-  call bxQ0_pij%free()
 end subroutine Set_pbce_Bouss
 
 !> Determines the partial derivative of the acceleration due
