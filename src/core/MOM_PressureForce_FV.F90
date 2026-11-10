@@ -29,7 +29,8 @@ use MOM_density_integrals, only : diagnose_mass_weight_Z, diagnose_mass_weight_p
 use MOM_ALE, only : TS_PLM_edge_values, TS_PPM_edge_values, TS_PLM_WLS_edge_values, ALE_CS
 use array_mod, only : RealArray_t
 use box_mod, only : Box_t
-use, intrinsic :: iso_c_binding, only : c_ptr, c_loc, c_f_pointer
+use, intrinsic :: iso_c_binding, only : c_ptr, c_loc, c_f_pointer, c_int, c_bool, c_double
+use turbotmp_helperF, only : io_recorder
 
 implicit none ; private
 
@@ -53,9 +54,8 @@ integer, parameter :: default_njblock_plm = 1 !< Default j block size for PLM de
 #endif
 integer, parameter :: default_niblock_plm = 0 !< Default i block size for PLM density integrals [nondim]
 
-!> Finite volume pressure gradient control structure
-type, public :: PressureForce_FV_CS ; private
-  logical :: initialized = .false. !< True if this control structure has been initialized.
+!> Options used in the finite volume pressure gradient calculations.
+type, public :: PGF_FV_opts_CS
   logical :: calculate_SAL = .false. !< If true, calculate self-attraction and loading.
   logical :: sal_use_bpa = .false. !< If true, use bottom pressure anomaly instead of SSH
                                    !! to calculate SAL.
@@ -65,10 +65,6 @@ type, public :: PressureForce_FV_CS ; private
   logical :: rho_ref_bug    !< If true, recover a bug that mixes GV%Rho0 and CS%rho_ref in Boussinesq mode.
   real    :: GFS_scale      !< A scaling of the surface pressure gradients to
                             !! allow the use of a reduced gravity model [nondim].
-  type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
-  type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
-                            !! timing of diagnostic output.
-  integer :: MassWghtInterp !< A flag indicating whether and how to use mass weighting in T/S interpolation
   logical :: correction_intxpa !< If true, apply a correction to the value of intxpa at a selected
                             !! interface under ice, using matching at the end values along with a
                             !! 5-point quadrature integral of the hydrostatic pressure or height
@@ -77,35 +73,96 @@ type, public :: PressureForce_FV_CS ; private
   logical :: reset_intxpa_integral !< If true and the surface displacement between adjacent cells
                             !! exceeds the vertical grid spacing, reset intxpa at the interface below
                             !! a trusted interior cell.  (This often applies in ice shelf cavities.)
-  logical :: MassWghtInterpVanOnly !< If true, don't do mass weighting of T/S interpolation unless vanished
   logical :: reset_intxpa_flattest !< If true, use flattest interface rather than top for reset integral
                                    !! in cases where no best nonvanished interface
   real    :: h_nonvanished  !< A minimal layer thickness that indicates that a layer is thick enough
                             !! to usefully reestimate the pressure integral across the interface
                             !! below it [H ~> m or kg m-2]
+  logical :: reconstruct    !< If true, polynomial profiles of T & S will be
+                            !! reconstructed and used in the integrals for the
+                            !! finite volume pressure gradient calculation.
+                            !! The default depends on whether regridding is being used.
+  integer :: Recon_Scheme   !< Order of the polynomial of the reconstruction of T & S
+                            !! for the finite volume pressure gradient calculation.
+                            !! By the default (1) is for a piecewise linear method
+  logical :: debug          !< If true, write verbose checksums for debugging purposes.
+  logical :: use_SSH_in_Z0p !< If true, adjust the height at which the pressure used in the
+                            !! equation of state is 0 to account for the displacement of the sea
+                            !! surface including adjustments for atmospheric or sea-ice pressure.
+  logical :: bq_sal_tides = .false. !< If true, use an alternative method for SAL and tides
+                                    !! in Boussinesq mode
+  integer :: tides_answer_date = 99991231 !< Recover old answers with tides
+  integer :: nkblock      !< Vertical block size for PLM density integrals [nondim]
+  logical :: do_MassWt_diag = .false. !< If true, the MassWt_u or MassWt_v diagnostic is
+                                      !! requested, so the mass weights are calculated.
+end type PGF_FV_opts_CS
+
+!> bind(C) mirror of PGF_FV_opts_CS, field-for-field, same order.
+type, bind(C) :: PGF_FV_opts_CS_C
+  logical(c_bool) :: calculate_SAL !< If true, calculate self-attraction and loading.
+  logical(c_bool) :: sal_use_bpa !< If true, use bottom pressure anomaly instead of SSH to calculate
+                                 !! SAL.
+  logical(c_bool) :: tides !< If true, apply tidal momentum forcing.
+  real(c_double) :: rho_ref !< The reference density that is subtracted off when calculating
+                            !! pressure gradient forces [R ~> kg m-3].
+  logical(c_bool) :: rho_ref_bug !< If true, recover a bug that mixes GV%Rho0 and CS%rho_ref in
+                                 !! Boussinesq mode.
+  real(c_double) :: GFS_scale !< A scaling of the surface pressure gradients to allow the use of a
+                              !! reduced gravity model [nondim].
+  logical(c_bool) :: correction_intxpa !< If true, apply a correction to the value of intxpa at a
+                                       !! selected interface under ice, using matching at the end
+                                       !! values along with a 5-point quadrature integral of the
+                                       !! hydrostatic pressure or height changes along that
+                                       !! interface.  The selected interface is either at the
+                                       !! ocean's surface or in the interior, depending on
+                                       !! reset_intxpa_integral.
+  logical(c_bool) :: reset_intxpa_integral !< If true and the surface displacement between adjacent
+                                           !! cells exceeds the vertical grid spacing, reset intxpa
+                                           !! at the interface below a trusted interior cell.  (This
+                                           !! often applies in ice shelf cavities.)
+  logical(c_bool) :: reset_intxpa_flattest !< If true, use flattest interface rather than top for
+                                           !! reset integral in cases where no best nonvanished
+                                           !! interface
+  real(c_double) :: h_nonvanished !< A minimal layer thickness that indicates that a layer is thick
+                                  !! enough to usefully reestimate the pressure integral across the
+                                  !! interface below it [H ~> m or kg m-2]
+  logical(c_bool) :: reconstruct !< If true, polynomial profiles of T & S will be reconstructed and
+                                 !! used in the integrals for the finite volume pressure gradient
+                                 !! calculation. The default depends on whether regridding is being
+                                 !! used.
+  integer(c_int) :: Recon_Scheme !< Order of the polynomial of the reconstruction of T & S for the
+                                 !! finite volume pressure gradient calculation. By the default (1)
+                                 !! is for a piecewise linear method
+  logical(c_bool) :: debug !< If true, write verbose checksums for debugging purposes.
+  logical(c_bool) :: use_SSH_in_Z0p !< If true, adjust the height at which the pressure used in the
+                                    !! equation of state is 0 to account for the displacement of the
+                                    !! sea surface including adjustments for atmospheric or sea-ice
+                                    !! pressure.
+  logical(c_bool) :: bq_sal_tides !< If true, use an alternative method for SAL and tides in
+                                  !! Boussinesq mode
+  integer(c_int) :: tides_answer_date !< Recover old answers with tides
+  integer(c_int) :: nkblock !< Vertical block size for PLM density integrals [nondim]
+  logical(c_bool) :: do_MassWt_diag !< If true, the MassWt_u or MassWt_v diagnostic is requested, so
+                                    !! the mass weights are calculated.
+end type PGF_FV_opts_CS_C
+
+!> Finite volume pressure gradient control structure
+type, public :: PressureForce_FV_CS ; private
+  logical :: initialized = .false. !< True if this control structure has been initialized.
+  type(PGF_FV_opts_CS) :: PGF_FV_opts_CS !< The options used in the finite volume pressure gradient
+                                         !! calculations
+  type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
+  type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the
+                            !! timing of diagnostic output.
+  integer :: MassWghtInterp !< A flag indicating whether and how to use mass weighting in T/S interpolation
+  logical :: MassWghtInterpVanOnly !< If true, don't do mass weighting of T/S interpolation unless vanished
   logical :: use_inaccurate_pgf_rho_anom !< If true, uses the older and less accurate
                             !! method to calculate density anomalies, as used prior to
                             !! March 2018.
   logical :: boundary_extrap !< Indicate whether high-order boundary
                             !! extrapolation should be used within boundary cells
 
-  logical :: reconstruct    !< If true, polynomial profiles of T & S will be
-                            !! reconstructed and used in the integrals for the
-                            !! finite volume pressure gradient calculation.
-                            !! The default depends on whether regridding is being used.
-
-  integer :: Recon_Scheme   !< Order of the polynomial of the reconstruction of T & S
-                            !! for the finite volume pressure gradient calculation.
-                            !! By the default (1) is for a piecewise linear method
-
-  logical :: debug          !< If true, write verbose checksums for debugging purposes.
-  logical :: use_SSH_in_Z0p !< If true, adjust the height at which the pressure used in the
-                            !! equation of state is 0 to account for the displacement of the sea
-                            !! surface including adjustments for atmospheric or sea-ice pressure.
   logical :: use_stanley_pgf  !< If true, turn on Stanley parameterization in the PGF
-  logical :: bq_sal_tides = .false. !< If true, use an alternative method for SAL and tides
-                                    !! in Boussinesq mode
-  integer :: tides_answer_date = 99991231 !< Recover old answers with tides
   integer :: id_e_tide = -1 !< Diagnostic identifier
   integer :: id_e_tidal_eq = -1 !< Diagnostic identifier
   integer :: id_e_tidal_sal = -1 !< Diagnostic identifier
@@ -119,7 +176,6 @@ type, public :: PressureForce_FV_CS ; private
   integer :: id_sal_v = -1 !< Diagnostic identifier
   integer :: id_tides_u = -1 !< Diagnostic identifier
   integer :: id_tides_v = -1 !< Diagnostic identifier
-  integer :: nkblock      !< Vertical block size for PLM density integrals [nondim]
   integer :: niblock_plm  !< i-tile size for PLM density integrals, 0 = full domain [nondim]
   integer :: njblock_plm  !< j-tile size for PLM density integrals, 0 = full domain [nondim]
   type(SAL_CS), pointer :: SAL_CSp => NULL() !< SAL control structure
@@ -138,6 +194,56 @@ type :: PressureForce_FV_host_type
 end type PressureForce_FV_host_type
 
 contains
+
+!> Converts a PGF_FV_opts_CS to its bind(C) mirror.
+function PGF_FV_opts_CS_to_c(opts) result(cdesc)
+  type(PGF_FV_opts_CS), intent(in) :: opts !< Options to convert
+  type(PGF_FV_opts_CS_C) :: cdesc       !< bind(C) mirror of opts
+  cdesc%calculate_SAL = opts%calculate_SAL
+  cdesc%sal_use_bpa = opts%sal_use_bpa
+  cdesc%tides = opts%tides
+  cdesc%rho_ref = opts%rho_ref
+  cdesc%rho_ref_bug = opts%rho_ref_bug
+  cdesc%GFS_scale = opts%GFS_scale
+  cdesc%correction_intxpa = opts%correction_intxpa
+  cdesc%reset_intxpa_integral = opts%reset_intxpa_integral
+  cdesc%reset_intxpa_flattest = opts%reset_intxpa_flattest
+  cdesc%h_nonvanished = opts%h_nonvanished
+  cdesc%reconstruct = opts%reconstruct
+  cdesc%Recon_Scheme = opts%Recon_Scheme
+  cdesc%debug = opts%debug
+  cdesc%use_SSH_in_Z0p = opts%use_SSH_in_Z0p
+  cdesc%bq_sal_tides = opts%bq_sal_tides
+  cdesc%tides_answer_date = opts%tides_answer_date
+  cdesc%nkblock = opts%nkblock
+  cdesc%do_MassWt_diag = opts%do_MassWt_diag
+end function PGF_FV_opts_CS_to_c
+
+!> Records the members of a PGF_FV_opts_CS in a capture file, with names starting with prefix.
+subroutine record_PGF_FV_opts_CS(rec, prefix, opts)
+  type(io_recorder), intent(inout) :: rec    !< The capture file being written
+  character(len=*),  intent(in)    :: prefix !< The start of each record name
+  type(PGF_FV_opts_CS), intent(in) :: opts !< The options to record
+
+  call rec%add(prefix//"_calculate_SAL", opts%calculate_SAL)
+  call rec%add(prefix//"_sal_use_bpa", opts%sal_use_bpa)
+  call rec%add(prefix//"_tides", opts%tides)
+  call rec%add(prefix//"_rho_ref", opts%rho_ref)
+  call rec%add(prefix//"_rho_ref_bug", opts%rho_ref_bug)
+  call rec%add(prefix//"_GFS_scale", opts%GFS_scale)
+  call rec%add(prefix//"_correction_intxpa", opts%correction_intxpa)
+  call rec%add(prefix//"_reset_intxpa_integral", opts%reset_intxpa_integral)
+  call rec%add(prefix//"_reset_intxpa_flattest", opts%reset_intxpa_flattest)
+  call rec%add(prefix//"_h_nonvanished", opts%h_nonvanished)
+  call rec%add(prefix//"_reconstruct", opts%reconstruct)
+  call rec%add(prefix//"_Recon_Scheme", opts%Recon_Scheme)
+  call rec%add(prefix//"_debug", opts%debug)
+  call rec%add(prefix//"_use_SSH_in_Z0p", opts%use_SSH_in_Z0p)
+  call rec%add(prefix//"_bq_sal_tides", opts%bq_sal_tides)
+  call rec%add(prefix//"_tides_answer_date", opts%tides_answer_date)
+  call rec%add(prefix//"_nkblock", opts%nkblock)
+  call rec%add(prefix//"_do_MassWt_diag", opts%do_MassWt_diag)
+end subroutine record_PGF_FV_opts_CS
 
 !> Calls PressureForce_FV_nonBouss and does the Fortran-only work around that call.
 subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, &
@@ -227,10 +333,10 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
   host = c_loc(ctx)
 
   call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, &
-                                 Gcore, CS, host, associated(ALE_CSp), p_atm_a, pbce_a, eta_a, &
-                                 Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
-                                 MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, H_to_RZ, H_subroundoff, &
-                                 nk_rho_varies, semi_Boussinesq)
+                                 Gcore, CS%PGF_FV_opts_CS, host, associated(ALE_CSp), p_atm_a, &
+                                 pbce_a, eta_a, Rlay_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                 e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, Z_ref, g_Earth, &
+                                 H_to_RZ, H_subroundoff, nk_rho_varies, semi_Boussinesq)
 
   call Gcore%IdxCu%view(IdxCu) ; call Gcore%IdyCv%view(IdyCv)
   call e_sal_a%view(e_sal) ; call e_tidal_eq_a%view(e_tidal_eq)
@@ -246,8 +352,8 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
   if (CS%id_e_tide>0) then
     ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
     ! New diagnostics are given for each individual field.
-    if (CS%tides_answer_date>20230630) then ; do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
-                                                             i=bxHpgf%idxS(1):bxHpgf%idxE(1))
+    if (CS%PGF_FV_opts_CS%tides_answer_date>20230630) then ; do concurrent ( &
+        j=bxHpgf%idxS(2):bxHpgf%idxE(2), i=bxHpgf%idxS(1):bxHpgf%idxE(1))
       e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
     enddo ; endif
     call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
@@ -257,8 +363,8 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
   if (CS%id_e_tidal_sal>0) call post_data(CS%id_e_tidal_sal, e_tidal_sal, CS%diag)
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
-  if (CS%calculate_SAL .and. (associated(ADp%sal_u) .or. associated(ADp%sal_v))) then
-    if (CS%tides) then ; do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
+  if (CS%PGF_FV_opts_CS%calculate_SAL .and. (associated(ADp%sal_u) .or. associated(ADp%sal_v))) then
+    if (CS%PGF_FV_opts_CS%tides) then ; do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
                                         i=bxHpgf%idxS(1):bxHpgf%idxE(1))
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
     enddo ; endif
@@ -276,7 +382,7 @@ subroutine PressureForce_FV_nonBouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint
     if (CS%id_sal_v>0) call post_data(CS%id_sal_v, ADp%sal_v, CS%diag)
   endif
 
-  if (CS%tides .and. (associated(ADp%tides_u) .or. associated(ADp%tides_v))) then
+  if (CS%PGF_FV_opts_CS%tides .and. (associated(ADp%tides_u) .or. associated(ADp%tides_v))) then
     if (associated(ADp%tides_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
                                                        j=bxU0%idxS(2):bxU0%idxE(2), &
                                                        I=bxU0%idxS(1):bxU0%idxE(1))
@@ -327,7 +433,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
   type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
-  type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
+  type(PGF_FV_opts_CS), intent(in) :: CS !< The options used in the finite volume pressure gradient
+                                         !! calculations
   type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
                                          !! the Fortran-only objects (grid, unit scaling and control
                                          !! structure) that the host helpers use
@@ -543,7 +650,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, bxHkint, h_
   I_gEarth = 1.0 / g_Earth
   p_nonvanished = g_Earth*H_to_RZ*CS%h_nonvanished
 
-  if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
+  if (CS%do_MassWt_diag) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
   endif
 
@@ -1241,12 +1348,12 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   ctx%GV => GV ; ctx%ALE_CSp => ALE_CSp
   host = c_loc(ctx)
 
-  call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, Gcore, CS, &
-                              host, associated(ALE_CSp), p_atm_a, pbce_a, eta_a, Rlay_a, &
-                              g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
-                              MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, Z_ref, g_Earth, &
-                              H_to_Z, Z_to_H, H_to_RZ, Rho0, H_subroundoff, dZ_subroundoff, &
-                              nk_rho_varies)
+  call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a, PFv_a, Gcore, &
+                              CS%PGF_FV_opts_CS, host, associated(ALE_CSp), p_atm_a, pbce_a, &
+                              eta_a, Rlay_a, g_prime_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                              e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, &
+                              Z_ref, g_Earth, H_to_Z, Z_to_H, H_to_RZ, Rho0, H_subroundoff, &
+                              dZ_subroundoff, nk_rho_varies)
 
   is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; js = bxH0%idxS(2) ; je = bxH0%idxE(2) ; nz = bxH0%idxE(3)
   call h_a%view(h)
@@ -1264,9 +1371,9 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   h_neglect = H_subroundoff
   I_Rho0 = 1.0 / Rho0
   GxRho0 = g_Earth * Rho0
-  rho_ref = CS%rho_ref
+  rho_ref = CS%PGF_FV_opts_CS%rho_ref
 
-  if (CS%rho_ref_bug) then
+  if (CS%PGF_FV_opts_CS%rho_ref_bug) then
     GxRho_ref = GxRho0
   else
     GxRho_ref = g_Earth * rho_ref
@@ -1320,8 +1427,8 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   if (CS%id_e_tide>0) then
     ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
     ! New diagnostics are given for each individual field.
-    if (CS%tides_answer_date>20230630) then ; do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
-                                                             i=bxHpgf%idxS(1):bxHpgf%idxE(1))
+    if (CS%PGF_FV_opts_CS%tides_answer_date>20230630) then ; do concurrent ( &
+        j=bxHpgf%idxS(2):bxHpgf%idxE(2), i=bxHpgf%idxS(1):bxHpgf%idxE(1))
       e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
     enddo ; endif
     call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
@@ -1331,12 +1438,13 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
   if (CS%id_e_tidal_sal>0) call post_data(CS%id_e_tidal_sal, e_tidal_sal, CS%diag)
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
-  if (CS%calculate_SAL .and. ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
-    if (CS%tides) then ; do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
+  if (CS%PGF_FV_opts_CS%calculate_SAL .and. &
+      ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
+    if (CS%PGF_FV_opts_CS%tides) then ; do concurrent (j=bxHpgf%idxS(2):bxHpgf%idxE(2), &
                                         i=bxHpgf%idxS(1):bxHpgf%idxE(1))
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
     enddo ; endif
-    if (CS%bq_sal_tides) then
+    if (CS%PGF_FV_opts_CS%bq_sal_tides) then
       ! sal_u = ( e(i+1) - e(i) ) * g / dx
       if (associated(ADp%sal_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
                                                        j=bxU0%idxS(2):bxU0%idxE(2), &
@@ -1367,8 +1475,8 @@ subroutine PressureForce_FV_Bouss_cap(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, P
     if (CS%id_sal_v>0) call post_data(CS%id_sal_v, ADp%sal_v, CS%diag)
   endif
 
-  if (CS%tides .and. ((associated(ADp%tides_u) .or. associated(ADp%tides_v)))) then
-    if (CS%bq_sal_tides) then
+  if (CS%PGF_FV_opts_CS%tides .and. ((associated(ADp%tides_u) .or. associated(ADp%tides_v)))) then
+    if (CS%PGF_FV_opts_CS%bq_sal_tides) then
       ! tides_u = ( e(i+1) - e(i) ) * g / dx
       if (associated(ADp%tides_u)) then ; do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), &
                                                          j=bxU0%idxS(2):bxU0%idxE(2), &
@@ -1434,7 +1542,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
   type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(RealArray_t), intent(inout) :: PFu_a !< Zonal acceleration [L T-2 ~> m s-2]
   type(RealArray_t), intent(inout) :: PFv_a !< Meridional acceleration [L T-2 ~> m s-2]
-  type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
+  type(PGF_FV_opts_CS), intent(in) :: CS !< The options used in the finite volume pressure gradient
+                                         !! calculations
   type(c_ptr), value, intent(in) :: host !< The address of a PressureForce_FV_host_type that holds
                                          !! the Fortran-only objects (grid, unit scaling and control
                                          !! structure) that the host helpers use
@@ -1677,7 +1786,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
     I_g_rho = 1.0 / (Rho0 * g_Earth)
   endif
 
-  if ((CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)) then
+  if (CS%do_MassWt_diag) then
     MassWt_u(:,:,:) = 0.0 ; MassWt_v(:,:,:) = 0.0
   endif
 
@@ -1836,7 +1945,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHpgf, h_a, tv, PFu_a
 
   if (use_EOS) then
     !$omp target update from(e) if( (use_ALE .and. CS%Recon_Scheme == 2) .or. &
-    !$omp                           (CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0))
+    !$omp                           CS%do_MassWt_diag)
 
     ! The following routine computes the integrals that are needed to
     ! calculate the pressure gradient force. Linear profiles for T and S are
@@ -2644,14 +2753,14 @@ subroutine PressureForce_FV_nonBouss_dza_host(host, h_a, PFu_a, PFv_a, use_ALE, 
   call c_f_pointer(host, ctx)
   G => ctx%G ; US => ctx%US ; CS => ctx%CS
 
-  if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
-    if ( CS%Recon_Scheme == 1 .or. CS%Recon_Scheme == 3 ) then
+  if ( use_ALE .and. CS%PGF_FV_opts_CS%Recon_Scheme > 0 ) then
+    if ( CS%PGF_FV_opts_CS%Recon_Scheme == 1 .or. CS%PGF_FV_opts_CS%Recon_Scheme == 3 ) then
       call int_spec_vol_dp_generic_plm( T_t(:,:,k), T_b(:,:,k), S_t(:,:,k), S_b(:,:,k), &
                 p(:,:,K), p(:,:,K+1), alpha_ref, dp_neglect, p(:,:,nz+1), G%HI, &
                 tv%eqn_of_state, US, dza(:,:,k), intp_dza(:,:,k), intx_dza(:,:,k), inty_dza(:,:,k), &
                 P_surf=p(:,:,1), MassWghtInterp=CS%MassWghtInterp, &
                 MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, p_nv=p_nonvanished)
-    elseif ( CS%Recon_Scheme == 2 ) then
+    elseif ( CS%PGF_FV_opts_CS%Recon_Scheme == 2 ) then
       call MOM_error(FATAL, "PressureForce_FV_nonBouss: "//&
                      "int_spec_vol_dp_generic_ppm does not exist yet.")
     !  call int_spec_vol_dp_generic_ppm ( tv%T(:,:,k), T_t(:,:,k), T_b(:,:,k), &
@@ -2735,8 +2844,8 @@ subroutine PressureForce_FV_Bouss_dpa_host(host, h_a, use_ALE, kstart, kend, tv,
   call c_f_pointer(host, ctx)
   G => ctx%G ; GV => ctx%GV ; US => ctx%US ; CS => ctx%CS
 
-  if ( use_ALE .and. CS%Recon_Scheme > 0 ) then
-    if ( CS%Recon_Scheme == 1 .or. CS%Recon_Scheme == 3 ) then
+  if ( use_ALE .and. CS%PGF_FV_opts_CS%Recon_Scheme > 0 ) then
+    if ( CS%PGF_FV_opts_CS%Recon_Scheme == 1 .or. CS%PGF_FV_opts_CS%Recon_Scheme == 3 ) then
       call int_density_dz_generic_plm(kstart, kend, tv, T_t, T_b, S_t, S_b, e, &
                 rho_ref, rho0_int_density, g_Earth, dz_neglect, bathyT, &
                 G%HI, GV, tv%eqn_of_state, US, CS%use_stanley_pgf, dpa, intz_dpa, &
@@ -2745,7 +2854,7 @@ subroutine PressureForce_FV_Bouss_dpa_host(host, h_a, use_ALE, kstart, kend, tv,
                 use_inaccurate_form=CS%use_inaccurate_pgf_rho_anom, Z_0p=Z_0p, &
                 MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=dz_nonvanished, &
                 niblock=CS%niblock_plm, njblock=CS%njblock_plm)
-    elseif ( CS%Recon_Scheme == 2 ) then
+    elseif ( CS%PGF_FV_opts_CS%Recon_Scheme == 2 ) then
       do k=kstart,kend
       call int_density_dz_generic_ppm(k, tv, T_t, T_b, S_t, S_b, e, &
                 rho_ref, rho0_int_density, g_Earth, dz_neglect, bathyT, &
@@ -2800,7 +2909,8 @@ subroutine PressureForce_FV_Bouss_MassWt_host(host, kstart, kend, e, bathyT, dz_
     do k=kstart,kend
     call diagnose_mass_weight_Z(e(:,:,K), e(:,:,K+1), bathyT, e(:,:,1), dz_neglect, CS%MassWghtInterp, &
                                 G%HI, MassWt_u(:,:,k), MassWt_v(:,:,k), &
-                                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, h_nv=CS%h_nonvanished)
+                                MassWghtInterpVanOnly=CS%MassWghtInterpVanOnly, &
+                                h_nv=CS%PGF_FV_opts_CS%h_nonvanished)
     enddo
   endif
 
@@ -3147,43 +3257,45 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
 
   mdl = "MOM_PressureForce_FV"
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "DEBUG", CS%debug, &
+  call get_param(param_file, mdl, "DEBUG", CS%PGF_FV_opts_CS%debug, &
                  "If true, write out verbose debugging data.", &
                  default=.false., debuggingParam=.true., do_not_log=.true.)
-  call get_param(param_file, mdl, "RHO_PGF_REF", CS%rho_ref, &
+  call get_param(param_file, mdl, "RHO_PGF_REF", CS%PGF_FV_opts_CS%rho_ref, &
                  "The reference density that is subtracted off when calculating pressure "//&
                  "gradient forces.  Its inverse is subtracted off of specific volumes when "//&
                  "in non-Boussinesq mode.  The default is RHO_0.", &
                  units="kg m-3", default=GV%Rho0*US%R_to_kg_m3, scale=US%kg_m3_to_R)
   call get_param(param_file, mdl, "ENABLE_BUGS_BY_DEFAULT", enable_bugs, &
                  default=.true., do_not_log=.true.)  ! This is logged from MOM.F90.
-  call get_param(param_file, mdl, "RHO_PGF_REF_BUG", CS%rho_ref_bug, &
+  call get_param(param_file, mdl, "RHO_PGF_REF_BUG", CS%PGF_FV_opts_CS%rho_ref_bug, &
                  "If true, recover a bug that RHO_0 (the mean seawater density in Boussinesq mode) "//&
                  "and RHO_PGF_REF (the subtracted reference density in finite volume pressure "//&
                  "gradient forces) are incorrectly interchanged in several instances in Boussinesq mode.", &
                  default=enable_bugs)
-  call get_param(param_file, mdl, "TIDES", CS%tides, &
+  call get_param(param_file, mdl, "TIDES", CS%PGF_FV_opts_CS%tides, &
                  "If true, apply tidal momentum forcing.", default=.false.)
-  if (CS%tides) then
+  if (CS%PGF_FV_opts_CS%tides) then
     call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
                    "This sets the default value for the various _ANSWER_DATE parameters.", &
                    default=99991231)
-    call get_param(param_file, mdl, "TIDES_ANSWER_DATE", CS%tides_answer_date, "The vintage of "//&
+    call get_param(param_file, mdl, "TIDES_ANSWER_DATE", CS%PGF_FV_opts_CS%tides_answer_date, &
+                   "The vintage of "//&
                    "self-attraction and loading (SAL) and tidal forcing calculations.  Setting "//&
                    "dates before 20230701 recovers old answers (Boussinesq and non-Boussinesq "//&
                    "modes) when SAL is part of the tidal forcing calculation.  The answer "//&
                    "difference is only at bit level and due to a reordered summation.  Setting "//&
                    "dates before 20250201 recovers answers (Boussinesq mode) that interface "//&
                    "heights are modified before pressure force integrals are calculated.", &
-                   default=default_answer_date, do_not_log=(.not.CS%tides))
+                   default=default_answer_date, do_not_log=(.not.CS%PGF_FV_opts_CS%tides))
   endif
-  call get_param(param_file, mdl, "CALCULATE_SAL", CS%calculate_SAL, &
-                 "If true, calculate self-attraction and loading.", default=CS%tides)
-  if (CS%calculate_SAL) &
-    call get_param(param_file, '', "SAL_USE_BPA", CS%sal_use_bpa, default=.false., &
+  call get_param(param_file, mdl, "CALCULATE_SAL", CS%PGF_FV_opts_CS%calculate_SAL, &
+                 "If true, calculate self-attraction and loading.", default=CS%PGF_FV_opts_CS%tides)
+  if (CS%PGF_FV_opts_CS%calculate_SAL) &
+    call get_param(param_file, '', "SAL_USE_BPA", CS%PGF_FV_opts_CS%sal_use_bpa, default=.false., &
                    do_not_log=.true.)
-  if ((CS%tides .or. CS%calculate_SAL) .and. GV%Boussinesq) &
-    call get_param(param_file, mdl, "BOUSSINESQ_SAL_TIDES", CS%bq_sal_tides, "If true, "//&
+  if ((CS%PGF_FV_opts_CS%tides .or. CS%PGF_FV_opts_CS%calculate_SAL) .and. GV%Boussinesq) &
+    call get_param(param_file, mdl, "BOUSSINESQ_SAL_TIDES", CS%PGF_FV_opts_CS%bq_sal_tides, &
+                   "If true, "//&
                    "in Boussinesq mode, use an alternative method to include self-attraction "//&
                    "and loading (SAL) and tidal forcings in pressure gradient, in which their "//&
                    "gradients are calculated separately, instead of adding geopotential "//&
@@ -3199,12 +3311,13 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
                  "true, ENABLE_THERMODYNAMICS must be true as well.", &
                  default=use_temperature, do_not_log=.true.)
 
-  call get_param(param_file, mdl, "SSH_IN_EOS_PRESSURE_FOR_PGF", CS%use_SSH_in_Z0p, &
+  call get_param(param_file, mdl, "SSH_IN_EOS_PRESSURE_FOR_PGF", CS%PGF_FV_opts_CS%use_SSH_in_Z0p, &
                  "If true, include contributions from the sea surface height in the height-based "//&
                  "pressure used in the equation of state calculations for the Boussinesq pressure "//&
                  "gradient forces, including adjustments for atmospheric or sea-ice pressure.", &
                  default=.false., do_not_log=.not.GV%Boussinesq)
-  if (CS%tides .and. CS%tides_answer_date<=20250131 .and. CS%use_SSH_in_Z0p) &
+  if (CS%PGF_FV_opts_CS%tides .and. CS%PGF_FV_opts_CS%tides_answer_date<=20250131 .and. &
+      CS%PGF_FV_opts_CS%use_SSH_in_Z0p) &
     call MOM_error(FATAL, trim(mdl) // ", PressureForce_FV_init: SSH_IN_EOS_PRESSURE_FOR_PGF "//&
                    "needs to be FALSE to recover tide answers before 20250131.")
 
@@ -3238,35 +3351,39 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
   if ((.not.GV%Boussinesq) .and. MassWghtInterp_NonBous_bug) &
     CS%MassWghtInterp = ibset(CS%MassWghtInterp, 3) ! Same as CS%MassWghtInterp + 8
 
-  call get_param(param_file, mdl, "CORRECTION_INTXPA", CS%correction_intxpa, &
+  call get_param(param_file, mdl, "CORRECTION_INTXPA", CS%PGF_FV_opts_CS%correction_intxpa, &
                  "If true, use a correction for surface pressure curvature in intx_pa.", &
                  default=.false., do_not_log=.not.use_EOS)
-  call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL", CS%reset_intxpa_integral, &
+  call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL", &
+                 CS%PGF_FV_opts_CS%reset_intxpa_integral, &
                  "If true, reset INTXPA to match pressures at first nonvanished cell. "//&
                  "Includes pressure correction.", default=.false., do_not_log=.not.use_EOS)
-  call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL_FLATTEST", CS%reset_intxpa_flattest, &
+  call get_param(param_file, mdl, "RESET_INTXPA_INTEGRAL_FLATTEST", &
+                 CS%PGF_FV_opts_CS%reset_intxpa_flattest, &
                  "If true, use flattest interface as reference interface where there is no "//&
                  "better choice for RESET_INTXPA_INTEGRAL. Otherwise, use surface interface.", &
                  default=.false., do_not_log=.not.use_EOS)
   if (.not.use_EOS) then  ! These options do nothing without an equation of state.
-    CS%correction_intxpa = .false.
-    CS%reset_intxpa_integral = .false.
-    CS%reset_intxpa_flattest = .false.
+    CS%PGF_FV_opts_CS%correction_intxpa = .false.
+    CS%PGF_FV_opts_CS%reset_intxpa_integral = .false.
+    CS%PGF_FV_opts_CS%reset_intxpa_flattest = .false.
   endif
-  call get_param(param_file, mdl, "RESET_INTXPA_H_NONVANISHED", CS%h_nonvanished, &
+  call get_param(param_file, mdl, "RESET_INTXPA_H_NONVANISHED", CS%PGF_FV_opts_CS%h_nonvanished, &
                  "A minimal layer thickness that indicates that a layer is thick enough to usefully "//&
                  "reestimate the pressure integral across the interface below.", &
-                 default=1.0e-6, units="m", scale=GV%m_to_H, do_not_log=.not.CS%reset_intxpa_integral)
+                 default=1.0e-6, units="m", scale=GV%m_to_H, &
+                 do_not_log=.not.CS%PGF_FV_opts_CS%reset_intxpa_integral)
   call get_param(param_file, mdl, "USE_INACCURATE_PGF_RHO_ANOM", CS%use_inaccurate_pgf_rho_anom, &
                  "If true, use a form of the PGF that uses the reference density "//&
                  "in an inaccurate way. This is not recommended.", default=.false.)
-  call get_param(param_file, mdl, "RECONSTRUCT_FOR_PRESSURE", CS%reconstruct, &
+  call get_param(param_file, mdl, "RECONSTRUCT_FOR_PRESSURE", CS%PGF_FV_opts_CS%reconstruct, &
                  "If True, use vertical reconstruction of T & S within "//&
                  "the integrals of the FV pressure gradient calculation. "//&
                  "If False, use the constant-by-layer algorithm. "//&
                  "The default is set by USE_REGRIDDING.", &
                  default=use_ALE )
-  call get_param(param_file, mdl, "PRESSURE_RECONSTRUCTION_SCHEME", CS%Recon_Scheme, &
+  call get_param(param_file, mdl, "PRESSURE_RECONSTRUCTION_SCHEME", &
+                 CS%PGF_FV_opts_CS%Recon_Scheme, &
                  "Order of vertical reconstruction of T/S to use in the "//&
                  "integrals within the FV pressure gradient calculation.\n"//&
                  " 0: PCM or no reconstruction.\n"//&
@@ -3281,7 +3398,7 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
   call get_param(param_file, mdl, "USE_STANLEY_PGF", CS%use_stanley_pgf, &
                  "If true, turn on Stanley SGS T variance parameterization "// &
                  "in PGF code.", default=.false.)
-  call get_param(param_file, mdl, "PGF_PLM_NKBLOCK", CS%nkblock, &
+  call get_param(param_file, mdl, "PGF_PLM_NKBLOCK", CS%PGF_FV_opts_CS%nkblock, &
                  "Vertical block size for the PLM pressure gradient density integral. "//&
                  "0 processes all layers in a single block.", &
                  default=default_nkblock)
@@ -3307,7 +3424,7 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
     CS%id_p_stanley = register_diag_field('ocean_model', 'p_stanley', diag%axesTL, &
         Time, 'p in PGF with Stanley correction', 'Pa', conversion=US%RL2_T2_to_Pa)
   endif
-  if (CS%calculate_SAL) then
+  if (CS%PGF_FV_opts_CS%calculate_SAL) then
     CS%id_e_sal = register_diag_field('ocean_model', 'e_sal', diag%axesT1, Time, &
         'Self-attraction and loading height anomaly', 'meter', conversion=US%Z_to_m)
     CS%id_sal_u = register_diag_field('ocean_model', 'SAL_u', diag%axesCuL, Time, &
@@ -3319,7 +3436,7 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
     if (CS%id_sal_v > 0) &
       call safe_alloc_ptr(ADp%sal_v, isd, ied, JsdB, JedB, nz)
   endif
-  if (CS%tides) then
+  if (CS%PGF_FV_opts_CS%tides) then
     CS%id_e_tide = register_diag_field('ocean_model', 'e_tidal', diag%axesT1, Time, &
         'Tidal Forcing Astronomical and SAL Height Anomaly', 'meter', conversion=US%Z_to_m)
     CS%id_e_tidal_eq  = register_diag_field('ocean_model', 'e_tide_eq', diag%axesT1, Time, &
@@ -3341,12 +3458,14 @@ subroutine PressureForce_FV_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL
   CS%id_MassWt_v = register_diag_field('ocean_model', 'MassWt_v', diag%axesCvL, Time, &
         'The fractional mass weighting at v-point PGF calculations', 'nondim')
 
-  CS%GFS_scale = 1.0
-  if (GV%g_prime(1) /= GV%g_Earth) CS%GFS_scale = GV%g_prime(1) / GV%g_Earth
+  CS%PGF_FV_opts_CS%do_MassWt_diag = (CS%id_MassWt_u > 0) .or. (CS%id_MassWt_v > 0)
+
+  CS%PGF_FV_opts_CS%GFS_scale = 1.0
+  if (GV%g_prime(1) /= GV%g_Earth) CS%PGF_FV_opts_CS%GFS_scale = GV%g_prime(1) / GV%g_Earth
 
   !$omp target update to (CS)
 
-  call log_param(param_file, mdl, "GFS / G_EARTH", CS%GFS_scale, units="nondim")
+  call log_param(param_file, mdl, "GFS / G_EARTH", CS%PGF_FV_opts_CS%GFS_scale, units="nondim")
 
 end subroutine PressureForce_FV_init
 
