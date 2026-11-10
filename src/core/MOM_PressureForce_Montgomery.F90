@@ -107,6 +107,8 @@ subroutine PressureForce_Mont_nonBouss_cap(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv,
                                                  !! density does not track any target density.
   ! Local variables
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
+  type(RealArray_t) :: e_sal_a, e_tide_eq_a, e_tide_sal_a
+  real, dimension(:,:), contiguous, pointer :: e_sal, e_tide_eq, e_tide_sal
 
   use_EOS = associated(tv%eqn_of_state)
 
@@ -119,9 +121,26 @@ subroutine PressureForce_Mont_nonBouss_cap(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv,
       "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
   endif
 
+  call e_sal_a%alloc(lb=[h_a%lb(1),h_a%lb(2)], ub=[h_a%ub(1),h_a%ub(2)])
+  call e_tide_eq_a%alloc(lb=[h_a%lb(1),h_a%lb(2)], ub=[h_a%ub(1),h_a%ub(2)])
+  call e_tide_sal_a%alloc(lb=[h_a%lb(1),h_a%lb(2)], ub=[h_a%ub(1),h_a%ub(2)])
+
   call PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, Gcore, &
-                                   US, CS, p_atm_a, pbce_a, eta_a, Rlay_a, g_Earth, H_to_RZ, &
-                                   H_subroundoff, nk_rho_varies)
+                                   US, CS, p_atm_a, pbce_a, eta_a, Rlay_a, e_sal_a, e_tide_eq_a, &
+                                   e_tide_sal_a, g_Earth, H_to_RZ, H_subroundoff, nk_rho_varies)
+
+  call e_sal_a%view(e_sal) ; call e_tide_eq_a%view(e_tide_eq) ; call e_tide_sal_a%view(e_tide_sal)
+
+  if (CS%id_PFu_bc>0) call post_data(CS%id_PFu_bc, CS%PFu_bc, CS%diag)
+  if (CS%id_PFv_bc>0) call post_data(CS%id_PFv_bc, CS%PFv_bc, CS%diag)
+  ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
+  ! New diagnostics are given for each individual field.
+  if (CS%id_e_tide>0) call post_data(CS%id_e_tide, e_sal+e_tide_eq+e_tide_sal, CS%diag)
+  if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
+  if (CS%id_e_tide_eq>0) call post_data(CS%id_e_tide_eq, e_tide_eq, CS%diag)
+  if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
+
+  call e_sal_a%free() ; call e_tide_eq_a%free() ; call e_tide_sal_a%free()
 
 end subroutine PressureForce_Mont_nonBouss_cap
 
@@ -135,8 +154,9 @@ end subroutine PressureForce_Mont_nonBouss_cap
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu_a, PFv_a, G, &
-                                       Gcore, US, CS, p_atm_a, pbce_a, eta_a, Rlay_a, g_Earth, &
-                                       H_to_RZ, H_subroundoff, nk_rho_varies)
+                                       Gcore, US, CS, p_atm_a, pbce_a, eta_a, Rlay_a, e_sal_a, &
+                                       e_tide_eq_a, e_tide_sal_a, g_Earth, H_to_RZ, H_subroundoff, &
+                                       nk_rho_varies)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
@@ -164,6 +184,13 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
                                                                  !! PFu and PFv [H ~> kg m-2].
   type(RealArray_t), intent(in) :: Rlay_a !< The target coordinate value (potential density) in each
                                           !! layer [R ~> kg m-3].
+  type(RealArray_t), intent(inout) :: e_sal_a !< Bottom geopotential anomaly due to self-attraction
+                                              !! and loading [Z ~> m].
+  type(RealArray_t), intent(inout) :: e_tide_eq_a !< Bottom geopotential anomaly due to tidal forces
+                                                  !! from astronomical sources [Z ~> m].
+  type(RealArray_t), intent(inout) :: e_tide_sal_a !< Bottom geopotential anomaly due to harmonic
+                                                   !! self-attraction and loading specific to tides
+                                                   !! [Z ~> m].
   real,              intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
   real,              intent(in) :: H_to_RZ !< A constant that translates thickness units to the
                                            !! units of mass per unit area [R Z H-1 ~> kg m-3 or 1].
@@ -178,6 +205,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
   ! Local variables
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
+  real, dimension(:,:), contiguous, pointer :: e_sal, e_tide_eq, e_tide_sal
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv
   real, dimension(:), contiguous, pointer :: Rlay
   type(RealArray_t) :: p_a, alpha_star_a
@@ -204,10 +232,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
                   ! of a reduced gravity form of the equations [L2 T-2 ~> m2 s-2].
     dp_star, &    ! Layer thickness after compensation for compressibility [R L2 T-2 ~> Pa].
     SSH, &        ! The sea surface height anomaly, in depth units [Z ~> m].
-    e_sal, &      ! Bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
-    e_tide_eq,  & ! Bottom geopotential anomaly due to tidal forces from astronomical sources [Z ~> m].
-    e_tide_sal, & ! Bottom geopotential anomaly due to harmonic self-attraction and loading
-                  ! specific to tides [Z ~> m].
     geopot_bot    !   Bottom geopotential relative to a temporally fixed reference value,
                   ! including any tidal contributions [L2 T-2 ~> m2 s-2].
   real :: p_ref(h_a%lb(1):h_a%ub(1))     !   The pressure used to calculate the coordinate
@@ -249,6 +273,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
   if (p_atm_a%associated()) call p_atm_a%view(p_atm)
   if (pbce_a%associated()) call pbce_a%view(pbce)
   if (eta_a%associated()) call eta_a%view(eta)
+  call e_sal_a%view(e_sal) ; call e_tide_eq_a%view(e_tide_eq) ; call e_tide_sal_a%view(e_tide_sal)
 
   use_p_atm = associated(p_atm)
   is_split = pbce_a%associated()
@@ -463,15 +488,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxHpgf, bxHkint, h_a, tv, PFu
     enddo
   endif ! use_EOS
 
-  if (CS%id_PFu_bc>0) call post_data(CS%id_PFu_bc, CS%PFu_bc, CS%diag)
-  if (CS%id_PFv_bc>0) call post_data(CS%id_PFv_bc, CS%PFv_bc, CS%diag)
-  ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
-  ! New diagnostics are given for each individual field.
-  if (CS%id_e_tide>0) call post_data(CS%id_e_tide, e_sal+e_tide_eq+e_tide_sal, CS%diag)
-  if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
-  if (CS%id_e_tide_eq>0) call post_data(CS%id_e_tide_eq, e_tide_eq, CS%diag)
-  if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
-
   call p_a%free() ; call alpha_star_a%free()
 
 end subroutine PressureForce_Mont_nonBouss
@@ -524,6 +540,8 @@ subroutine PressureForce_Mont_Bouss_cap(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_
   ! Local variables
   logical :: use_EOS         ! If true, density is calculated from T & S using
                              ! an equation of state.
+  type(RealArray_t) :: e_sal_a, e_tide_eq_a, e_tide_sal_a
+  real, dimension(:,:), contiguous, pointer :: e_sal, e_tide_eq, e_tide_sal
 
   use_EOS = associated(tv%eqn_of_state)
 
@@ -536,9 +554,27 @@ subroutine PressureForce_Mont_Bouss_cap(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_
       "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
   endif
 
+  call e_sal_a%alloc(lb=[h_a%lb(1),h_a%lb(2)], ub=[h_a%ub(1),h_a%ub(2)])
+  call e_tide_eq_a%alloc(lb=[h_a%lb(1),h_a%lb(2)], ub=[h_a%ub(1),h_a%ub(2)])
+  call e_tide_sal_a%alloc(lb=[h_a%lb(1),h_a%lb(2)], ub=[h_a%ub(1),h_a%ub(2)])
+
   call PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, CS, &
-                                p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, g_Earth, H_to_Z, &
-                                Z_to_H, Rho0, dZ_subroundoff, nk_rho_varies)
+                                p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, e_sal_a, e_tide_eq_a, &
+                                e_tide_sal_a, g_Earth, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, &
+                                nk_rho_varies)
+
+  call e_sal_a%view(e_sal) ; call e_tide_eq_a%view(e_tide_eq) ; call e_tide_sal_a%view(e_tide_sal)
+
+  if (CS%id_PFu_bc>0) call post_data(CS%id_PFu_bc, CS%PFu_bc, CS%diag)
+  if (CS%id_PFv_bc>0) call post_data(CS%id_PFv_bc, CS%PFv_bc, CS%diag)
+  ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
+  ! New diagnostics are given for each individual field.
+  if (CS%id_e_tide>0) call post_data(CS%id_e_tide, e_sal+e_tide_eq+e_tide_sal, CS%diag)
+  if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
+  if (CS%id_e_tide_eq>0) call post_data(CS%id_e_tide_eq, e_tide_eq, CS%diag)
+  if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
+
+  call e_sal_a%free() ; call e_tide_eq_a%free() ; call e_tide_sal_a%free()
 
 end subroutine PressureForce_Mont_Bouss_cap
 
@@ -549,9 +585,10 @@ end subroutine PressureForce_Mont_Bouss_cap
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, &
-                                    CS, p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, g_Earth, &
-                                    H_to_Z, Z_to_H, Rho0, dZ_subroundoff, nk_rho_varies)
+subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G, Gcore, US, CS, &
+                                    p_atm_a, pbce_a, eta_a, Rlay_a, g_prime_a, e_sal_a, &
+                                    e_tide_eq_a, e_tide_sal_a, g_Earth, H_to_Z, Z_to_H, Rho0, &
+                                    dZ_subroundoff, nk_rho_varies)
   type(Box_t),          intent(in)  :: bxH0  !< The h-point box of the whole column,
                                              !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),          intent(in)  :: bxQ0  !< The B-grid-index box of the whole column,
@@ -578,6 +615,13 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G
                                           !! layer [R ~> kg m-3].
   type(RealArray_t), intent(in) :: g_prime_a !< The reduced gravity at each interface
                                              !! [L2 Z-1 T-2 ~> m s-2].
+  type(RealArray_t), intent(inout) :: e_sal_a !< The bottom geopotential anomaly due to
+                                              !! self-attraction and loading [Z ~> m].
+  type(RealArray_t), intent(inout) :: e_tide_eq_a !< Bottom geopotential anomaly due to tidal forces
+                                                  !! from astronomical sources [Z ~> m].
+  type(RealArray_t), intent(inout) :: e_tide_sal_a !< Bottom geopotential anomaly due to harmonic
+                                                   !! self-attraction and loading specific to tides,
+                                                   !! in depth units [Z ~> m].
   real,              intent(in) :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
   real,              intent(in) :: H_to_Z !< A constant that translates thickness units to the units
                                           !! of depth [Z H-1 ~> 1 or m3 kg-1].
@@ -596,6 +640,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G
   ! Local variables
   real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, pbce
   real, dimension(:,:), contiguous, pointer :: p_atm, eta
+  real, dimension(:,:), contiguous, pointer :: e_sal, e_tide_eq, e_tide_sal
   real, dimension(:,:), contiguous, pointer :: bathyT, meanSL, IdxCu, IdyCv
   real, dimension(:), contiguous, pointer :: Rlay, g_prime
   type(RealArray_t) :: e_a, rho_star_a
@@ -619,14 +664,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G
   real :: h_star(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2)) ! Layer thickness after compensation
                              ! for compressibility [Z ~> m].
   real :: SSH(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2)) ! The sea surface height anomaly, in depth units [Z ~> m].
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2)) :: &
-    e_sal ! The bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2)) :: &
-    e_tide_eq ! Bottom geopotential anomaly due to tidal forces from astronomical sources
-                                     ! [Z ~> m].
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2)) :: &
-    e_tide_sal ! Bottom geopotential anomaly due to harmonic self-attraction and loading
-                                      ! specific to tides, in depth units [Z ~> m].
   real :: p_ref(h_a%lb(1):h_a%ub(1))     !   The pressure used to calculate the coordinate
                              ! density [R L2 T-2 ~> Pa] (usually 2e7 Pa = 2000 dbar).
   real :: I_Rho0             ! 1/Rho0 [R-1 ~> m3 kg-1].
@@ -662,6 +699,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G
   if (p_atm_a%associated()) call p_atm_a%view(p_atm)
   if (pbce_a%associated()) call pbce_a%view(pbce)
   if (eta_a%associated()) call eta_a%view(eta)
+  call e_sal_a%view(e_sal) ; call e_tide_eq_a%view(e_tide_eq) ; call e_tide_sal_a%view(e_tide_sal)
 
   use_p_atm = associated(p_atm)
   is_split = pbce_a%associated()
@@ -842,15 +880,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxHpgf, h_a, tv, PFu_a, PFv_a, G
       enddo ; enddo
     endif
   endif
-
-  if (CS%id_PFu_bc>0) call post_data(CS%id_PFu_bc, CS%PFu_bc, CS%diag)
-  if (CS%id_PFv_bc>0) call post_data(CS%id_PFv_bc, CS%PFv_bc, CS%diag)
-  ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
-  ! New diagnostics are given for each individual field.
-  if (CS%id_e_tide>0) call post_data(CS%id_e_tide, e_sal+e_tide_eq+e_tide_sal, CS%diag)
-  if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
-  if (CS%id_e_tide_eq>0) call post_data(CS%id_e_tide_eq, e_tide_eq, CS%diag)
-  if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
 
   call e_a%free() ; call rho_star_a%free()
 
