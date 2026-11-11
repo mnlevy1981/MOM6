@@ -1,6 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
+!!SKILLS: 0.4.0
 
 !> Provides the Montgomery potential form of pressure gradient
 module MOM_PressureForce_Mont
@@ -18,6 +19,7 @@ use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_EOS, only : calculate_density, calculate_density_derivs
 use MOM_EOS, only : query_compressible
+use iso_c_binding, only : c_ptr, c_loc, c_f_pointer
 
 implicit none ; private
 
@@ -56,6 +58,27 @@ type, public :: PressureForce_Mont_CS ; private
   type(tidal_forcing_CS), pointer :: tides_CSp => NULL() !< The tidal forcing control structure
 end type PressureForce_Mont_CS
 
+!> The Fortran objects that the Set_pbce_Bouss and Set_pbce_nonBouss host helpers need. Each form of
+!! the pressure force passes one to its Set_pbce call as an opaque c_ptr.
+type, public :: pbce_host_ctx
+  type(ocean_grid_type),   pointer :: G => NULL()  !< The ocean's grid structure.
+  type(verticalGrid_type), pointer :: GV => NULL() !< The ocean's vertical grid structure.
+  type(unit_scale_type),   pointer :: US => NULL() !< A dimensional unit scaling type
+  type(thermo_var_ptrs),   pointer :: tv => NULL() !< The thermodynamic variables that Set_pbce uses, in which
+                                                   !! T and S may be temporary arrays
+end type pbce_host_ctx
+
+!> The Fortran objects that the Montgomery potential form's host helpers need. PressureForce builds
+!! one and passes it down the tree as an opaque c_ptr.
+type, public :: PF_Mont_host_ctx
+  type(ocean_grid_type),       pointer :: G => NULL()  !< The ocean's grid structure.
+  type(verticalGrid_type),     pointer :: GV => NULL() !< The ocean's vertical grid structure.
+  type(unit_scale_type),       pointer :: US => NULL() !< A dimensional unit scaling type
+  type(thermo_var_ptrs),       pointer :: tv => NULL() !< Thermodynamic variables.
+  type(PressureForce_Mont_CS), pointer :: CS => NULL() !< Control structure for Montgomery potential PGF
+  type(pbce_host_ctx) :: pbce !< The objects that the Set_pbce host helpers need
+end type PF_Mont_host_ctx
+
 contains
 
 !> \brief Non-Boussinesq Montgomery-potential form of pressure gradient
@@ -67,7 +90,7 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pbce, eta)
+subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host, pbce, eta)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -80,6 +103,8 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pb
   type(PressureForce_Mont_CS),                intent(inout) :: CS  !< Control structure for Montgomery potential PGF
   real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean or
                                                                  !! atmosphere-ocean [R L2 T-2 ~> Pa].
+  type(c_ptr),                         value, intent(in)  :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                                  !! the Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                                     optional, intent(out) :: pbce !< The baroclinic pressure anomaly in
                                                                  !! each layer due to free surface height anomalies,
@@ -127,6 +152,7 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pb
   logical :: is_split        ! A flag indicating whether the pressure gradient terms are to be
                              ! split into barotropic and baroclinic pieces.
   type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
 
   real :: I_gEarth           ! The inverse of g_Earth [T2 Z L-2 ~> s2 m-1]
 !  real :: dalpha
@@ -325,7 +351,8 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pb
 
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (present(pbce)) then
-    call Set_pbce_nonBouss(p, tv_tmp, G, GV, US, CS%GFS_scale, pbce, alpha_star)
+    call c_f_pointer(host, ctx)
+    call Set_pbce_nonBouss(p, tv_tmp, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star)
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -382,7 +409,7 @@ end subroutine PressureForce_Mont_nonBouss
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pbce, eta)
+subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host, pbce, eta)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -395,6 +422,8 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pbce,
   type(PressureForce_Mont_CS),                intent(inout) :: CS  !< Control structure for Montgomery potential PGF
   real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean or
                                                                 !! atmosphere-ocean [R L2 T-2 ~> Pa].
+  type(c_ptr),                         value, intent(in)  :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                                  !! the Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure anomaly in
                                                                 !! each layer due to free surface height anomalies
                                                                 !! [L2 T-2 H-1 ~> m s-2].
@@ -439,6 +468,7 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pbce,
                              ! gradient terms are to be split into
                              ! barotropic and baroclinic pieces.
   type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
   integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
   integer :: i, j, k
@@ -575,7 +605,8 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, pbce,
   endif ! use_EOS
 
   if (present(pbce)) then
-    call Set_pbce_Bouss(e, tv_tmp, G, GV, US, CS%Rho0, CS%GFS_scale, pbce, rho_star, 1)
+    call c_f_pointer(host, ctx)
+    call Set_pbce_Bouss(e, tv_tmp, G, GV, US, CS%Rho0, CS%GFS_scale, pbce, c_loc(ctx%pbce), rho_star, 1)
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -648,7 +679,7 @@ end subroutine PressureForce_Mont_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
-subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, rho_star, nkblock)
+subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, host, rho_star, nkblock)
   type(ocean_grid_type),                intent(in)  :: G    !< Ocean grid structure
   type(verticalGrid_type),              intent(in)  :: GV   !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: e !< Interface height [Z ~> m].
@@ -662,6 +693,8 @@ subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, rho_star, nkb
                                         intent(out) :: pbce !< The baroclinic pressure anomaly in each layer due
                                                             !! to free surface height anomalies
                                                             !! [L2 T-2 H-1 ~> m s-2].
+  type(c_ptr),                   value, intent(in)  :: host !< Opaque pointer to the pbce_host_ctx that holds the
+                                                            !! Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                               optional, intent(in)  :: rho_star !< The layer densities (maybe compressibility
                                                             !! compensated), times g/rho_0 [L2 Z-1 T-2 ~> m s-2].
@@ -771,7 +804,7 @@ end subroutine Set_pbce_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the column mass.
-subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, alpha_star)
+subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, host, alpha_star)
   type(ocean_grid_type),                intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),              intent(in)  :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: p !< Interface pressures [R L2 T-2 ~> Pa].
@@ -783,6 +816,8 @@ subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, alpha_star)
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: pbce !< The baroclinic pressure anomaly in each
                                                           !! layer due to free surface height anomalies
                                                           !! [L2 H-1 T-2 ~> m4 kg-1 s-2].
+  type(c_ptr),                   value, intent(in)  :: host !< Opaque pointer to the pbce_host_ctx that holds the
+                                                            !! Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(in) :: alpha_star !< The layer specific volumes
                                                           !! (maybe compressibility compensated) [R-1 ~> m3 kg-1].
   ! Local variables

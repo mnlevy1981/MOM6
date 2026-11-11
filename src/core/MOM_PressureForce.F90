@@ -13,15 +13,18 @@ use MOM_grid, only : ocean_grid_type
 use MOM_PressureForce_FV, only : PressureForce_FV_Bouss, PressureForce_FV_nonBouss
 use MOM_PressureForce_FV, only : PressureForce_FV_init
 use MOM_PressureForce_FV, only : PressureForce_FV_CS
+use MOM_PressureForce_FV, only : PF_FV_host_ctx
 use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss
 use MOM_PressureForce_Mont, only : PressureForce_Mont_init
 use MOM_PressureForce_Mont, only : PressureForce_Mont_CS
+use MOM_PressureForce_Mont, only : PF_Mont_host_ctx
 use MOM_self_attr_load, only : SAL_CS
 use MOM_tidal_forcing, only : tidal_forcing_CS
 use MOM_unit_scaling, only : unit_scale_type
 use MOM_variables, only : thermo_var_ptrs, accel_diag_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_ALE, only: ALE_CS
+use iso_c_binding, only : c_ptr, c_loc
 implicit none ; private
 
 #include <MOM_memory.h>
@@ -42,17 +45,17 @@ contains
 
 !> A thin layer between the model and the Boussinesq and non-Boussinesq pressure force routines.
 subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
-  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
-  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
-  type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
+  type(ocean_grid_type),   target, intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), target, intent(in)  :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   target, intent(in)  :: US   !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                            intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
-  type(thermo_var_ptrs),   intent(in)  :: tv   !< A structure pointing to various thermodynamic variables
+  type(thermo_var_ptrs),   target, intent(in)  :: tv   !< A structure pointing to various thermodynamic variables
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
                            intent(out) :: PFu  !< Zonal pressure force acceleration [L T-2 ~> m s-2]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                            intent(out) :: PFv  !< Meridional pressure force acceleration [L T-2 ~> m s-2]
-  type(PressureForce_CS),  intent(inout) :: CS !< Pressure force control structure
+  type(PressureForce_CS),  target, intent(inout) :: CS !< Pressure force control structure
   type(ALE_CS),            pointer     :: ALE_CSp !< ALE control structure
   type(accel_diag_ptrs),   pointer     :: ADp !< Acceleration diagnostic pointers
   real, dimension(:,:),    pointer     :: p_atm !< The pressure at the ice-ocean or
@@ -63,14 +66,30 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   real, dimension(SZI_(G),SZJ_(G)), &
                  optional, intent(out) :: eta  !< The bottom mass used to calculate PFu and PFv,
                                                !! [H ~> m or kg m-2], with any tidal contributions.
+  ! Local variables
+  type(PF_FV_host_ctx),   target :: FV_ctx   ! The objects used by the finite volume form's host helpers
+  type(PF_Mont_host_ctx), target :: Mont_ctx ! The objects used by the Montgomery potential form's host helpers
+  type(c_ptr) :: host ! Opaque pointer to the host context of the form in use
 
-  call PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
+  if (CS%Analytic_FV_PGF) then
+    FV_ctx%G => G ; FV_ctx%GV => GV ; FV_ctx%US => US ; FV_ctx%tv => tv
+    FV_ctx%ALE_CSp => ALE_CSp ; FV_ctx%CS => CS%PressureForce_FV
+    FV_ctx%pbce%G => G ; FV_ctx%pbce%GV => GV ; FV_ctx%pbce%US => US
+    host = c_loc(FV_ctx)
+  else
+    Mont_ctx%G => G ; Mont_ctx%GV => GV ; Mont_ctx%US => US ; Mont_ctx%tv => tv
+    Mont_ctx%CS => CS%PressureForce_Mont
+    Mont_ctx%pbce%G => G ; Mont_ctx%pbce%GV => GV ; Mont_ctx%pbce%US => US
+    host = c_loc(Mont_ctx)
+  endif
+
+  call PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, host, pbce, eta)
 
 end subroutine PressureForce
 
 !> The implementation of PressureForce (the root of its call tree): calls the finite volume or
 !! Montgomery potential form of the pressure force, in its Boussinesq or non-Boussinesq version.
-subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
+subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, host, pbce, eta)
   type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
@@ -86,6 +105,8 @@ subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm,
   type(accel_diag_ptrs),   pointer     :: ADp !< Acceleration diagnostic pointers
   real, dimension(:,:),    pointer     :: p_atm !< The pressure at the ice-ocean or
                                                !! atmosphere-ocean interface [R L2 T-2 ~> Pa].
+  type(c_ptr),      value, intent(in)  :: host !< Opaque pointer to the PF_FV_host_ctx or PF_Mont_host_ctx
+                                               !! that holds the Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                  optional, intent(out) :: pbce !< The baroclinic pressure anomaly in each layer
                                                !! due to eta anomalies [L2 T-2 H-1 ~> m s-2 or m4 s-2 kg-1].
@@ -96,18 +117,18 @@ subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm,
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
       call PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_FV, &
-                                   ALE_CSp, ADp, p_atm, pbce, eta)
+                                   ALE_CSp, ADp, p_atm, host, pbce, eta)
     else
       call PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_FV, &
-                                      ALE_CSp, ADp, p_atm, pbce, eta)
+                                      ALE_CSp, ADp, p_atm, host, pbce, eta)
     endif
   else
     if (GV%Boussinesq) then
       call PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_Mont, &
-                                    p_atm, pbce, eta)
+                                    p_atm, host, pbce, eta)
     else
       call PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_Mont, &
-                                       p_atm, pbce, eta)
+                                       p_atm, host, pbce, eta)
     endif
   endif
 

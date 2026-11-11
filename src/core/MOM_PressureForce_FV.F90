@@ -1,6 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
+!!SKILLS: 0.4.0
 
 !> Finite volume pressure gradient (integrated by quadrature or analytically)
 module MOM_PressureForce_FV
@@ -12,6 +13,7 @@ use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, log_param, log_version, param_file_type
 use MOM_grid, only : ocean_grid_type
 use MOM_PressureForce_Mont, only : set_pbce_Bouss, set_pbce_nonBouss
+use MOM_PressureForce_Mont, only : pbce_host_ctx
 use MOM_self_attr_load, only : calc_SAL, SAL_CS
 use MOM_tidal_forcing, only : calc_tidal_forcing, tidal_forcing_CS
 use MOM_tidal_forcing, only : calc_tidal_forcing_legacy
@@ -25,6 +27,7 @@ use MOM_density_integrals, only : int_spec_vol_dp_generic_plm
 use MOM_density_integrals, only : int_density_dz_generic_pcm, int_spec_vol_dp_generic_pcm
 use MOM_density_integrals, only : diagnose_mass_weight_Z, diagnose_mass_weight_p
 use MOM_ALE, only : TS_PLM_edge_values, TS_PPM_edge_values, TS_PLM_WLS_edge_values, ALE_CS
+use iso_c_binding, only : c_ptr, c_loc, c_f_pointer
 
 implicit none ; private
 
@@ -120,6 +123,18 @@ type, public :: PressureForce_FV_CS ; private
   type(tidal_forcing_CS), pointer :: tides_CSp => NULL() !< Tides control structure
 end type PressureForce_FV_CS
 
+!> The Fortran objects that the finite volume form's host helpers need. PressureForce builds one and
+!! passes it down the tree as an opaque c_ptr.
+type, public :: PF_FV_host_ctx
+  type(ocean_grid_type),     pointer :: G => NULL()       !< The ocean's grid structure.
+  type(verticalGrid_type),   pointer :: GV => NULL()      !< The ocean's vertical grid structure.
+  type(unit_scale_type),     pointer :: US => NULL()      !< A dimensional unit scaling type
+  type(thermo_var_ptrs),     pointer :: tv => NULL()      !< Thermodynamic variables
+  type(ALE_CS),              pointer :: ALE_CSp => NULL() !< ALE control structure
+  type(PressureForce_FV_CS), pointer :: CS => NULL()      !< Finite volume PGF control structure
+  type(pbce_host_ctx) :: pbce !< The objects that the Set_pbce host helpers need
+end type PF_FV_host_ctx
+
 contains
 
 !> \brief Non-Boussinesq analytically-integrated finite volume form of pressure gradient
@@ -131,7 +146,7 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
+subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, host, pbce, eta)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -144,6 +159,8 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, AD
   type(accel_diag_ptrs),                      pointer     :: ADp !< Acceleration diagnostic pointers
   real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean
                                                            !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
+  type(c_ptr),                         value, intent(in)  :: host !< Opaque pointer to the PF_FV_host_ctx that holds
+                                                                  !! the Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure
                                                            !! anomaly in each layer due to eta anomalies
                                                            !! [L2 T-2 H-1 ~> m4 s-2 kg-1].
@@ -255,6 +272,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, AD
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   logical :: do_more_k       ! If true, there are still points where a flatter interface remains to be found.
   type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(PF_FV_host_ctx), pointer :: ctx ! The objects behind host
 
   real :: alpha_ref     ! A reference specific volume [R-1 ~> m3 kg-1] that is used
                         ! to reduce the impact of truncation errors.
@@ -887,7 +905,8 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, AD
   endif
 
   if (present(pbce)) then
-    call set_pbce_nonBouss(p, tv_tmp, G, GV, US, CS%GFS_scale, pbce)
+    call c_f_pointer(host, ctx)
+    call set_pbce_nonBouss(p, tv_tmp, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce))
   endif
 
   if (present(eta)) then
@@ -956,7 +975,7 @@ end subroutine PressureForce_FV_nonBouss
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
+subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, host, pbce, eta)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -969,6 +988,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
   type(accel_diag_ptrs),                      pointer     :: ADp !< Acceleration diagnostic pointers
   real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean
                                                          !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
+  type(c_ptr),                         value, intent(in)  :: host !< Opaque pointer to the PF_FV_host_ctx that holds
+                                                                  !! the Fortran objects used by the host helpers
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure
                                                          !! anomaly in each layer due to eta anomalies
                                                          !! [L2 T-2 H-1 ~> m s-2].
@@ -1108,6 +1129,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   logical :: do_more_k       ! If true, there are still points where a flatter interface remains to be found.
   type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(PF_FV_host_ctx), pointer :: ctx ! The objects behind host
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
   integer, dimension(2) :: EOSdom_u ! The i-computational domain for the equation of state at u-velocity points
@@ -1968,7 +1990,9 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
   endif
 
   if (present(pbce)) then
-    call set_pbce_Bouss(e, tv_tmp, G, GV, US, rho0_set_pbce, CS%GFS_scale, pbce, nkblock=nkblock)
+    call c_f_pointer(host, ctx)
+    call set_pbce_Bouss(e, tv_tmp, G, GV, US, rho0_set_pbce, CS%GFS_scale, pbce, c_loc(ctx%pbce), &
+                        nkblock=nkblock)
   endif
 
   !$omp target exit data if (use_EOS) &
