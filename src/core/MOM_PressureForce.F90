@@ -83,13 +83,13 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
     host = c_loc(Mont_ctx)
   endif
 
-  call PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, host, pbce, eta)
+  call PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, associated(ALE_CSp), ADp, p_atm, host, pbce, eta)
 
 end subroutine PressureForce
 
 !> The implementation of PressureForce (the root of its call tree): calls the finite volume or
 !! Montgomery potential form of the pressure force, in its Boussinesq or non-Boussinesq version.
-subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, host, pbce, eta)
+subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, have_ALE_CSp, ADp, p_atm, host, pbce, eta)
   type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
   type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
   type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
@@ -101,7 +101,8 @@ subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm,
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                            intent(out) :: PFv  !< Meridional pressure force acceleration [L T-2 ~> m s-2]
   type(PressureForce_CS),  intent(inout) :: CS !< Pressure force control structure
-  type(ALE_CS),            pointer     :: ALE_CSp !< ALE control structure
+  logical,                 intent(in)  :: have_ALE_CSp !< If true, the ALE control structure (ALE_CSp)
+                                                       !! is associated.
   type(accel_diag_ptrs),   pointer     :: ADp !< Acceleration diagnostic pointers
   real, dimension(:,:),    pointer     :: p_atm !< The pressure at the ice-ocean or
                                                !! atmosphere-ocean interface [R L2 T-2 ~> Pa].
@@ -117,10 +118,10 @@ subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm,
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
       call PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_FV, &
-                                   ALE_CSp, ADp, p_atm, host, pbce, eta)
+                                   have_ALE_CSp, ADp, p_atm, host, pbce, eta)
     else
       call PressureForce_FV_nonBouss(h, associated(tv%eqn_of_state), PFu, PFv, G, GV, US, &
-                                      CS%PressureForce_FV, associated(ALE_CSp), ADp, p_atm, host, pbce, eta)
+                                      CS%PressureForce_FV, have_ALE_CSp, ADp, p_atm, host, pbce, eta)
     endif
   else
     if (GV%Boussinesq) then
