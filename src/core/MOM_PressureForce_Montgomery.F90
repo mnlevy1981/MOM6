@@ -227,7 +227,7 @@ subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_at
       enddo ; enddo ; enddo
     endif
 
-    call calc_SAL(SSH, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+    call Mont_calc_SAL_host(host, SSH, e_sal)
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       geopot_bot(i,j) = geopot_bot(i,j) - GV%g_Earth*e_sal(i,j)
@@ -441,7 +441,7 @@ subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, 
         SSH(i,j) = SSH(i,j) + h(i,j,k)*GV%H_to_Z
       enddo ; enddo
     enddo
-    call calc_SAL(SSH, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+    call Mont_calc_SAL_host(host, SSH, e_sal)
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       e(i,j,nz+1) = e(i,j,nz+1) - e_sal(i,j)
@@ -1210,6 +1210,28 @@ subroutine Mont_Bouss_rho_star(G, GV, tv, tv_tmp, T_tmp, S_tmp, Isq, Ieq, Jsq, J
     do i=Isq,Ieq+1 ; rho_star(i,j,k) = G_Rho0*rho_star(i,j,k) ; enddo
   enddo ; enddo
 end subroutine Mont_Bouss_rho_star
+
+!> Calls calc_SAL with the grid, unit scaling and self-attraction and loading control structure in
+!! the PF_Mont_host_ctx that host points to.
+subroutine Mont_calc_SAL_host(host, eta, e_sal)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                !! the Fortran objects used by the host helpers
+  real, dimension(:,:),   intent(in)    :: eta !< The sea surface height anomaly from a time-mean geoid or total
+                                               !! bottom pressure [Z ~> m] or [R L2 T-2 ~> Pa].
+  real, dimension(:,:),   intent(inout) :: e_sal !< The bottom geopotential anomaly due to self-attraction and loading
+                                                 !! [Z ~> m].
+  ! Local variables
+  type(PF_Mont_host_ctx),      pointer :: ctx ! The objects behind host
+  type(ocean_grid_type),       pointer :: G   ! The ocean's grid structure.
+  type(unit_scale_type),       pointer :: US  ! A dimensional unit scaling type
+  type(PressureForce_Mont_CS), pointer :: CS  ! The Montgomery potential PGF control structure
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US ; CS => ctx%CS
+
+  call calc_SAL(eta, e_sal, G, CS%SAL_CSp, tmp_scale=US%Z_to_m)
+
+end subroutine Mont_calc_SAL_host
 
 !> Initialize the Montgomery-potential form of PGF control structure
 subroutine PressureForce_Mont_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp, tides_CSp)
