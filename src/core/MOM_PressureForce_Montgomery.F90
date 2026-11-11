@@ -66,6 +66,11 @@ type, public :: pbce_host_ctx
   type(unit_scale_type),   pointer :: US => NULL() !< A dimensional unit scaling type
   type(thermo_var_ptrs),   pointer :: tv => NULL() !< The thermodynamic variables that Set_pbce uses, in which
                                                    !! T and S may be temporary arrays
+  type(thermo_var_ptrs)   :: tv_tmp !< A structure of temporary T & S.
+  real, allocatable       :: T_tmp(:,:,:) !< Temporary array of temperatures where layers that are lighter
+                                          !! than the mixed layer have the mixed layer's properties [C ~> degC].
+  real, allocatable       :: S_tmp(:,:,:) !< Temporary array of salinities where layers that are lighter
+                                          !! than the mixed layer have the mixed layer's properties [S ~> ppt].
 end type pbce_host_ctx
 
 !> The Fortran objects that the Montgomery potential form's host helpers need. PressureForce builds
@@ -90,12 +95,13 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host, pbce, eta)
+subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, host, pbce, eta)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)  :: h   !< Layer thickness, [H ~> kg m-2].
-  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables.
+  logical,                                    intent(in)  :: use_EOS !< If true, density is calculated from T & S
+                                                                     !! using an equation of state.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(out) :: PFu !< Zonal acceleration due to pressure gradients
                                                                  !! (equal to -dM/dx) [L T-2 ~> m s-2].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(out) :: PFv !< Meridional acceleration due to pressure gradients
@@ -120,14 +126,6 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
                 ! p may be adjusted (with a nonlinear equation of state) so that
                 ! its derivative compensates for the adiabatic compressibility
                 ! in seawater, but p will still be close to the pressure.
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
-    T_tmp, &    ! Temporary array of temperatures where layers that are lighter
-                ! than the mixed layer have the mixed layer's properties [C ~> degC].
-    S_tmp       ! Temporary array of salinities where layers that are lighter
-                ! than the mixed layer have the mixed layer's properties [S ~> ppt].
-
-  real, dimension(SZI_(G)) :: Rho_cv_BL  ! The coordinate potential density in the
-                  ! deepest variable density near-surface layer [R ~> kg m-3].
 
   real, dimension(SZI_(G),SZJ_(G)) :: &
     dM, &         !   A barotropic correction to the Montgomery potentials to enable the use
@@ -140,18 +138,13 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
                   ! specific to tides [Z ~> m].
     geopot_bot    !   Bottom geopotential relative to a temporally fixed reference value,
                   ! including any tidal contributions [L2 T-2 ~> m2 s-2].
-  real :: p_ref(SZI_(G))     !   The pressure used to calculate the coordinate
-                             ! density [R L2 T-2 ~> Pa] (usually 2e7 Pa = 2000 dbar).
-  real :: rho_in_situ(SZI_(G)) !In-situ density of a layer [R ~> kg m-3].
   real :: PFu_bc, PFv_bc     ! The pressure gradient force due to along-layer
                              ! compensated density gradients [L T-2 ~> m s-2]
   real :: dp_neglect         ! A thickness that is so small it is usually lost
                              ! in roundoff and can be neglected [R L2 T-2 ~> Pa].
   logical :: use_p_atm       ! If true, use the atmospheric pressure.
-  logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   logical :: is_split        ! A flag indicating whether the pressure gradient terms are to be
                              ! split into barotropic and baroclinic pieces.
-  type(thermo_var_ptrs), target :: tv_tmp! A structure of temporary T & S.
   type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
 
   real :: I_gEarth           ! The inverse of g_Earth [T2 Z L-2 ~> s2 m-1]
@@ -161,25 +154,19 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
   real :: alpha_Lay(SZK_(GV)) ! The specific volume of each layer [R-1 ~> m3 kg-1].
   real :: dalpha_int(SZK_(GV)+1) ! The change in specific volume across each
                              ! interface [R-1 ~> m3 kg-1].
-  integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
   use_p_atm = associated(p_atm)
   is_split = present(pbce)
-  use_EOS = associated(tv%eqn_of_state)
 
   if (.not.CS%initialized) call MOM_error(FATAL, &
       "MOM_PressureForce_Mont: Module must be initialized before it is used.")
 
   if (use_EOS) then
-    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
-      "PressureForce_Mont_nonBouss: The Montgomery form of the pressure force "//&
-      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
+    call Mont_nonBouss_EOS_check_host(host)
   endif
 
   I_gEarth = 1.0 / GV%g_Earth
@@ -228,11 +215,7 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
       SSH(i,j) = min(-G%bathyT(i,j) - G%meanSL(i,j), 0.0)
     enddo ; enddo
     if (use_EOS) then
-      !$OMP parallel do default(shared)
-      do k=1,nz
-        call int_specific_vol_dp(tv%T(:,:,k), tv%S(:,:,k), p(:,:,k), p(:,:,k+1), &
-                                 0.0, G%HI, tv%eqn_of_state, US, dz_geo(:,:,k), halo_size=1)
-      enddo
+      call Mont_nonBouss_dz_geo_host(host, nz, p, dz_geo)
       !$OMP parallel do default(shared)
       do j=Jsq,Jeq+1 ; do k=1,nz ; do i=Isq,Ieq+1
         SSH(i,j) = SSH(i,j) + I_gEarth * dz_geo(i,j,k)
@@ -261,42 +244,7 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
   endif
 
   if (use_EOS) then
-    !   Calculate in-situ specific volumes (alpha_star).
-
-    !   With a bulk mixed layer, replace the T & S of any layers that are
-    ! lighter than the buffer layer with the properties of the buffer
-    ! layer.  These layers will be massless anyway, and it avoids any
-    ! formal calculations with hydrostatically unstable profiles.
-    if (nkmb>0) then
-      tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
-      tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
-      !$OMP parallel do default(shared) private(Rho_cv_BL)
-      do j=Jsq,Jeq+1
-        do k=1,nkmb ; do i=Isq,Ieq+1
-          tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
-        enddo ; enddo
-        call calculate_density(tv%T(:,j,nkmb), tv%S(:,j,nkmb), p_ref, Rho_cv_BL(:), &
-                               tv%eqn_of_state, EOSdom)
-        do k=nkmb+1,nz ; do i=Isq,Ieq+1
-          if (GV%Rlay(k) < Rho_cv_BL(i)) then
-            tv_tmp%T(i,j,k) = tv%T(i,j,nkmb) ; tv_tmp%S(i,j,k) = tv%S(i,j,nkmb)
-          else
-            tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
-          endif
-        enddo ; enddo
-      enddo
-    else
-      tv_tmp%T => tv%T ; tv_tmp%S => tv%S
-      tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = 0 ; enddo
-    endif
-    !$OMP parallel do default(shared) private(rho_in_situ)
-    do k=1,nz ; do j=Jsq,Jeq+1
-      call calculate_density(tv_tmp%T(:,j,k), tv_tmp%S(:,j,k), p_ref, rho_in_situ, &
-                             tv%eqn_of_state, EOSdom)
-      do i=Isq,Ieq+1 ; alpha_star(i,j,k) = 1.0 / rho_in_situ(i) ; enddo
-    enddo ; enddo
+    call Mont_nonBouss_alpha_star_host(host, Isq, Ieq, Jsq, Jeq, nz, alpha_star)
   endif                                               ! use_EOS
 
   if (use_EOS) then
@@ -352,7 +300,6 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    ctx%pbce%tv => tv_tmp
     call Set_pbce_nonBouss(p, use_EOS, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star)
   endif
 
@@ -410,12 +357,13 @@ end subroutine PressureForce_Mont_nonBouss
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host, pbce, eta)
+subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, host, pbce, eta)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)  :: h   !< Layer thickness [H ~> m].
-  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables.
+  logical,                                    intent(in)  :: use_EOS !< If true, density is calculated from T & S
+                                                                     !! using an equation of state.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(out) :: PFu !< Zonal acceleration due to pressure gradients
                                                                  !! (equal to -dM/dx) [L T-2 ~> m s-2].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(out) :: PFv !< Meridional acceleration due to pressure gradients
@@ -438,14 +386,6 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host,
                 ! e may be adjusted (with a nonlinear equation of state) so that
                 ! its derivative compensates for the adiabatic compressibility
                 ! in seawater, but e will still be close to the interface depth.
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target :: &
-    T_tmp, &    ! Temporary array of temperatures where layers that are lighter
-                ! than the mixed layer have the mixed layer's properties [C ~> degC].
-    S_tmp       ! Temporary array of salinities where layers that are lighter
-                ! than the mixed layer have the mixed layer's properties [S ~> ppt].
-
-  real :: Rho_cv_BL(SZI_(G)) !   The coordinate potential density in
-                ! the deepest variable density near-surface layer [R ~> kg m-3].
   real :: h_star(SZI_(G),SZJ_(G)) ! Layer thickness after compensation
                              ! for compressibility [Z ~> m].
   real :: SSH(SZI_(G),SZJ_(G)) ! The sea surface height anomaly, in depth units [Z ~> m].
@@ -454,47 +394,34 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host,
                                      ! [Z ~> m].
   real :: e_tide_sal(SZI_(G),SZJ_(G)) ! Bottom geopotential anomaly due to harmonic self-attraction and loading
                                       ! specific to tides, in depth units [Z ~> m].
-  real :: p_ref(SZI_(G))     !   The pressure used to calculate the coordinate
-                             ! density [R L2 T-2 ~> Pa] (usually 2e7 Pa = 2000 dbar).
   real :: I_Rho0             ! 1/Rho0 [R-1 ~> m3 kg-1].
-  real :: G_Rho0             ! G_Earth / Rho0 [L2 Z-1 T-2 R-1 ~> m4 s-2 kg-1].
   real :: PFu_bc, PFv_bc     ! The pressure gradient force due to along-layer
                              ! compensated density gradients [L T-2 ~> m s-2]
   real :: dz_neglect         ! A vertical distance that is so small it is usually lost
                              ! in roundoff and can be neglected [Z ~> m].
   logical :: use_p_atm       ! If true, use the atmospheric pressure.
-  logical :: use_EOS         ! If true, density is calculated from T & S using
-                             ! an equation of state.
   logical :: is_split        ! A flag indicating whether the pressure
                              ! gradient terms are to be split into
                              ! barotropic and baroclinic pieces.
-  type(thermo_var_ptrs), target :: tv_tmp! A structure of temporary T & S.
   type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
-  integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
+  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  nkmb=GV%nk_rho_varies
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-  EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
 
   use_p_atm = associated(p_atm)
   is_split = present(pbce)
-  use_EOS = associated(tv%eqn_of_state)
 
   if (.not.CS%initialized) call MOM_error(FATAL, &
        "MOM_PressureForce_Mont: Module must be initialized before it is used.")
 
   if (use_EOS) then
-    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
-      "PressureForce_Mont_Bouss: The Montgomery form of the pressure force "//&
-      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
+    call Mont_Bouss_EOS_check_host(host)
   endif
 
   dz_neglect = GV%dZ_subroundoff
   I_Rho0 = 1.0/CS%Rho0
-  G_Rho0 = GV%g_Earth / GV%Rho0
 
   !$OMP parallel do default(shared)
   do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
@@ -536,48 +463,7 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host,
   enddo ; enddo ; enddo
 
   if (use_EOS) then
-!   Calculate in-situ densities (rho_star).
-
-! With a bulk mixed layer, replace the T & S of any layers that are
-! lighter than the buffer layer with the properties of the buffer
-! layer.  These layers will be massless anyway, and it avoids any
-! formal calculations with hydrostatically unstable profiles.
-
-    if (nkmb>0) then
-      tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
-      tv_tmp%eqn_of_state => tv%eqn_of_state
-
-      do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
-      !$OMP parallel do default(shared) private(Rho_cv_BL)
-      do j=Jsq,Jeq+1
-        do k=1,nkmb ; do i=Isq,Ieq+1
-          tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
-        enddo ; enddo
-        call calculate_density(tv%T(:,j,nkmb), tv%S(:,j,nkmb), p_ref, Rho_cv_BL(:), &
-                               tv%eqn_of_state, EOSdom)
-
-        do k=nkmb+1,nz ; do i=Isq,Ieq+1
-          if (GV%Rlay(k) < Rho_cv_BL(i)) then
-            tv_tmp%T(i,j,k) = tv%T(i,j,nkmb) ; tv_tmp%S(i,j,k) = tv%S(i,j,nkmb)
-          else
-            tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
-          endif
-        enddo ; enddo
-      enddo
-    else
-      tv_tmp%T => tv%T ; tv_tmp%S => tv%S
-      tv_tmp%eqn_of_state => tv%eqn_of_state
-      do i=Isq,Ieq+1 ; p_ref(i) = 0.0 ; enddo
-    endif
-
-    ! This no longer includes any pressure dependency, since this routine
-    ! will come down with a fatal error if there is any compressibility.
-    !$OMP parallel do default(shared)
-    do k=1,nz ; do j=Jsq,Jeq+1
-      call calculate_density(tv_tmp%T(:,j,k), tv_tmp%S(:,j,k), p_ref, rho_star(:,j,k), &
-                             tv%eqn_of_state, EOSdom)
-      do i=Isq,Ieq+1 ; rho_star(i,j,k) = G_Rho0*rho_star(i,j,k) ; enddo
-    enddo ; enddo
+    call Mont_Bouss_rho_star_host(host, Isq, Ieq, Jsq, Jeq, nz, rho_star)
   endif                                               ! use_EOS
 
 !    Here the layer Montgomery potentials, M, are calculated.
@@ -607,7 +493,6 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host,
 
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    ctx%pbce%tv => tv_tmp
     call Set_pbce_Bouss(e, use_EOS, G, GV, US, CS%Rho0, CS%GFS_scale, pbce, c_loc(ctx%pbce), rho_star, 1)
   endif
 
@@ -1051,6 +936,280 @@ subroutine Set_pbce_nonBouss_EOS(G, GV, tv, Isq, Ieq, Jsq, Jeq, nz, p, dP_dH, dp
     enddo
   enddo
 end subroutine Set_pbce_nonBouss_EOS
+
+!> Stops PressureForce_Mont_nonBouss with a fatal error if the equation of state in the PF_Mont_host_ctx
+!! that host points to is compressible.
+subroutine Mont_nonBouss_EOS_check_host(host)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                !! the Fortran objects used by the host helpers
+  ! Local variables
+  type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
+  type(thermo_var_ptrs),  pointer :: tv  ! Thermodynamic variables.
+
+  call c_f_pointer(host, ctx)
+  tv => ctx%tv
+
+  if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
+    "PressureForce_Mont_nonBouss: The Montgomery form of the pressure force "//&
+    "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
+
+end subroutine Mont_nonBouss_EOS_check_host
+
+!> Finds the change in geopotential across each layer for PressureForce_Mont_nonBouss with
+!! int_specific_vol_dp, using the grid, unit scaling and thermodynamic variables in the
+!! PF_Mont_host_ctx that host points to.
+subroutine Mont_nonBouss_dz_geo_host(host, nz, p, dz_geo)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                !! the Fortran objects used by the host helpers
+  integer,                intent(in)    :: nz !< The number of layers/levels in the vertical
+  real, dimension(:,:,:), intent(in)    :: p !< Interface pressure [R L2 T-2 ~> Pa].
+  real, dimension(:,:,:), intent(inout) :: dz_geo !< The change in geopotential across a layer [L2 T-2 ~> m2 s-2].
+  ! Local variables
+  type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
+  type(ocean_grid_type),  pointer :: G   ! The ocean's grid structure.
+  type(unit_scale_type),  pointer :: US  ! A dimensional unit scaling type
+  type(thermo_var_ptrs),  pointer :: tv  ! Thermodynamic variables.
+  integer :: k
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; US => ctx%US ; tv => ctx%tv
+
+  !$OMP parallel do default(shared)
+  do k=1,nz
+    call int_specific_vol_dp(tv%T(:,:,k), tv%S(:,:,k), p(:,:,k), p(:,:,k+1), &
+                             0.0, G%HI, tv%eqn_of_state, US, dz_geo(:,:,k), halo_size=1)
+  enddo
+
+end subroutine Mont_nonBouss_dz_geo_host
+
+!> Calls Mont_nonBouss_alpha_star with the grid, vertical grid, thermodynamic variables and temporary
+!! T and S storage in the PF_Mont_host_ctx that host points to, then points the thermodynamic
+!! variables that the Set_pbce host helpers use at the temporary ones.
+subroutine Mont_nonBouss_alpha_star_host(host, Isq, Ieq, Jsq, Jeq, nz, alpha_star)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                !! the Fortran objects used by the host helpers
+  integer,                intent(in)    :: Isq !< The start i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Ieq !< The end i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jsq !< The start j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jeq !< The end j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: nz !< The number of layers/levels in the vertical
+  real, dimension(:,:,:), intent(inout) :: alpha_star !< Compression adjusted specific volume [R-1 ~> m3 kg-1].
+  ! Local variables
+  type(PF_Mont_host_ctx),  pointer :: ctx ! The objects behind host
+  type(ocean_grid_type),   pointer :: G   ! The ocean's grid structure.
+  type(verticalGrid_type), pointer :: GV  ! The ocean's vertical grid structure.
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; GV => ctx%GV
+  if (.not.allocated(ctx%pbce%T_tmp)) allocate(ctx%pbce%T_tmp(SZI_(G),SZJ_(G),SZK_(GV)))
+  if (.not.allocated(ctx%pbce%S_tmp)) allocate(ctx%pbce%S_tmp(SZI_(G),SZJ_(G),SZK_(GV)))
+  call Mont_nonBouss_alpha_star(G, GV, ctx%tv, ctx%pbce%tv_tmp, ctx%pbce%T_tmp, ctx%pbce%S_tmp, &
+                                Isq, Ieq, Jsq, Jeq, nz, alpha_star)
+  ctx%pbce%tv => ctx%pbce%tv_tmp
+
+end subroutine Mont_nonBouss_alpha_star_host
+
+!> Calculates the in-situ specific volumes (alpha_star) for PressureForce_Mont_nonBouss from the
+!! equation of state, setting up tv_tmp with the temperatures and salinities it uses.
+subroutine Mont_nonBouss_alpha_star(G, GV, tv, tv_tmp, T_tmp, S_tmp, Isq, Ieq, Jsq, Jeq, nz, alpha_star)
+  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
+  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables.
+  type(thermo_var_ptrs),                      intent(inout) :: tv_tmp !< A structure of temporary T & S.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target, intent(inout) :: &
+    T_tmp       !< Temporary array of temperatures where layers that are lighter
+                !! than the mixed layer have the mixed layer's properties [C ~> degC].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target, intent(inout) :: &
+    S_tmp       !< Temporary array of salinities where layers that are lighter
+                !! than the mixed layer have the mixed layer's properties [S ~> ppt].
+  integer,                                    intent(in)  :: Isq !< The start i-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: Ieq !< The end i-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: Jsq !< The start j-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: Jeq !< The end j-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: nz !< The number of layers/levels in the vertical
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(inout) :: &
+    alpha_star  !< Compression adjusted specific volume [R-1 ~> m3 kg-1].
+  ! Local variables
+  real, dimension(SZI_(G)) :: Rho_cv_BL  ! The coordinate potential density in the
+                  ! deepest variable density near-surface layer [R ~> kg m-3].
+  real :: p_ref(SZI_(G))     !   The pressure used to calculate the coordinate
+                             ! density [R L2 T-2 ~> Pa] (usually 2e7 Pa = 2000 dbar).
+  real :: rho_in_situ(SZI_(G)) !In-situ density of a layer [R ~> kg m-3].
+  integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
+  integer :: i, j, k, nkmb
+
+  nkmb=GV%nk_rho_varies
+  EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
+
+  !   Calculate in-situ specific volumes (alpha_star).
+
+  !   With a bulk mixed layer, replace the T & S of any layers that are
+  ! lighter than the buffer layer with the properties of the buffer
+  ! layer.  These layers will be massless anyway, and it avoids any
+  ! formal calculations with hydrostatically unstable profiles.
+  if (nkmb>0) then
+    tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
+    tv_tmp%eqn_of_state => tv%eqn_of_state
+    do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
+    !$OMP parallel do default(shared) private(Rho_cv_BL)
+    do j=Jsq,Jeq+1
+      do k=1,nkmb ; do i=Isq,Ieq+1
+        tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
+      enddo ; enddo
+      call calculate_density(tv%T(:,j,nkmb), tv%S(:,j,nkmb), p_ref, Rho_cv_BL(:), &
+                             tv%eqn_of_state, EOSdom)
+      do k=nkmb+1,nz ; do i=Isq,Ieq+1
+        if (GV%Rlay(k) < Rho_cv_BL(i)) then
+          tv_tmp%T(i,j,k) = tv%T(i,j,nkmb) ; tv_tmp%S(i,j,k) = tv%S(i,j,nkmb)
+        else
+          tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
+        endif
+      enddo ; enddo
+    enddo
+  else
+    tv_tmp%T => tv%T ; tv_tmp%S => tv%S
+    tv_tmp%eqn_of_state => tv%eqn_of_state
+    do i=Isq,Ieq+1 ; p_ref(i) = 0 ; enddo
+  endif
+  !$OMP parallel do default(shared) private(rho_in_situ)
+  do k=1,nz ; do j=Jsq,Jeq+1
+    call calculate_density(tv_tmp%T(:,j,k), tv_tmp%S(:,j,k), p_ref, rho_in_situ, &
+                           tv%eqn_of_state, EOSdom)
+    do i=Isq,Ieq+1 ; alpha_star(i,j,k) = 1.0 / rho_in_situ(i) ; enddo
+  enddo ; enddo
+end subroutine Mont_nonBouss_alpha_star
+
+!> Stops PressureForce_Mont_Bouss with a fatal error if the equation of state in the PF_Mont_host_ctx
+!! that host points to is compressible.
+subroutine Mont_Bouss_EOS_check_host(host)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                !! the Fortran objects used by the host helpers
+  ! Local variables
+  type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
+  type(thermo_var_ptrs),  pointer :: tv  ! Thermodynamic variables.
+
+  call c_f_pointer(host, ctx)
+  tv => ctx%tv
+
+  if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
+    "PressureForce_Mont_Bouss: The Montgomery form of the pressure force "//&
+    "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
+
+end subroutine Mont_Bouss_EOS_check_host
+
+!> Calls Mont_Bouss_rho_star with the grid, vertical grid, thermodynamic variables and temporary
+!! T and S storage in the PF_Mont_host_ctx that host points to, then points the thermodynamic
+!! variables that the Set_pbce host helpers use at the temporary ones.
+subroutine Mont_Bouss_rho_star_host(host, Isq, Ieq, Jsq, Jeq, nz, rho_star)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
+                                                !! the Fortran objects used by the host helpers
+  integer,                intent(in)    :: Isq !< The start i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Ieq !< The end i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jsq !< The start j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jeq !< The end j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: nz !< The number of layers/levels in the vertical
+  real, dimension(:,:,:), intent(inout) :: rho_star !< In-situ density divided by the derivative with depth of the
+                                                    !! corrected e times (G_Earth/Rho0) [L2 Z-1 T-2 ~> m s-2].
+  ! Local variables
+  type(PF_Mont_host_ctx),  pointer :: ctx ! The objects behind host
+  type(ocean_grid_type),   pointer :: G   ! The ocean's grid structure.
+  type(verticalGrid_type), pointer :: GV  ! The ocean's vertical grid structure.
+
+  call c_f_pointer(host, ctx)
+  G => ctx%G ; GV => ctx%GV
+  if (.not.allocated(ctx%pbce%T_tmp)) allocate(ctx%pbce%T_tmp(SZI_(G),SZJ_(G),SZK_(GV)))
+  if (.not.allocated(ctx%pbce%S_tmp)) allocate(ctx%pbce%S_tmp(SZI_(G),SZJ_(G),SZK_(GV)))
+  call Mont_Bouss_rho_star(G, GV, ctx%tv, ctx%pbce%tv_tmp, ctx%pbce%T_tmp, ctx%pbce%S_tmp, &
+                           Isq, Ieq, Jsq, Jeq, nz, rho_star)
+  ctx%pbce%tv => ctx%pbce%tv_tmp
+
+end subroutine Mont_Bouss_rho_star_host
+
+!> Calculates the in-situ densities (rho_star) for PressureForce_Mont_Bouss from the equation of
+!! state, setting up tv_tmp with the temperatures and salinities it uses.
+subroutine Mont_Bouss_rho_star(G, GV, tv, tv_tmp, T_tmp, S_tmp, Isq, Ieq, Jsq, Jeq, nz, rho_star)
+  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
+  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables.
+  type(thermo_var_ptrs),                      intent(inout) :: tv_tmp !< A structure of temporary T & S.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target, intent(inout) :: &
+    T_tmp       !< Temporary array of temperatures where layers that are lighter
+                !! than the mixed layer have the mixed layer's properties [C ~> degC].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), target, intent(inout) :: &
+    S_tmp       !< Temporary array of salinities where layers that are lighter
+                !! than the mixed layer have the mixed layer's properties [S ~> ppt].
+  integer,                                    intent(in)  :: Isq !< The start i-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: Ieq !< The end i-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: Jsq !< The start j-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: Jeq !< The end j-index of cell vertices within the
+                                                                 !! computational domain
+  integer,                                    intent(in)  :: nz !< The number of layers/levels in the vertical
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(inout) :: &
+    rho_star    !< In-situ density divided by the derivative with depth of the
+                !! corrected e times (G_Earth/Rho0) [L2 Z-1 T-2 ~> m s-2].
+  ! Local variables
+  real :: Rho_cv_BL(SZI_(G)) !   The coordinate potential density in
+                ! the deepest variable density near-surface layer [R ~> kg m-3].
+  real :: p_ref(SZI_(G))     !   The pressure used to calculate the coordinate
+                             ! density [R L2 T-2 ~> Pa] (usually 2e7 Pa = 2000 dbar).
+  real :: G_Rho0             ! G_Earth / Rho0 [L2 Z-1 T-2 R-1 ~> m4 s-2 kg-1].
+  integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
+  integer :: i, j, k, nkmb
+
+  nkmb=GV%nk_rho_varies
+  EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
+  G_Rho0 = GV%g_Earth / GV%Rho0
+
+!   Calculate in-situ densities (rho_star).
+
+! With a bulk mixed layer, replace the T & S of any layers that are
+! lighter than the buffer layer with the properties of the buffer
+! layer.  These layers will be massless anyway, and it avoids any
+! formal calculations with hydrostatically unstable profiles.
+
+  if (nkmb>0) then
+    tv_tmp%T => T_tmp ; tv_tmp%S => S_tmp
+    tv_tmp%eqn_of_state => tv%eqn_of_state
+
+    do i=Isq,Ieq+1 ; p_ref(i) = tv%P_Ref ; enddo
+    !$OMP parallel do default(shared) private(Rho_cv_BL)
+    do j=Jsq,Jeq+1
+      do k=1,nkmb ; do i=Isq,Ieq+1
+        tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
+      enddo ; enddo
+      call calculate_density(tv%T(:,j,nkmb), tv%S(:,j,nkmb), p_ref, Rho_cv_BL(:), &
+                             tv%eqn_of_state, EOSdom)
+
+      do k=nkmb+1,nz ; do i=Isq,Ieq+1
+        if (GV%Rlay(k) < Rho_cv_BL(i)) then
+          tv_tmp%T(i,j,k) = tv%T(i,j,nkmb) ; tv_tmp%S(i,j,k) = tv%S(i,j,nkmb)
+        else
+          tv_tmp%T(i,j,k) = tv%T(i,j,k) ; tv_tmp%S(i,j,k) = tv%S(i,j,k)
+        endif
+      enddo ; enddo
+    enddo
+  else
+    tv_tmp%T => tv%T ; tv_tmp%S => tv%S
+    tv_tmp%eqn_of_state => tv%eqn_of_state
+    do i=Isq,Ieq+1 ; p_ref(i) = 0.0 ; enddo
+  endif
+
+  ! This no longer includes any pressure dependency, since this routine
+  ! will come down with a fatal error if there is any compressibility.
+  !$OMP parallel do default(shared)
+  do k=1,nz ; do j=Jsq,Jeq+1
+    call calculate_density(tv_tmp%T(:,j,k), tv_tmp%S(:,j,k), p_ref, rho_star(:,j,k), &
+                           tv%eqn_of_state, EOSdom)
+    do i=Isq,Ieq+1 ; rho_star(i,j,k) = G_Rho0*rho_star(i,j,k) ; enddo
+  enddo ; enddo
+end subroutine Mont_Bouss_rho_star
 
 !> Initialize the Montgomery-potential form of PGF control structure
 subroutine PressureForce_Mont_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp, tides_CSp)

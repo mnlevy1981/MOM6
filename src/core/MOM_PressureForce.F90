@@ -124,11 +124,11 @@ subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm,
     endif
   else
     if (GV%Boussinesq) then
-      call PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_Mont, &
-                                    p_atm, host, pbce, eta)
+      call PressureForce_Mont_Bouss(h, associated(tv%eqn_of_state), PFu, PFv, G, GV, US, &
+                                    CS%PressureForce_Mont, p_atm, host, pbce, eta)
     else
-      call PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_Mont, &
-                                       p_atm, host, pbce, eta)
+      call PressureForce_Mont_nonBouss(h, associated(tv%eqn_of_state), PFu, PFv, G, GV, US, &
+                                       CS%PressureForce_Mont, p_atm, host, pbce, eta)
     endif
   endif
 
