@@ -1,6 +1,7 @@
 ! This file is part of MOM6, the Modular Ocean Model version 6.
 ! See the LICENSE file for licensing information.
 ! SPDX-License-Identifier: Apache-2.0
+!!SKILLS: 0.4.0
 
 !> A thin wrapper for Boussinesq/non-Boussinesq forms of the pressure force calculation.
 module MOM_PressureForce
@@ -63,6 +64,35 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
                  optional, intent(out) :: eta  !< The bottom mass used to calculate PFu and PFv,
                                                !! [H ~> m or kg m-2], with any tidal contributions.
 
+  call PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
+
+end subroutine PressureForce
+
+!> The implementation of PressureForce (the root of its call tree): calls the finite volume or
+!! Montgomery potential form of the pressure force, in its Boussinesq or non-Boussinesq version.
+subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pbce, eta)
+  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
+  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
+  type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                           intent(in)  :: h    !< Layer thicknesses [H ~> m or kg m-2]
+  type(thermo_var_ptrs),   intent(in)  :: tv   !< A structure pointing to various thermodynamic variables
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                           intent(out) :: PFu  !< Zonal pressure force acceleration [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                           intent(out) :: PFv  !< Meridional pressure force acceleration [L T-2 ~> m s-2]
+  type(PressureForce_CS),  intent(inout) :: CS !< Pressure force control structure
+  type(ALE_CS),            pointer     :: ALE_CSp !< ALE control structure
+  type(accel_diag_ptrs),   pointer     :: ADp !< Acceleration diagnostic pointers
+  real, dimension(:,:),    pointer     :: p_atm !< The pressure at the ice-ocean or
+                                               !! atmosphere-ocean interface [R L2 T-2 ~> Pa].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                 optional, intent(out) :: pbce !< The baroclinic pressure anomaly in each layer
+                                               !! due to eta anomalies [L2 T-2 H-1 ~> m s-2 or m4 s-2 kg-1].
+  real, dimension(SZI_(G),SZJ_(G)), &
+                 optional, intent(out) :: eta  !< The bottom mass used to calculate PFu and PFv,
+                                               !! [H ~> m or kg m-2], with any tidal contributions.
+
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
       call PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_FV, &
@@ -81,7 +111,7 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
     endif
   endif
 
-end subroutine Pressureforce
+end subroutine PressureForce_TR
 
 !> Initialize the pressure force control structure
 subroutine PressureForce_init(Time, G, GV, US, param_file, diag, CS, ADp, SAL_CSp, tides_CSp)
