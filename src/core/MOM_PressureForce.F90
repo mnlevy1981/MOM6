@@ -119,8 +119,8 @@ subroutine PressureForce_TR(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm,
       call PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_FV, &
                                    ALE_CSp, ADp, p_atm, host, pbce, eta)
     else
-      call PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS%PressureForce_FV, &
-                                      ALE_CSp, ADp, p_atm, host, pbce, eta)
+      call PressureForce_FV_nonBouss(h, associated(tv%eqn_of_state), PFu, PFv, G, GV, US, &
+                                      CS%PressureForce_FV, associated(ALE_CSp), ADp, p_atm, host, pbce, eta)
     endif
   else
     if (GV%Boussinesq) then
