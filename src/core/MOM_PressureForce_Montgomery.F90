@@ -151,7 +151,7 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   logical :: is_split        ! A flag indicating whether the pressure gradient terms are to be
                              ! split into barotropic and baroclinic pieces.
-  type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(thermo_var_ptrs), target :: tv_tmp! A structure of temporary T & S.
   type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
 
   real :: I_gEarth           ! The inverse of g_Earth [T2 Z L-2 ~> s2 m-1]
@@ -352,7 +352,8 @@ subroutine PressureForce_Mont_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, ho
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    call Set_pbce_nonBouss(p, tv_tmp, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star)
+    ctx%pbce%tv => tv_tmp
+    call Set_pbce_nonBouss(p, use_EOS, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star)
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -467,7 +468,7 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host,
   logical :: is_split        ! A flag indicating whether the pressure
                              ! gradient terms are to be split into
                              ! barotropic and baroclinic pieces.
-  type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(thermo_var_ptrs), target :: tv_tmp! A structure of temporary T & S.
   type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
   integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, nkmb
@@ -606,7 +607,8 @@ subroutine PressureForce_Mont_Bouss(h, tv, PFu, PFv, G, GV, US, CS, p_atm, host,
 
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    call Set_pbce_Bouss(e, tv_tmp, G, GV, US, CS%Rho0, CS%GFS_scale, pbce, c_loc(ctx%pbce), rho_star, 1)
+    ctx%pbce%tv => tv_tmp
+    call Set_pbce_Bouss(e, use_EOS, G, GV, US, CS%Rho0, CS%GFS_scale, pbce, c_loc(ctx%pbce), rho_star, 1)
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -679,11 +681,12 @@ end subroutine PressureForce_Mont_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
-subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, host, rho_star, nkblock)
+subroutine Set_pbce_Bouss(e, use_EOS, G, GV, US, Rho0, GFS_scale, pbce, host, rho_star, nkblock)
   type(ocean_grid_type),                intent(in)  :: G    !< Ocean grid structure
   type(verticalGrid_type),              intent(in)  :: GV   !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: e !< Interface height [Z ~> m].
-  type(thermo_var_ptrs),                intent(in)  :: tv   !< Thermodynamic variables
+  logical,                              intent(in)  :: use_EOS !< If true, density is calculated from T & S using
+                                                               !! an equation of state.
   type(unit_scale_type),                intent(in)  :: US   !< A dimensional unit scaling type
   real,                                 intent(in)  :: Rho0 !< The "Boussinesq" ocean density [R ~> kg m-3].
   real,                                 intent(in)  :: GFS_scale !< Ratio between gravity applied to top
@@ -702,25 +705,13 @@ subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, host, rho_sta
                                  !! near-surface layer.  This is needed to determine whether rho_star is
                                  !! compressibility compensated or not.
   real :: Ihtot(SZI_(G),SZJ_(G))  ! The inverse of the sum of the layer thicknesses [H-1 ~> m-1 or m2 kg-1].
-  real :: press(SZI_(G),SZJ_(G),nkblock)  ! Interface pressure [R L2 T-2 ~> Pa].
-  real :: T_int(SZI_(G),SZJ_(G),nkblock)  ! Interface temperature [C ~> degC]
-  real :: S_int(SZI_(G),SZJ_(G),nkblock)  ! Interface salinity [S ~> ppt]
-  real :: dR_dT(SZI_(G),SZJ_(G),nkblock)  ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
-  real :: dR_dS(SZI_(G),SZJ_(G),nkblock)  ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1].
-  real :: rho_in_situ(SZI_(G),SZJ_(G))  ! In-situ density at the top of a layer [R ~> kg m-3].
-  real :: G_Rho0             ! A scaled version of g_Earth / Rho0 [L2 Z-1 T-2 R-1 ~> m4 s-2 kg-1]
-  real :: Rho0xG             ! g_Earth * Rho0 [R L2 Z-1 T-2 ~> kg s-2 m-2]
-  logical :: use_EOS         ! If true, density is calculated from T & S using
-                             ! an equation of state.
   real :: dz_neglect         ! A vertical distance that is so small it is usually lost
                              ! in roundoff and can be neglected [Z ~> m].
-  integer :: EOSdom(3,2)     ! The computational domain for the equation of state
-  integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k, kstart, kend, kk
+  integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
 
   !$omp target data map(alloc: Ihtot)
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
 
-  use_EOS = associated(tv%eqn_of_state)
   dz_neglect = GV%dZ_subroundoff
 
   if (use_EOS) then
@@ -739,51 +730,8 @@ subroutine Set_pbce_Bouss(e, tv, G, GV, US, Rho0, GFS_scale, pbce, host, rho_sta
         enddo
       enddo
     else
-      !$omp target data &
-      !$omp   map(alloc: EOSdom, press, T_int, S_int, rho_in_situ) &
-      !$omp   map(alloc: dR_dT, dR_dS)
-
-      Rho0xG = Rho0 * GV%g_Earth
-      G_Rho0 = GV%g_Earth / GV%Rho0
-
-      EOSdom(1,:) = [Isq - (G%isd-1), G%iec+1 - (G%isd-1)]
-      EOSdom(2,:) = [Jsq - (G%jsd-1), G%jec+1 - (G%jsd-1)]
-      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
-        Ihtot(i,j) = GV%H_to_Z / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
-        press(i,j,1) = -Rho0xG * (e(i,j,1) - G%meanSL(i,j))
-      enddo
-
-      call calculate_density(tv%T(:,:,1), tv%S(:,:,1), press(:,:,1), rho_in_situ, &
-                             tv%eqn_of_state, EOSdom(1:2,:))
-
-      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
-        pbce(i,j,1) = G_Rho0 * (GFS_scale * rho_in_situ(i,j)) * GV%H_to_Z
-      enddo
-
-      EOSdom(3,1) = 1
-      do kstart=2,nz,nkblock
-        kend = min(kstart+nkblock-1, nz)
-        do concurrent (k=kstart:kend, j=Jsq:Jeq+1, i=Isq:Ieq+1)
-          kk=k-kstart+1
-          press(i,j,kk) = -Rho0xG * (e(i,j,K) - G%meanSL(i,j))
-          T_int(i,j,kk) = 0.5 * (tv%T(i,j,k-1) + tv%T(i,j,k))
-          S_int(i,j,kk) = 0.5 * (tv%S(i,j,k-1) + tv%S(i,j,k))
-        enddo
-        EOSdom(3,2) = kend-kstart+1
-        call calculate_density_derivs(T_int, S_int, press, dR_dT, dR_dS, &
-                                      tv%eqn_of_state, EOSdom)
-
-        do concurrent(j=Jsq:Jeq+1)
-          do k=kstart,kend ; do concurrent (i=Isq:Ieq+1)
-          kk=k-kstart+1
-          pbce(i,j,k) = pbce(i,j,k-1) + G_Rho0 * &
-             ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j)) * &
-             (dR_dT(i,j,kk) * (tv%T(i,j,k) - tv%T(i,j,k-1)) + &
-              dR_dS(i,j,kk) * (tv%S(i,j,k) - tv%S(i,j,k-1)))
-          enddo ; enddo
-        enddo
-      enddo
-      !$omp end target data
+      call Set_pbce_Bouss_EOS_host(host, Isq, Ieq, Jsq, Jeq, nz, nkblock, e, Rho0, GFS_scale, &
+                                   dz_neglect, Ihtot, pbce)
     endif
   else
     do concurrent (j=Jsq:Jeq+1)
@@ -804,11 +752,12 @@ end subroutine Set_pbce_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the column mass.
-subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, host, alpha_star)
+subroutine Set_pbce_nonBouss(p, use_EOS, G, GV, US, GFS_scale, pbce, host, alpha_star)
   type(ocean_grid_type),                intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),              intent(in)  :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: p !< Interface pressures [R L2 T-2 ~> Pa].
-  type(thermo_var_ptrs),                intent(in)  :: tv !< Thermodynamic variables
+  logical,                              intent(in)  :: use_EOS !< If true, density is calculated from T & S using an
+                                                               !! equation of state.
   type(unit_scale_type),                intent(in)  :: US !< A dimensional unit scaling type
   real,                                 intent(in)  :: GFS_scale !< Ratio between gravity applied to top
                                                           !! interface and the gravitational acceleration of
@@ -825,25 +774,15 @@ subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, host, alpha_star
     dpbce, &      !   A barotropic correction to the pbce to enable the use of
                   ! a reduced gravity form of the equations [L2 H-1 T-2 ~> m4 kg-1 s-2].
     C_htot        ! dP_dH divided by the total ocean pressure [H-1 ~> m2 kg-1].
-  real :: T_int(SZI_(G))     ! Interface temperature [C ~> degC]
-  real :: S_int(SZI_(G))     ! Interface salinity [S ~> ppt]
-  real :: dR_dT(SZI_(G))     ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
-  real :: dR_dS(SZI_(G))     ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1].
-  real :: rho_in_situ(SZI_(G)) ! In-situ density at an interface [R ~> kg m-3].
   real :: alpha_Lay(SZK_(GV)) ! The specific volume of each layer [R-1 ~> m3 kg-1].
   real :: dalpha_int(SZK_(GV)+1) ! The change in specific volume across each interface [R-1 ~> m3 kg-1].
   real :: dP_dH              ! A factor that converts from thickness to pressure times other dimensional
                              ! conversion factors [R L2 T-2 H-1 ~> Pa m2 kg-1].
   real :: dp_neglect         ! A thickness that is so small it is usually lost
                              ! in roundoff and can be neglected [R L2 T-2 ~> Pa].
-  logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
-  integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
 
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
-  EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
-
-  use_EOS = associated(tv%eqn_of_state)
 
   dP_dH = GV%g_Earth * GV%H_to_RZ
   dp_neglect = GV%g_Earth * GV%H_to_RZ * GV%H_subroundoff
@@ -862,29 +801,7 @@ subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, host, alpha_star
         enddo ; enddo
       enddo
     else
-      !$OMP parallel do default(shared) private(T_int,S_int,dR_dT,dR_dS,rho_in_situ)
-      do j=Jsq,Jeq+1
-        call calculate_density(tv%T(:,j,nz), tv%S(:,j,nz), p(:,j,nz+1), rho_in_situ, &
-                               tv%eqn_of_state, EOSdom)
-        do i=Isq,Ieq+1
-          C_htot(i,j) = dP_dH / ((p(i,j,nz+1)-p(i,j,1)) + dp_neglect)
-          pbce(i,j,nz) = dP_dH / (rho_in_situ(i))
-        enddo
-        do k=nz-1,1,-1
-          do i=Isq,Ieq+1
-            T_int(i) = 0.5*(tv%T(i,j,k)+tv%T(i,j,k+1))
-            S_int(i) = 0.5*(tv%S(i,j,k)+tv%S(i,j,k+1))
-          enddo
-          call calculate_density(T_int, S_int, p(:,j,k+1), rho_in_situ, tv%eqn_of_state, EOSdom)
-          call calculate_density_derivs(T_int, S_int, p(:,j,k+1), dR_dT, dR_dS, &
-                                        tv%eqn_of_state, EOSdom)
-          do i=Isq,Ieq+1
-            pbce(i,j,k) = pbce(i,j,k+1) + ((p(i,j,K+1)-p(i,j,1))*C_htot(i,j)) *  &
-                ((dR_dT(i)*(tv%T(i,j,k+1)-tv%T(i,j,k)) + &
-                  dR_dS(i)*(tv%S(i,j,k+1)-tv%S(i,j,k))) / (rho_in_situ(i)**2))
-          enddo
-        enddo
-      enddo
+      call Set_pbce_nonBouss_EOS_host(host, Isq, Ieq, Jsq, Jeq, nz, p, dP_dH, dp_neglect, C_htot, pbce)
     endif
   else ! not use_EOS
 
@@ -916,6 +833,224 @@ subroutine Set_pbce_nonBouss(p, tv, G, GV, US, GFS_scale, pbce, host, alpha_star
   endif
 
 end subroutine Set_pbce_nonBouss
+
+!> Calls Set_pbce_Bouss_EOS with the grid, vertical grid and thermodynamic variables in the
+!! pbce_host_ctx that host points to.
+subroutine Set_pbce_Bouss_EOS_host(host, Isq, Ieq, Jsq, Jeq, nz, nkblock, e, Rho0, GFS_scale, &
+                                   dz_neglect, Ihtot, pbce)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the pbce_host_ctx that holds the
+                                                !! Fortran objects used by the host helpers
+  integer,                intent(in)    :: Isq !< The start i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Ieq !< The end i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jsq !< The start j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jeq !< The end j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: nz !< The number of layers/levels in the vertical
+  integer,                intent(in)    :: nkblock !< The number of vertical levels in each block for the variable
+                                                   !! density near-surface layer.  This is needed to determine whether
+                                                   !! rho_star is compressibility compensated or not.
+  real, dimension(:,:,:), intent(in)    :: e !< Interface height [Z ~> m].
+  real,                   intent(in)    :: Rho0 !< The "Boussinesq" ocean density [R ~> kg m-3].
+  real,                   intent(in)    :: GFS_scale !< Ratio between gravity applied to top
+                                                     !! interface and the gravitational acceleration of
+                                                     !! the planet [nondim]. Usually this ratio is 1.
+  real,                   intent(in)    :: dz_neglect !< A vertical distance that is so small it is usually lost
+                                                      !! in roundoff and can be neglected [Z ~> m].
+  real, dimension(:,:),   intent(inout) :: Ihtot !< The inverse of the sum of the layer thicknesses
+                                                 !! [H-1 ~> m-1 or m2 kg-1].
+  real, dimension(:,:,:), intent(out)   :: pbce !< The baroclinic pressure anomaly in each layer due
+                                                !! to free surface height anomalies
+                                                !! [L2 T-2 H-1 ~> m s-2].
+  ! Local variables
+  type(pbce_host_ctx), pointer :: ctx ! The objects behind host
+
+  call c_f_pointer(host, ctx)
+  call Set_pbce_Bouss_EOS(ctx%G, ctx%GV, ctx%tv, Isq, Ieq, Jsq, Jeq, nz, nkblock, e, Rho0, GFS_scale, &
+                          dz_neglect, Ihtot, pbce)
+
+end subroutine Set_pbce_Bouss_EOS_host
+
+!> Determines pbce for Set_pbce_Bouss from the equation of state, when the layer densities are
+!! not provided.
+subroutine Set_pbce_Bouss_EOS(G, GV, tv, Isq, Ieq, Jsq, Jeq, nz, nkblock, e, Rho0, GFS_scale, &
+                              dz_neglect, Ihtot, pbce)
+  type(ocean_grid_type),                intent(in)  :: G    !< Ocean grid structure
+  type(verticalGrid_type),              intent(in)  :: GV   !< Vertical grid structure
+  type(thermo_var_ptrs),                intent(in)  :: tv   !< Thermodynamic variables
+  integer,                              intent(in)  :: Isq !< The start i-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: Ieq !< The end i-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: Jsq !< The start j-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: Jeq !< The end j-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: nz !< The number of layers/levels in the vertical
+  integer, intent(in) :: nkblock !< The number of vertical levels in each block for the variable density
+                                 !! near-surface layer.  This is needed to determine whether rho_star is
+                                 !! compressibility compensated or not.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: e !< Interface height [Z ~> m].
+  real,                                 intent(in)  :: Rho0 !< The "Boussinesq" ocean density [R ~> kg m-3].
+  real,                                 intent(in)  :: GFS_scale !< Ratio between gravity applied to top
+                                                            !! interface and the gravitational acceleration of
+                                                            !! the planet [nondim]. Usually this ratio is 1.
+  real,                                 intent(in)  :: dz_neglect !< A vertical distance that is so small it is
+                                                                  !! usually lost in roundoff and can be neglected
+                                                                  !! [Z ~> m].
+  real, dimension(SZI_(G),SZJ_(G)),     intent(inout) :: Ihtot !< The inverse of the sum of the layer thicknesses
+                                                               !! [H-1 ~> m-1 or m2 kg-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
+                                        intent(out) :: pbce !< The baroclinic pressure anomaly in each layer due
+                                                            !! to free surface height anomalies
+                                                            !! [L2 T-2 H-1 ~> m s-2].
+  ! Local variables
+  real :: press(SZI_(G),SZJ_(G),nkblock)  ! Interface pressure [R L2 T-2 ~> Pa].
+  real :: T_int(SZI_(G),SZJ_(G),nkblock)  ! Interface temperature [C ~> degC]
+  real :: S_int(SZI_(G),SZJ_(G),nkblock)  ! Interface salinity [S ~> ppt]
+  real :: dR_dT(SZI_(G),SZJ_(G),nkblock)  ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
+  real :: dR_dS(SZI_(G),SZJ_(G),nkblock)  ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1].
+  real :: rho_in_situ(SZI_(G),SZJ_(G))  ! In-situ density at the top of a layer [R ~> kg m-3].
+  real :: G_Rho0             ! A scaled version of g_Earth / Rho0 [L2 Z-1 T-2 R-1 ~> m4 s-2 kg-1]
+  real :: Rho0xG             ! g_Earth * Rho0 [R L2 Z-1 T-2 ~> kg s-2 m-2]
+  integer :: EOSdom(3,2)     ! The computational domain for the equation of state
+  integer :: i, j, k, kstart, kend, kk
+
+  !$omp target data &
+  !$omp   map(alloc: EOSdom, press, T_int, S_int, rho_in_situ) &
+  !$omp   map(alloc: dR_dT, dR_dS)
+
+  Rho0xG = Rho0 * GV%g_Earth
+  G_Rho0 = GV%g_Earth / GV%Rho0
+
+  EOSdom(1,:) = [Isq - (G%isd-1), G%iec+1 - (G%isd-1)]
+  EOSdom(2,:) = [Jsq - (G%jsd-1), G%jec+1 - (G%jsd-1)]
+  do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    Ihtot(i,j) = GV%H_to_Z / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
+    press(i,j,1) = -Rho0xG * (e(i,j,1) - G%meanSL(i,j))
+  enddo
+
+  call calculate_density(tv%T(:,:,1), tv%S(:,:,1), press(:,:,1), rho_in_situ, &
+                         tv%eqn_of_state, EOSdom(1:2,:))
+
+  do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
+    pbce(i,j,1) = G_Rho0 * (GFS_scale * rho_in_situ(i,j)) * GV%H_to_Z
+  enddo
+
+  EOSdom(3,1) = 1
+  do kstart=2,nz,nkblock
+    kend = min(kstart+nkblock-1, nz)
+    do concurrent (k=kstart:kend, j=Jsq:Jeq+1, i=Isq:Ieq+1)
+      kk=k-kstart+1
+      press(i,j,kk) = -Rho0xG * (e(i,j,K) - G%meanSL(i,j))
+      T_int(i,j,kk) = 0.5 * (tv%T(i,j,k-1) + tv%T(i,j,k))
+      S_int(i,j,kk) = 0.5 * (tv%S(i,j,k-1) + tv%S(i,j,k))
+    enddo
+    EOSdom(3,2) = kend-kstart+1
+    call calculate_density_derivs(T_int, S_int, press, dR_dT, dR_dS, &
+                                  tv%eqn_of_state, EOSdom)
+
+    do concurrent(j=Jsq:Jeq+1)
+      do k=kstart,kend ; do concurrent (i=Isq:Ieq+1)
+      kk=k-kstart+1
+      pbce(i,j,k) = pbce(i,j,k-1) + G_Rho0 * &
+         ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j)) * &
+         (dR_dT(i,j,kk) * (tv%T(i,j,k) - tv%T(i,j,k-1)) + &
+          dR_dS(i,j,kk) * (tv%S(i,j,k) - tv%S(i,j,k-1)))
+      enddo ; enddo
+    enddo
+  enddo
+  !$omp end target data
+end subroutine Set_pbce_Bouss_EOS
+
+!> Calls Set_pbce_nonBouss_EOS with the grid, vertical grid and thermodynamic variables in the
+!! pbce_host_ctx that host points to.
+subroutine Set_pbce_nonBouss_EOS_host(host, Isq, Ieq, Jsq, Jeq, nz, p, dP_dH, dp_neglect, C_htot, pbce)
+  type(c_ptr),     value, intent(in)    :: host !< Opaque pointer to the pbce_host_ctx that holds the
+                                                !! Fortran objects used by the host helpers
+  integer,                intent(in)    :: Isq !< The start i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Ieq !< The end i-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jsq !< The start j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: Jeq !< The end j-index of cell vertices within the computational domain
+  integer,                intent(in)    :: nz !< The number of layers/levels in the vertical
+  real, dimension(:,:,:), intent(in)    :: p !< Interface pressures [R L2 T-2 ~> Pa].
+  real,                   intent(in)    :: dP_dH !< A factor that converts from thickness to pressure times other
+                                                 !! dimensional conversion factors [R L2 T-2 H-1 ~> Pa m2 kg-1].
+  real,                   intent(in)    :: dp_neglect !< A thickness that is so small it is usually lost
+                                                      !! in roundoff and can be neglected [R L2 T-2 ~> Pa].
+  real, dimension(:,:),   intent(inout) :: C_htot !< dP_dH divided by the total ocean pressure [H-1 ~> m2 kg-1].
+  real, dimension(:,:,:), intent(out)   :: pbce !< The baroclinic pressure anomaly in each
+                                                !! layer due to free surface height anomalies
+                                                !! [L2 H-1 T-2 ~> m4 kg-1 s-2].
+  ! Local variables
+  type(pbce_host_ctx), pointer :: ctx ! The objects behind host
+
+  call c_f_pointer(host, ctx)
+  call Set_pbce_nonBouss_EOS(ctx%G, ctx%GV, ctx%tv, Isq, Ieq, Jsq, Jeq, nz, p, dP_dH, dp_neglect, &
+                             C_htot, pbce)
+
+end subroutine Set_pbce_nonBouss_EOS_host
+
+!> Determines pbce for Set_pbce_nonBouss from the equation of state, when the layer specific
+!! volumes are not provided.
+subroutine Set_pbce_nonBouss_EOS(G, GV, tv, Isq, Ieq, Jsq, Jeq, nz, p, dP_dH, dp_neglect, C_htot, pbce)
+  type(ocean_grid_type),                intent(in)  :: G  !< Ocean grid structure
+  type(verticalGrid_type),              intent(in)  :: GV !< Vertical grid structure
+  type(thermo_var_ptrs),                intent(in)  :: tv !< Thermodynamic variables
+  integer,                              intent(in)  :: Isq !< The start i-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: Ieq !< The end i-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: Jsq !< The start j-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: Jeq !< The end j-index of cell vertices within the
+                                                           !! computational domain
+  integer,                              intent(in)  :: nz !< The number of layers/levels in the vertical
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: p !< Interface pressures [R L2 T-2 ~> Pa].
+  real,                                 intent(in)  :: dP_dH !< A factor that converts from thickness to pressure
+                                                             !! times other dimensional conversion factors
+                                                             !! [R L2 T-2 H-1 ~> Pa m2 kg-1].
+  real,                                 intent(in)  :: dp_neglect !< A thickness that is so small it is usually lost
+                                                                  !! in roundoff and can be neglected
+                                                                  !! [R L2 T-2 ~> Pa].
+  real, dimension(SZI_(G),SZJ_(G)),     intent(inout) :: C_htot !< dP_dH divided by the total ocean pressure
+                                                                !! [H-1 ~> m2 kg-1].
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), intent(out) :: pbce !< The baroclinic pressure anomaly in each
+                                                          !! layer due to free surface height anomalies
+                                                          !! [L2 H-1 T-2 ~> m4 kg-1 s-2].
+  ! Local variables
+  real :: T_int(SZI_(G))     ! Interface temperature [C ~> degC]
+  real :: S_int(SZI_(G))     ! Interface salinity [S ~> ppt]
+  real :: dR_dT(SZI_(G))     ! Partial derivative of density with temperature [R C-1 ~> kg m-3 degC-1]
+  real :: dR_dS(SZI_(G))     ! Partial derivative of density with salinity [R S-1 ~> kg m-3 ppt-1].
+  real :: rho_in_situ(SZI_(G)) ! In-situ density at an interface [R ~> kg m-3].
+  integer, dimension(2) :: EOSdom ! The computational domain for the equation of state
+  integer :: i, j, k
+
+  EOSdom(1) = Isq - (G%isd-1) ;  EOSdom(2) = G%iec+1 - (G%isd-1)
+
+  !$OMP parallel do default(shared) private(T_int,S_int,dR_dT,dR_dS,rho_in_situ)
+  do j=Jsq,Jeq+1
+    call calculate_density(tv%T(:,j,nz), tv%S(:,j,nz), p(:,j,nz+1), rho_in_situ, &
+                           tv%eqn_of_state, EOSdom)
+    do i=Isq,Ieq+1
+      C_htot(i,j) = dP_dH / ((p(i,j,nz+1)-p(i,j,1)) + dp_neglect)
+      pbce(i,j,nz) = dP_dH / (rho_in_situ(i))
+    enddo
+    do k=nz-1,1,-1
+      do i=Isq,Ieq+1
+        T_int(i) = 0.5*(tv%T(i,j,k)+tv%T(i,j,k+1))
+        S_int(i) = 0.5*(tv%S(i,j,k)+tv%S(i,j,k+1))
+      enddo
+      call calculate_density(T_int, S_int, p(:,j,k+1), rho_in_situ, tv%eqn_of_state, EOSdom)
+      call calculate_density_derivs(T_int, S_int, p(:,j,k+1), dR_dT, dR_dS, &
+                                    tv%eqn_of_state, EOSdom)
+      do i=Isq,Ieq+1
+        pbce(i,j,k) = pbce(i,j,k+1) + ((p(i,j,K+1)-p(i,j,1))*C_htot(i,j)) *  &
+            ((dR_dT(i)*(tv%T(i,j,k+1)-tv%T(i,j,k)) + &
+              dR_dS(i)*(tv%S(i,j,k+1)-tv%S(i,j,k))) / (rho_in_situ(i)**2))
+      enddo
+    enddo
+  enddo
+end subroutine Set_pbce_nonBouss_EOS
 
 !> Initialize the Montgomery-potential form of PGF control structure
 subroutine PressureForce_Mont_init(Time, G, GV, US, param_file, diag, CS, SAL_CSp, tides_CSp)

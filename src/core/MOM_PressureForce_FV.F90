@@ -271,7 +271,7 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, AD
   logical :: use_ALE         ! If true, use an ALE pressure reconstruction.
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   logical :: do_more_k       ! If true, there are still points where a flatter interface remains to be found.
-  type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(thermo_var_ptrs), target :: tv_tmp! A structure of temporary T & S.
   type(PF_FV_host_ctx), pointer :: ctx ! The objects behind host
 
   real :: alpha_ref     ! A reference specific volume [R-1 ~> m3 kg-1] that is used
@@ -906,7 +906,8 @@ subroutine PressureForce_FV_nonBouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, AD
 
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    call set_pbce_nonBouss(p, tv_tmp, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce))
+    ctx%pbce%tv => tv_tmp
+    call set_pbce_nonBouss(p, use_EOS, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce))
   endif
 
   if (present(eta)) then
@@ -1128,7 +1129,7 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
   logical :: use_ALE         ! If true, use an ALE pressure reconstruction.
   logical :: use_EOS         ! If true, density is calculated from T & S using an equation of state.
   logical :: do_more_k       ! If true, there are still points where a flatter interface remains to be found.
-  type(thermo_var_ptrs) :: tv_tmp! A structure of temporary T & S.
+  type(thermo_var_ptrs), target :: tv_tmp! A structure of temporary T & S.
   type(PF_FV_host_ctx), pointer :: ctx ! The objects behind host
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
@@ -1991,7 +1992,8 @@ subroutine PressureForce_FV_Bouss(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, 
 
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    call set_pbce_Bouss(e, tv_tmp, G, GV, US, rho0_set_pbce, CS%GFS_scale, pbce, c_loc(ctx%pbce), &
+    ctx%pbce%tv => tv_tmp
+    call set_pbce_Bouss(e, use_EOS, G, GV, US, rho0_set_pbce, CS%GFS_scale, pbce, c_loc(ctx%pbce), &
                         nkblock=nkblock)
   endif
 
