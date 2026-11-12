@@ -28,6 +28,7 @@ use iso_c_binding, only : c_ptr, c_loc, c_f_pointer, c_bool, c_double
 implicit none ; private
 
 #include <MOM_memory.h>
+#include "do_concurrent_compat.h"
 
 public PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss, Set_pbce_Bouss
 public Set_pbce_nonBouss, PressureForce_Mont_init
@@ -330,64 +331,67 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
 
   I_gEarth = 1.0 / g_Earth
   dp_neglect = g_Earth * H_to_RZ * H_subroundoff
-  do k=1,nz ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-  do k=2,nz ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+  do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
+  do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1 ; p(i,j,1) = p_atm(i,j) ; enddo ; enddo
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1) ; p(i,j,1) = p_atm(i,j) ; enddo
   else
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1 ; p(i,j,1) = 0.0 ; enddo ; enddo
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1) ; p(i,j,1) = 0.0 ; enddo
   endif
-  do j=Jsq,Jeq+1 ; do k=1,nz ; do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+  do k=1,nz ; do concurrent (i=Isq:Ieq+1)
     p(i,j,K+1) = p(i,j,K) + g_Earth * H_to_RZ * h(i,j,k)
   enddo ; enddo ; enddo
 
   if (eta_a%associated()) then
     Pa_to_H = 1.0 / (g_Earth * H_to_RZ)
     if (use_p_atm) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         eta(i,j) = (p(i,j,nz+1) - p_atm(i,j)) * Pa_to_H ! eta has the same units as h.
-      enddo ; enddo
+      enddo
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         eta(i,j) = p(i,j,nz+1) * Pa_to_H ! eta has the same units as h.
-      enddo ; enddo
+      enddo
     endif
   endif
 
-  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
     geopot_bot(i,j) = -g_Earth * bathyT(i,j)
-  enddo ; enddo
+  enddo
 
   ! Calculate and add the self-attraction and loading geopotential anomaly.
   if (CS%calculate_SAL) then
     !   Determine the sea surface height anomalies, to enable the calculation
     ! of self-attraction and loading.
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0)
-    enddo ; enddo
+    enddo
     if (use_EOS) then
       call Mont_nonBouss_dz_geo_host(host, nz, p, dz_geo)
-      do j=Jsq,Jeq+1 ; do k=1,nz ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do k=1,nz ; do concurrent (i=Isq:Ieq+1)
         SSH(i,j) = SSH(i,j) + I_gEarth * dz_geo(i,j,k)
       enddo ; enddo ; enddo
     else
-      do j=Jsq,Jeq+1 ; do k=1,nz ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do k=1,nz ; do concurrent (i=Isq:Ieq+1)
         SSH(i,j) = SSH(i,j) + H_to_RZ * h(i,j,k) * alpha_Lay(k)
       enddo ; enddo ; enddo
     endif
 
     call Mont_calc_SAL_host(host, SSH, e_sal)
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       geopot_bot(i,j) = geopot_bot(i,j) - g_Earth*e_sal(i,j)
-    enddo ; enddo
+    enddo
   endif
 
   ! Calculate and add the tidal geopotential anomaly.
   if (CS%tides) then
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       geopot_bot(i,j) = geopot_bot(i,j) - g_Earth*(e_tide_eq(i,j) + e_tide_sal(i,j))
-    enddo ; enddo
+    enddo
   endif
 
   if (use_EOS) then
@@ -395,20 +399,20 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   endif                                               ! use_EOS
 
   if (use_EOS) then
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1)
         M(i,j,nz) = geopot_bot(i,j) + p(i,j,nz+1) * alpha_star(i,j,nz)
       enddo
-      do k=nz-1,1,-1 ; do i=Isq,Ieq+1
+      do k=nz-1,1,-1 ; do concurrent (i=Isq:Ieq+1)
         M(i,j,k) = M(i,j,k+1) + p(i,j,K+1) * (alpha_star(i,j,k) - alpha_star(i,j,k+1))
       enddo ; enddo
     enddo
   else ! not use_EOS
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1)
         M(i,j,nz) = geopot_bot(i,j) + p(i,j,nz+1) * alpha_Lay(nz)
       enddo
-      do k=nz-1,1,-1 ; do i=Isq,Ieq+1
+      do k=nz-1,1,-1 ; do concurrent (i=Isq:Ieq+1)
         M(i,j,k) = M(i,j,k+1) + p(i,j,K+1) * dalpha_int(K+1)
       enddo ; enddo
     enddo
@@ -416,12 +420,12 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
 
   if (CS%GFS_scale < 1.0) then
     ! Adjust the Montgomery potential to make this a reduced gravity model.
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       dM(i,j) = (CS%GFS_scale - 1.0) * M(i,j,1)
-    enddo ; enddo
-    do k=1,nz ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    enddo
+    do concurrent (k=1:nz, j=Jsq:Jeq+1, i=Isq:Ieq+1)
       M(i,j,k) = M(i,j,k) + dM(i,j)
-    enddo ; enddo ; enddo
+    enddo
 
     !   Could instead do the following, to avoid taking small differences
     ! of large numbers...
@@ -451,33 +455,33 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
 !      PFu = - dM/dx   and  PFv = - dM/dy.
   if (use_EOS) then
     do k=1,nz
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         dp_star(i,j) = (p(i,j,K+1) - p(i,j,K)) + dp_neglect
-      enddo ; enddo
-      do j=js,je ; do I=Isq,Ieq
+      enddo
+      do concurrent (j=js:je, I=Isq:Ieq) DO_LOCALITY(local(PFu_bc))
         ! PFu_bc = p* grad alpha*
         PFu_bc = (alpha_star(i+1,j,k) - alpha_star(i,j,k)) * (IdxCu(I,j) * &
             ((dp_star(i,j)*dp_star(i+1,j) + ((p(i,j,K)*dp_star(i+1,j)) + (p(i+1,j,K)*dp_star(i,j)))) / &
              (dp_star(i,j) + dp_star(i+1,j))))
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j) + PFu_bc
         if (use_PFu_bc3d) PFu_bc3d(i,j,k) = PFu_bc
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
+      enddo
+      do concurrent (J=Jsq:Jeq, i=is:ie) DO_LOCALITY(local(PFv_bc))
         PFv_bc = (alpha_star(i,j+1,k) - alpha_star(i,j,k)) * (IdyCv(i,J) * &
             ((dp_star(i,j)*dp_star(i,j+1) + ((p(i,j,K)*dp_star(i,j+1)) + (p(i,j+1,K)*dp_star(i,j)))) / &
              (dp_star(i,j) + dp_star(i,j+1))))
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * IdyCv(i,J) + PFv_bc
         if (use_PFv_bc3d) PFv_bc3d(i,j,k) = PFv_bc
-      enddo ; enddo
+      enddo
     enddo ! k-loop
   else ! .not. use_EOS
-    do k=1,nz
-      do j=js,je ; do I=Isq,Ieq
+    do concurrent (k=1:nz)
+      do concurrent (j=js:je, I=Isq:Ieq)
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j)
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
+      enddo
+      do concurrent (J=Jsq:Jeq, i=is:ie)
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * IdyCv(i,J)
-      enddo ; enddo
+      enddo
     enddo
   endif ! use_EOS
 
@@ -660,9 +664,9 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
   dz_neglect = dZ_subroundoff
   I_Rho0 = 1.0/CS%Rho0
 
-  do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
     e(i,j,nz+1) = -bathyT(i,j)
-  enddo ; enddo
+  enddo
 
   ! Calculate and add the self-attraction and loading geopotential anomaly.
   if (CS%calculate_SAL) then
@@ -670,26 +674,27 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
     ! and loading.  This should really be based on bottom pressure anomalies,
     ! but that is not yet implemented, and the current form is correct for
     ! barotropic tides.
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1 ; SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0) ; enddo
-      do k=1,nz ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1) ; SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0) ; enddo
+      do k=1,nz ; do concurrent (i=Isq:Ieq+1)
         SSH(i,j) = SSH(i,j) + h(i,j,k)*H_to_Z
       enddo ; enddo
     enddo
     call Mont_calc_SAL_host(host, SSH, e_sal)
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       e(i,j,nz+1) = e(i,j,nz+1) - e_sal(i,j)
-    enddo ; enddo
+    enddo
   endif
 
   ! Calculate and add the tidal geopotential anomaly.
   if (CS%tides) then
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       e(i,j,nz+1) = e(i,j,nz+1) - (e_tide_eq(i,j) + e_tide_sal(i,j))
-    enddo ; enddo
+    enddo
   endif
 
-  do j=Jsq,Jeq+1 ; do k=nz,1,-1 ; do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+  do k=nz,1,-1 ; do concurrent (i=Isq:Ieq+1)
     e(i,j,K) = e(i,j,K+1) + h(i,j,k)*H_to_Z
   enddo ; enddo ; enddo
 
@@ -699,22 +704,22 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
 
 !    Here the layer Montgomery potentials, M, are calculated.
   if (use_EOS) then
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1)
         M(i,j,1) = CS%GFS_scale * (rho_star(i,j,1) * e(i,j,1))
         if (use_p_atm) M(i,j,1) = M(i,j,1) + p_atm(i,j) * I_Rho0
       enddo
-      do k=2,nz ; do i=Isq,Ieq+1
+      do k=2,nz ; do concurrent (i=Isq:Ieq+1)
         M(i,j,k) = M(i,j,k-1) + (rho_star(i,j,k) - rho_star(i,j,k-1)) * e(i,j,K)
       enddo ; enddo
     enddo
   else ! not use_EOS
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1)
         M(i,j,1) = g_prime(1) * e(i,j,1)
         if (use_p_atm) M(i,j,1) = M(i,j,1) + p_atm(i,j) * I_Rho0
       enddo
-      do k=2,nz ; do i=Isq,Ieq+1
+      do k=2,nz ; do concurrent (i=Isq:Ieq+1)
         M(i,j,k) = M(i,j,k-1) + g_prime(K) * e(i,j,K)
       enddo ; enddo
     enddo
@@ -730,32 +735,32 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
 !      PFu = - dM/dx   and  PFv = - dM/dy.
   if (use_EOS) then
     do k=1,nz
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         h_star(i,j) = (e(i,j,K) - e(i,j,K+1)) + dz_neglect
-      enddo ; enddo
-      do j=js,je ; do I=Isq,Ieq
+      enddo
+      do concurrent (j=js:je, I=Isq:Ieq) DO_LOCALITY(local(PFu_bc))
         PFu_bc = -1.0*(rho_star(i+1,j,k) - rho_star(i,j,k)) * (IdxCu(I,j) * &
           ((h_star(i,j) * h_star(i+1,j) - ((e(i,j,K) * h_star(i+1,j)) + &
           (e(i+1,j,K) * h_star(i,j)))) / (h_star(i,j) + h_star(i+1,j))))
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j) + PFu_bc
         if (use_PFu_bc3d) PFu_bc3d(i,j,k) = PFu_bc
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
+      enddo
+      do concurrent (J=Jsq:Jeq, i=is:ie) DO_LOCALITY(local(PFv_bc))
         PFv_bc = -1.0*(rho_star(i,j+1,k) - rho_star(i,j,k)) * (IdyCv(i,J) * &
           ((h_star(i,j) * h_star(i,j+1) - ((e(i,j,K) * h_star(i,j+1)) + &
           (e(i,j+1,K) * h_star(i,j)))) / (h_star(i,j) + h_star(i,j+1))))
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * IdyCv(i,J) + PFv_bc
         if (use_PFv_bc3d) PFv_bc3d(i,j,k) = PFv_bc
-      enddo ; enddo
+      enddo
     enddo ! k-loop
   else ! .not. use_EOS
-    do k=1,nz
-      do j=js,je ; do I=Isq,Ieq
+    do concurrent (k=1:nz)
+      do concurrent (j=js:je, I=Isq:Ieq)
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j)
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
+      enddo
+      do concurrent (J=Jsq:Jeq, i=is:ie)
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * IdyCv(i,J)
-      enddo ; enddo
+      enddo
     enddo
   endif ! use_EOS
 
@@ -763,18 +768,18 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
     ! eta is the sea surface height relative to a time-invariant geoid, for
     ! comparison with what is used for eta in btstep.  See how e was calculated
     ! about 200 lines above.
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       eta(i,j) = e(i,j,1)*Z_to_H
-    enddo ; enddo
+    enddo
     if (CS%tides) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         eta(i,j) = eta(i,j) + (e_tide_eq(i,j)+e_tide_sal(i,j))*Z_to_H
-      enddo ; enddo
+      enddo
     endif
     if (CS%calculate_SAL) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         eta(i,j) = eta(i,j) + e_sal(i,j)*Z_to_H
-      enddo ; enddo
+      enddo
     endif
   endif
 
@@ -986,12 +991,12 @@ subroutine Set_pbce_nonBouss(p_a, use_EOS, bxQ0, g_Earth, H_to_RZ, H_subroundoff
 
   if (use_EOS) then
     if (alpha_star_a%associated()) then
-      do j=Jsq,Jeq+1
-        do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+        do concurrent (i=Isq:Ieq+1)
           C_htot(i,j) = dP_dH / ((p(i,j,nz+1)-p(i,j,1)) + dp_neglect)
           pbce(i,j,nz) = dP_dH * alpha_star(i,j,nz)
         enddo
-        do k=nz-1,1,-1 ; do i=Isq,Ieq+1
+        do k=nz-1,1,-1 ; do concurrent (i=Isq:Ieq+1)
           pbce(i,j,k) = pbce(i,j,k+1) + ((p(i,j,K+1)-p(i,j,1)) * C_htot(i,j)) * &
               (alpha_star(i,j,k) - alpha_star(i,j,k+1))
         enddo ; enddo
@@ -1001,15 +1006,15 @@ subroutine Set_pbce_nonBouss(p_a, use_EOS, bxQ0, g_Earth, H_to_RZ, H_subroundoff
     endif
   else ! not use_EOS
 
-    do k=1,nz ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-    do k=2,nz ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+    do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
+    do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1)
         C_htot(i,j) = dP_dH / ((p(i,j,nz+1)-p(i,j,1)) + dp_neglect)
         pbce(i,j,nz) = dP_dH * alpha_Lay(nz)
       enddo
-      do k=nz-1,1,-1 ; do i=Isq,Ieq+1
+      do k=nz-1,1,-1 ; do concurrent (i=Isq:Ieq+1)
         pbce(i,j,k) = pbce(i,j,k+1) + ((p(i,j,K+1)-p(i,j,1))*C_htot(i,j)) * dalpha_int(K+1)
       enddo ; enddo
     enddo
@@ -1017,12 +1022,12 @@ subroutine Set_pbce_nonBouss(p_a, use_EOS, bxQ0, g_Earth, H_to_RZ, H_subroundoff
 
   if (GFS_scale < 1.0) then
     ! Adjust the Montgomery potential to make this a reduced gravity model.
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       dpbce(i,j) = (GFS_scale - 1.0) * pbce(i,j,1)
-    enddo ; enddo
-    do k=1,nz ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    enddo
+    do concurrent (k=1:nz, j=Jsq:Jeq+1, i=Isq:Ieq+1)
       pbce(i,j,k) = pbce(i,j,k) + dpbce(i,j)
-    enddo ; enddo ; enddo
+    enddo
   endif
 
 end subroutine Set_pbce_nonBouss

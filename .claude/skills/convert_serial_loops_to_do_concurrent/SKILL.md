@@ -1,7 +1,7 @@
 ---
 name: convert_serial_loops_to_do_concurrent
 version: "0.4.0"
-description: Convert the serial `do` loop nests of MOM6 subroutines to `do concurrent` where a scripted dependency check proves every iteration independent -- pointwise maps become one `do concurrent`, per-point reductions over the outer index are interchanged (`do concurrent` over the points, the reduction serial inside) -- leaving anything unproven serial. Loop bodies never change, so results are bit-for-bit. Use before convert_loops_to_box_iterators on code nobody has yet converted, so every computational loop can map onto an AMReX `ParallelFor`.
+description: Convert the serial `do` loop nests of MOM6 subroutines to `do concurrent` where a scripted dependency check proves every iteration independent -- pointwise maps become one `do concurrent`, per-point reductions over the outer index are interchanged (`do concurrent` over the points, the reduction serial inside), and in any other nest each loop level whose iterations are independent on their own becomes `do concurrent` where it stands (a column recurrence becomes `do concurrent (j)` / serial `do k` / `do concurrent (i)`) -- leaving anything unproven serial. Loop bodies never change, so results are bit-for-bit. Use before convert_loops_to_box_iterators on code nobody has yet converted, so every computational loop can map onto an AMReX `ParallelFor`.
 user-invocable: true
 argument-hint: <work-directory> <function-name>[,<function-name>...] [--enable_git_commit] [--disable_git_commit]
 ---
@@ -38,7 +38,22 @@ cannot prove is SEQUENTIAL.
 |---|---|---|
 | **MAP** | every array written is indexed by exactly the loop indices (or a scalar that is an index shift, `k = kstart + kk - 1`), with `:` allowed for whole dimensions; an array that is written is read only at the written point; every scalar assigned in the body is assigned before it is read; no `exit`, `return`, `goto`, I/O, or `call` (a `pure`/`elemental` call is confirmed by hand) | one `do concurrent` over the nest's indices, in the original nest order; the assigned scalars go in `DO_LOCALITY(local(...))` |
 | **REDUCTION** | as MAP, except some targets omit the **outermost** index and are only accumulated (`X(i,j) = X(i,j) + …`) | interchange: `do concurrent` over the inner indices, the outer index as a serial `do` inside. Each point still accumulates in the original order, so the sum is bit-for-bit. |
-| **SEQUENTIAL** | anything else (carried scalars, shifted reads of a written array, inner loops, calls, a write to a scalar derived-type component, an `!$omp`/`!$acc` directive on or in the nest) | none; inner nests of a sequential loop are classified on their own (e.g. a smoothing pass loop stays serial, its sweeps convert) |
+| **SEQUENTIAL** | anything else (carried scalars, shifted reads of a written array, inner loops, calls, a write to a scalar derived-type component, an `!$omp`/`!$acc` directive on or in the nest) | none as a whole; inner nests of a sequential loop are classified on their own (e.g. a smoothing pass loop stays serial, its sweeps convert), then its levels (below) |
+
+**Levels.** Every serial `do` left outside a MAP or REDUCTION nest (each level of a SEQUENTIAL
+nest, perfectly nested or not) is then classified on its own, over its whole body, inner loops
+included:
+
+| Verdict | Condition (all must hold) | Conversion |
+|---|---|---|
+| **LEVEL-CONCURRENT** | every array the body writes takes this loop's index as one bare subscript, at the same position in every reference to it (its other subscripts may be a constant, an enclosing loop's index, or anything else free of this index); every scalar assigned, and every inner serial loop's index, is assigned before it is read; no `exit`, `return`, `goto`, I/O, `call`, directive or loop step | this `do` alone becomes `do concurrent`, its body unchanged; one whose whole body is another LEVEL-CONCURRENT loop merges with it into one header (the checker names the merge) |
+| **LEVEL-SERIAL** | anything else | none |
+
+Distinct iterations then touch disjoint elements of every written array, and each runs its own
+statements in their original order, so the result is bit-for-bit. A column recurrence
+(`do j ; do k ; do i ; p(i,j,K+1) = p(i,j,K) + …`) becomes `do concurrent (j)` / serial `do k` /
+`do concurrent (i)`, as upstream already writes it in `Set_pbce_Bouss`. The nest order never
+changes: no loop is interchanged or fused.
 
 Raw-array code works the same: derived-type designators (`CS%Kh_bg_xy(I,J)`, `G%IdxCu(I,j)`) are
 treated as arrays, and a nest carrying a device directive stays serial until the plan's
@@ -71,15 +86,22 @@ Run the checker on every target; table subroutine, line, nest, class, `local` li
   locality support.
 - **REDUCTION:** `do concurrent` over the inner indices (with the `local` list), then the outer
   `do` (unchanged) inside it, the body, its `enddo`, and the outer `enddo`.
+- **LEVEL-CONCURRENT:** that `do` statement alone becomes `do concurrent (x=a:b)`, in place; its
+  `enddo` stays. A merge named by the checker is written as for MAP. The `local` list holds the
+  scalars assigned in the body and the index of every inner loop that stays a serial `do` (each
+  `do` defines its index in every iteration; precedent `MOM_density_integrals.F90`,
+  `local(intz, pos, ii, jj, m)`); an inner loop converted too keeps its index to itself.
 - A loop stride (`do s=1,0,-1`) or a non-unit step is never converted.
 
 ### 3. Verify, by script
 
 - **Bodies:** with loop-control statements removed, every subroutine's statement sequence is
   identical to before (canonicalised for `;`/line breaks).
-- **Re-check:** on the edited code the checker reports no MAP or REDUCTION nest; its SEQUENTIAL
-  set is the original one plus the serial inner loop of each REDUCTION (serial by design).
-- **Locality:** every scalar assigned inside a converted loop is in its `local` list.
+- **Re-check:** on the edited code the checker reports no MAP or REDUCTION nest and no
+  LEVEL-CONCURRENT loop; its LEVEL-SERIAL set is the original one plus the serial inner loop of
+  each REDUCTION (serial by design).
+- **Locality:** every scalar assigned inside a converted loop, and the index of every serial loop
+  inside it, is in its `local` list.
 - **Format:** line limit (lessons §7); `#if` depth balanced.
 - **Build:** don't compile, build or run tests unless the user explicitly allows it in this
   conversation. Say it is unrun; suggest bit-for-bit runs reaching each converted nest. CI does
@@ -90,7 +112,8 @@ Run the checker on every target; table subroutine, line, nest, class, `local` li
 ## Invariants (hard rules)
 
 - Only loop-control statements change; bodies, their order and arithmetic never do.
-- No nest converted without the checker's MAP/REDUCTION verdict; no SEQUENTIAL nest forced.
+- No loop converted without the checker's MAP, REDUCTION or LEVEL-CONCURRENT verdict; no
+  LEVEL-SERIAL loop forced.
 - Every scalar assigned in a converted loop is `local`.
 - No conversion comment added; never claim an unrun build passed.
 - Exactly one `!!SKILLS: 0.4.0` marker per touched file, after the license header.

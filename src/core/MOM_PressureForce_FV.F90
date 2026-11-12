@@ -37,6 +37,7 @@ use iso_c_binding, only : c_ptr, c_loc, c_f_pointer, c_bool, c_double, c_int
 implicit none ; private
 
 #include <MOM_memory.h>
+#include "do_concurrent_compat.h"
 
 public PressureForce_FV_init
 public PressureForce_FV_Bouss, PressureForce_FV_nonBouss
@@ -431,16 +432,17 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   endif
 
   if (use_p_atm) then
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       p(i,j,1) = p_atm(i,j)
-    enddo ; enddo
+    enddo
   else
     ! oneatm = 101325.0 * US%Pa_to_RL2_T2 ! 1 atm scaled to [R L2 T-2 ~> Pa]
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       p(i,j,1) = 0.0 ! or oneatm
-    enddo ; enddo
+    enddo
   endif
-  do j=Jsq,Jeq+1 ; do k=2,nz+1 ; do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+  do k=2,nz+1 ; do concurrent (i=Isq:Ieq+1)
     p(i,j,K) = p(i,j,K-1) + H_to_RL2_T2 * h(i,j,k-1)
   enddo ; enddo ; enddo
 
@@ -458,17 +460,17 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
                                    S_b, p, dza, intp_dza, intx_dza, inty_dza, MassWt_u, MassWt_v)
     else
       alpha_anom = 1.0 / Rlay(k) - alpha_ref
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         dp(i,j) = H_to_RL2_T2 * h(i,j,k)
         dza(i,j,k) = alpha_anom * dp(i,j)
         intp_dza(i,j,k) = 0.5 * alpha_anom * dp(i,j)**2
-      enddo ; enddo
-      do j=js,je ; do I=Isq,Ieq
+      enddo
+      do concurrent (j=js:je, I=Isq:Ieq)
         intx_dza(i,j,k) = 0.5 * alpha_anom * (dp(i,j)+dp(i+1,j))
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
+      enddo
+      do concurrent (J=Jsq:Jeq, i=is:ie)
         inty_dza(i,j,k) = 0.5 * alpha_anom * (dp(i,j)+dp(i,j+1))
-      enddo ; enddo
+      enddo
     endif
   enddo
 
@@ -480,11 +482,11 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   ! inty_dza to be 3-D arrays.
 
   ! Sum vertically to determine the surface geopotential anomaly.
-  do j=Jsq,Jeq+1
-    do i=Isq,Ieq+1
+  do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+    do concurrent (i=Isq:Ieq+1)
       za(i,j,nz+1) = alpha_ref*p(i,j,nz+1) - g_Earth*bathyT(i,j)
     enddo
-    do k=nz,1,-1 ; do i=Isq,Ieq+1
+    do k=nz,1,-1 ; do concurrent (i=Isq:Ieq+1)
       za(i,j,K) = za(i,j,K+1) + dza(i,j,k)
     enddo ; enddo
   enddo
@@ -492,48 +494,48 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   ! Calculate and add self-attraction and loading (SAL) geopotential height anomaly to interface height.
   if (CS%calculate_SAL) then
     if (CS%sal_use_bpa) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         pbot(i,j) = p(i,j,nz+1)
-      enddo ; enddo
+      enddo
       call FV_calc_SAL_host(host, pbot, e_sal)
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         SSH(i,j) = (za(i,j,1) - alpha_ref*p(i,j,1)) * I_gEarth - Z_ref
         ! Remove above sea level topography at floodable cells
         SSH(i,j) = SSH(i,j) - max(-bathyT(i,j)-meanSL(i,j), 0.0)
-      enddo ; enddo
+      enddo
       call FV_calc_SAL_host(host, SSH, e_sal)
     endif
 
     ! This gives new answers after the change of separating SAL from tidal forcing module.
     if ((CS%tides_answer_date>20230630) .or. (.not.semi_Boussinesq) .or. (.not.CS%tides)) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         za(i,j,1) = za(i,j,1) - g_Earth * e_sal(i,j)
-      enddo ; enddo
+      enddo
     endif
   endif
 
   ! Calculate and add tidal geopotential height anomaly to interface height.
   if (CS%tides) then
     if ((CS%tides_answer_date>20230630) .or. (.not.semi_Boussinesq)) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         za(i,j,1) = za(i,j,1) - g_Earth * (e_tidal_eq(i,j) + e_tidal_sal(i,j))
-      enddo ; enddo
+      enddo
     else  ! This block recreates older answers with tides.
       if (.not.CS%calculate_SAL) e_sal(:,:) = 0.0
       call FV_tidal_forcing_legacy_host(host, e_sal, e_sal_and_tide, e_tidal_eq, e_tidal_sal)
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         za(i,j,1) = za(i,j,1) - g_Earth * e_sal_and_tide(i,j)
-      enddo ; enddo
+      enddo
     endif
   endif
 
   ! Find the height anomalies at the interfaces.  If there are no tides and no SAL,
   ! there is no need to correct za, but omitting this changes answers at roundoff.
   do k=1,nz
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       za(i,j,K+1) = za(i,j,K) - dza(i,j,k)
-    enddo ; enddo
+    enddo
   enddo
 
   if (CS%debug) then
@@ -555,23 +557,23 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
     ! linearly between the values at thickness points, but the bottom geopotentials
     ! will not now be linear at the sub-grid-scale.  Doing this ensures no motion
     ! with flat isopycnals, even with a nonlinear equation of state.
-    do j=js,je ; do I=Isq,Ieq
+    do concurrent (j=js:je, I=Isq:Ieq)
       intx_za(I,j,1) = 0.5*(za(i,j,1) + za(i+1,j,1))
-    enddo ; enddo
-    do J=Jsq,Jeq ; do i=is,ie
+    enddo
+    do concurrent (J=Jsq:Jeq, i=is:ie)
       inty_za(i,J,1) = 0.5*(za(i,j,1) + za(i,j+1,1))
-    enddo ; enddo
+    enddo
   endif
 
   do k=1,nz
-    do j=js,je ; do I=Isq,Ieq
+    do concurrent (j=js:je, I=Isq:Ieq)
       intx_za(I,j,K+1) = intx_za(I,j,K) - intx_dza(I,j,k)
-    enddo ; enddo
+    enddo
   enddo
   do k=1,nz
-    do J=Jsq,Jeq ; do i=is,ie
+    do concurrent (J=Jsq:Jeq, i=is:ie)
       inty_za(i,J,K+1) = inty_za(i,J,K) - inty_dza(i,J,k)
-    enddo ; enddo
+    enddo
   enddo
 
   if (CS%debug) then
@@ -584,28 +586,28 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   endif ! intx_za and inty_za have now been reset to reflect the properties of an unimpeded interface.
 
   do k=1,nz
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
       dp(i,j) = H_to_RL2_T2 * h(i,j,k)
-    enddo ; enddo
+    enddo
 
     ! Find the horizontal pressure gradient accelerations.
     ! These expressions for the accelerations have been carefully checked in
     ! a set of idealized cases, and should be bug-free.
-    do j=js,je ; do I=Isq,Ieq
+    do concurrent (j=js:je, I=Isq:Ieq)
       PFu(I,j,k) = ( ((za(i,j,K+1)*dp(i,j) + intp_dza(i,j,k)) - &
                       (za(i+1,j,K+1)*dp(i+1,j) + intp_dza(i+1,j,k))) + &
                      ((dp(i+1,j) - dp(i,j)) * intx_za(I,j,K+1) - &
                       (p(i+1,j,K) - p(i,j,K)) * intx_dza(I,j,k)) ) * &
                    (2.0*IdxCu(I,j) / ((dp(i,j) + dp(i+1,j)) + dp_neglect))
-    enddo ; enddo
+    enddo
 
-    do J=Jsq,Jeq ; do i=is,ie
+    do concurrent (J=Jsq:Jeq, i=is:ie)
       PFv(i,J,k) = (((za(i,j,K+1)*dp(i,j) + intp_dza(i,j,k)) - &
                      (za(i,j+1,K+1)*dp(i,j+1) + intp_dza(i,j+1,k))) + &
                     ((dp(i,j+1) - dp(i,j)) * inty_za(i,J,K+1) - &
                      (p(i,j+1,K) - p(i,j,K)) * inty_dza(i,J,k))) * &
                     (2.0*IdyCv(i,J) / ((dp(i,j) + dp(i,j+1)) + dp_neglect))
-    enddo ; enddo
+    enddo
   enddo
 
   if (CS%GFS_scale < 1.0) then
@@ -613,18 +615,18 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
     if (use_EOS) then
       call FV_nonBouss_GFS_dM_host(host, Isq, Ieq, Jsq, Jeq, EOSdom, alpha_ref, p, za, dM)
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         dM(i,j) = (CS%GFS_scale - 1.0) * (p(i,j,1)*(1.0/Rlay(1) - alpha_ref) + za(i,j,1))
-      enddo ; enddo
+      enddo
     endif
 
-    do k=1,nz
-      do j=js,je ; do I=Isq,Ieq
+    do concurrent (k=1:nz)
+      do concurrent (j=js:je, I=Isq:Ieq)
         PFu(I,j,k) = PFu(I,j,k) - (dM(i+1,j) - dM(i,j)) * IdxCu(I,j)
-      enddo ; enddo
-      do J=Jsq,Jeq ; do i=is,ie
+      enddo
+      do concurrent (J=Jsq:Jeq, i=is:ie)
         PFv(i,J,k) = PFv(i,J,k) - (dM(i,j+1) - dM(i,j)) * IdyCv(i,J)
-      enddo ; enddo
+      enddo
     enddo
   endif
 
@@ -637,13 +639,13 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   if (eta_a%associated()) then
     Pa_to_H = 1.0 / (g_Earth * H_to_RZ)
     if (use_p_atm) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         eta(i,j) = (p(i,j,nz+1) - p_atm(i,j))*Pa_to_H ! eta has the same units as h.
-      enddo ; enddo
+      enddo
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         eta(i,j) = p(i,j,nz+1)*Pa_to_H ! eta has the same units as h.
-      enddo ; enddo
+      enddo
     endif
   endif
   call p_a%free()
@@ -1907,20 +1909,20 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
   ! Calculate and add SAL geopotential anomaly to interface height (old answers)
   if (CS%calculate_SAL .and. CS%tides_answer_date<=20250131) then
 
-    do j=Jsq,Jeq+1
-      do i=Isq,Ieq+1
+    do concurrent (j=Jsq:Jeq+1) DO_LOCALITY(local(k))
+      do concurrent (i=Isq:Ieq+1)
         SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0)
       enddo
-      do k=1,nz ; do i=Isq,Ieq+1
+      do k=1,nz ; do concurrent (i=Isq:Ieq+1)
         SSH(i,j) = SSH(i,j) + h(i,j,k)*H_to_Z
       enddo ; enddo
     enddo
     call FV_calc_SAL_host(host, SSH, e_sal)
 
     if (CS%tides_answer_date>20230630) then ! answers_date between [20230701, 20250131]
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         e(i,j,nz+1) = e(i,j,nz+1) - e_sal(i,j)
-      enddo ; enddo
+      enddo
     endif
 
   endif
@@ -1929,15 +1931,15 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
   if (CS%tides .and. CS%tides_answer_date<=20250131) then
 
     if (CS%tides_answer_date>20230630) then ! answers_date between [20230701, 20250131]
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         e(i,j,nz+1) = e(i,j,nz+1) - (e_tidal_eq(i,j) + e_tidal_sal(i,j))
-      enddo ; enddo
+      enddo
     else  ! answers_date before 20230701
       if (.not.CS%calculate_SAL) e_sal(:,:) = 0.0
       call FV_tidal_forcing_legacy_host(host, e_sal, e_sal_and_tide, e_tidal_eq, e_tidal_sal)
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         e(i,j,nz+1) = e(i,j,nz+1) - e_sal_and_tide(i,j)
-      enddo ; enddo
+      enddo
     endif
 
   endif
@@ -2020,33 +2022,29 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
   ! Calculate and add SAL geopotential anomaly to interface height (new answers)
   if (CS%calculate_SAL .and. CS%tides_answer_date>20250131) then
     if (CS%sal_use_bpa) then
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         pbot(i,j) = pa(i,j,nz+1) - GxRho_ref * (e(i,j,nz+1) - Z_ref)
-      enddo ; enddo
+      enddo
       call FV_calc_SAL_host(host, pbot, e_sal)
     else
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
         SSH(i,j) = e(i,j,1) - Z_ref
         ! Remove above sea level topography at floodable cells
         SSH(i,j) = SSH(i,j) - max(-bathyT(i,j)-meanSL(i,j), 0.0)
-      enddo ; enddo
+      enddo
       call FV_calc_SAL_host(host, SSH, e_sal)
     endif
-    if (.not.CS%bq_sal_tides) then ; do K=1,nz+1
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    if (.not.CS%bq_sal_tides) then ; do concurrent (K=1:nz+1, j=Jsq:Jeq+1, i=Isq:Ieq+1)
         e(i,j,K) = e(i,j,K) - e_sal(i,j)
         pa(i,j,K) = pa(i,j,K) - GxRho_ref * e_sal(i,j)
-      enddo ; enddo
     enddo ; endif
   endif
 
   ! Calculate and add tidal geopotential anomaly to interface height (new answers)
   if (CS%tides .and. CS%tides_answer_date>20250131) then
-    if (.not.CS%bq_sal_tides) then ; do K=1,nz+1
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    if (.not.CS%bq_sal_tides) then ; do concurrent (K=1:nz+1, j=Jsq:Jeq+1, i=Isq:Ieq+1)
         e(i,j,K) = e(i,j,K) - (e_tidal_eq(i,j) + e_tidal_sal(i,j))
         pa(i,j,K) = pa(i,j,K) - GxRho_ref * (e_tidal_eq(i,j) + e_tidal_sal(i,j))
-      enddo ; enddo
     enddo ; endif
   endif
 
