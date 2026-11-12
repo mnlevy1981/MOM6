@@ -74,7 +74,8 @@ bodies, index variable names/case/order, `DO_LOCALITY(...)` and `!$omp` directiv
    bxQ_pij = bxQ%growBy(lo=[0,0,0], hi=[1,1,0])
    ```
    Name it `<core>_<p|m|g><dims>` (`p` end, `m` start, `g` both), one group per differing
-   dimension (`bxU_pi_mj`), a digit only for `n>1` (`bxQ_p2i`).
+   dimension (`bxU_pi_mj`), a digit only for `n>1` (`bxQ_p2i`). A bound moved inward (a negative
+   `n`) is `e` (end), `s` (start) or `n` (both): `bxQ0_sk = bxQ0%growLo(3,-1)` for `k=2:nz`.
 
    **Offsets that are not constants.** An offset fixed for the whole routine (an argument such as
    a halo width) folds into a derived box built once, as above; better still, the caller builds

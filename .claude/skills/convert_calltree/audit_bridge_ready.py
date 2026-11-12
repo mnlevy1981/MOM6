@@ -255,12 +255,19 @@ for t in TARGETS:
         if base.lower() in dummy_names:
             bad_body.append('%s%%...%%%s()' % (base, op))
     bad_body = sorted(set(bad_body))
-    heads = re.findall(r'do concurrent \(([^\n]*)', code)
+    heads = re.findall(r'do\s+concurrent\s*\(([^\n]*)', code, re.I)
     # A loop clipped by OBC segment bounds runs only with OBC active, which the C++ aborts on.
+    def header_specs(h):
+        # h starts just after `do concurrent (`: keep up to its balanced `)`, dropping whatever
+        # follows on the line (DO_LOCALITY, or `; stmt ; enddo` of a one-line loop)
+        d, q = 1, 0
+        while q < len(h) and d:
+            d += {'(': 1, ')': -1}.get(h[q], 0)
+            q += 1
+        return h[:q - 1]
     bad_loops = [h[:60] for h in heads if 'OBC%' not in h
                  if not all(re.match(r'\s*\w+\s*=\s*\w+%idxS\(\d\):\w+%idxE\(\d\)\s*$', r)
-                            for r in re.split(r',(?![^()]*\))', h.split(')')[0] if False else
-                                              re.sub(r'\)\s*(DO_LOCALITY.*)?$', '', h))
+                            for r in re.split(r',(?![^()]*\))', header_specs(h))
                             if '=' in r and ':' in r)]
     a, b, c = not bad_args, not bad_body, not bad_loops
     ok_all &= a and b and c
