@@ -204,9 +204,9 @@ end subroutine PF_vgrid_consts_build
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, g_Earth, H_to_RZ, &
-                                       H_subroundoff, CS, vgrid, p_atm_a, host, e_sal_a, e_tide_eq_a, e_tide_sal_a, &
-                                       pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
+subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS, PFu_a, PFv_a, Gcore, g_Earth, &
+                                       H_to_RZ, H_subroundoff, CS, vgrid, p_atm_a, host, e_sal_a, e_tide_eq_a, &
+                                       e_tide_sal_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),                                intent(in)  :: bxH0 !< The h-point box of the whole column,
                                                                   !! [isc:iec, jsc:jec, 1:nz]
@@ -216,6 +216,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
                                                                   !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),                                intent(in)  :: bxV0 !< The v-point box of the whole column,
                                                                   !! [isc:iec, JscB:JecB, 1:nz]
+  type(Box_t),                                intent(in)  :: bxHgrad !< The h points on both sides of every u and v
+                                                                     !! face, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real,                                       intent(in)  :: g_Earth !< The gravitational acceleration
                                                                      !! [L2 Z-1 T-2 ~> m s-2].
   real,                                       intent(in)  :: H_to_RZ !< A constant that translates thickness units to
@@ -260,7 +262,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
                 !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
   type(Box_t) :: bxH0_sk ! bxH0 with its k start moved in, [isc:iec, jsc:jec, 2:nz]
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown at its i and j ends, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
     M, &          ! The Montgomery potential, M = (p/rho + gz)  [L2 T-2 ~> m2 s-2].
     dz_geo        !   The change in geopotential across a layer [L2 T-2 ~> m2 s-2].
@@ -306,7 +307,6 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
   nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
   bxH0_sk = bxH0%growLo(3,-1)
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
   nullify(Rlay)
   if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
@@ -343,30 +343,30 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
   do concurrent (k=bxH0_sk%idxS(3):bxH0_sk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
-                   i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p(i,j,1) = p_atm(i,j) ; enddo
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), &
+                   i=bxHgrad%idxS(1):bxHgrad%idxE(1)) ; p(i,j,1) = p_atm(i,j) ; enddo
   else
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; p(i,j,1) = 0.0 ; enddo
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1)) ; p(i,j,1) = 0.0 ; enddo
   endif
-  do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-  do k=1,nz ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+  do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+  do k=1,nz ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
     p(i,j,K+1) = p(i,j,K) + g_Earth * H_to_RZ * h(i,j,k)
   enddo ; enddo ; enddo
 
   if (eta_a%associated()) then
     Pa_to_H = 1.0 / (g_Earth * H_to_RZ)
     if (use_p_atm) then
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         eta(i,j) = (p(i,j,nz+1) - p_atm(i,j)) * Pa_to_H ! eta has the same units as h.
       enddo
     else
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         eta(i,j) = p(i,j,nz+1) * Pa_to_H ! eta has the same units as h.
       enddo
     endif
   endif
 
-  do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+  do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
     geopot_bot(i,j) = -g_Earth * bathyT(i,j)
   enddo
 
@@ -374,31 +374,31 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
   if (CS%calculate_SAL) then
     !   Determine the sea surface height anomalies, to enable the calculation
     ! of self-attraction and loading.
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0)
     enddo
     if (use_EOS) then
       call Mont_nonBouss_dz_geo_host(host, nz, p, dz_geo)
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do k=1,nz ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do k=1,nz ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         SSH(i,j) = SSH(i,j) + I_gEarth * dz_geo(i,j,k)
       enddo ; enddo ; enddo
     else
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do k=1,nz ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do k=1,nz ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         SSH(i,j) = SSH(i,j) + H_to_RZ * h(i,j,k) * alpha_Lay(k)
       enddo ; enddo ; enddo
     endif
 
     call Mont_calc_SAL_host(host, SSH, e_sal)
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       geopot_bot(i,j) = geopot_bot(i,j) - g_Earth*e_sal(i,j)
     enddo
   endif
 
   ! Calculate and add the tidal geopotential anomaly.
   if (CS%tides) then
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       geopot_bot(i,j) = geopot_bot(i,j) - g_Earth*(e_tide_eq(i,j) + e_tide_sal(i,j))
     enddo
   endif
@@ -408,20 +408,20 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
   endif                                               ! use_EOS
 
   if (use_EOS) then
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,nz) = geopot_bot(i,j) + p(i,j,nz+1) * alpha_star(i,j,nz)
       enddo
-      do k=nz-1,1,-1 ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do k=nz-1,1,-1 ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,k) = M(i,j,k+1) + p(i,j,K+1) * (alpha_star(i,j,k) - alpha_star(i,j,k+1))
       enddo ; enddo
     enddo
   else ! not use_EOS
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,nz) = geopot_bot(i,j) + p(i,j,nz+1) * alpha_Lay(nz)
       enddo
-      do k=nz-1,1,-1 ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do k=nz-1,1,-1 ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,k) = M(i,j,k+1) + p(i,j,K+1) * dalpha_int(K+1)
       enddo ; enddo
     enddo
@@ -429,11 +429,11 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
 
   if (CS%GFS_scale < 1.0) then
     ! Adjust the Montgomery potential to make this a reduced gravity model.
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       dM(i,j) = (CS%GFS_scale - 1.0) * M(i,j,1)
     enddo
-    do concurrent (k=bxQ0_pij%idxS(3):bxQ0_pij%idxE(3), j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
-                   i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (k=bxHgrad%idxS(3):bxHgrad%idxE(3), j=bxHgrad%idxS(2):bxHgrad%idxE(2), &
+                   i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       M(i,j,k) = M(i,j,k) + dM(i,j)
     enddo
 
@@ -457,7 +457,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff, vgrid, CS%GFS_scale, pbce_a, &
+    call Set_pbce_nonBouss(bxQ0, bxHgrad, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff, vgrid, CS%GFS_scale, pbce_a, &
                            c_loc(ctx%pbce), alpha_star_a)
   endif
 
@@ -465,7 +465,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
 !      PFu = - dM/dx   and  PFv = - dM/dy.
   if (use_EOS) then
     do k=1,nz
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         dp_star(i,j) = (p(i,j,K+1) - p(i,j,K)) + dp_neglect
       enddo
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(local(PFu_bc))
@@ -496,7 +496,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu
   endif ! use_EOS
 
   call p_a%free() ; call alpha_star_a%free()
-  call bxQ0_pij%free() ; call bxH0_sk%free()
+  call bxH0_sk%free()
 end subroutine PressureForce_Mont_nonBouss
 
 !> The Fortran-only work PressureForce_Mont_nonBouss needs done before it: checks that the module is initialized
@@ -559,9 +559,9 @@ end subroutine PressureForce_Mont_nonBouss_post
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, H_to_Z, Z_to_H, &
-                                    dZ_subroundoff, CS, vgrid, p_atm_a, host, e_sal_a, e_tide_eq_a, e_tide_sal_a, &
-                                    pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
+subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS, PFu_a, PFv_a, Gcore, H_to_Z, &
+                                    Z_to_H, dZ_subroundoff, CS, vgrid, p_atm_a, host, e_sal_a, e_tide_eq_a, &
+                                    e_tide_sal_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),                                intent(in)  :: bxH0 !< The h-point box of the whole column,
                                                                   !! [isc:iec, jsc:jec, 1:nz]
@@ -571,6 +571,8 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
                                                                   !! [IscB:IecB, jsc:jec, 1:nz]
   type(Box_t),                                intent(in)  :: bxV0 !< The v-point box of the whole column,
                                                                   !! [isc:iec, JscB:JecB, 1:nz]
+  type(Box_t),                                intent(in)  :: bxHgrad !< The h points on both sides of every u and v
+                                                                     !! face, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real,                                       intent(in)  :: H_to_Z !< A constant that translates thickness units to
                                                                     !! the units of depth [Z H-1 ~> 1 or m3 kg-1].
   real,                                       intent(in)  :: Z_to_H !< A constant that translates depth units to
@@ -613,7 +615,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
     PFv_bc3d_a  !< Meridional accelerations due to pressure gradients
                 !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown at its i and j ends, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
     M           ! The Montgomery potential, M = (p/rho + gz) [L2 T-2 ~> m2 s-2].
   type(RealArray_t) :: rho_star_a ! In-situ density divided by the derivative with depth of the
@@ -647,7 +648,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
 
   nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
   nullify(g_prime)
   if (vgrid%g_prime_a%associated()) call vgrid%g_prime_a%view(g_prime)
@@ -681,7 +681,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
   dz_neglect = dZ_subroundoff
   I_Rho0 = 1.0/CS%Rho0
 
-  do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+  do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
     e(i,j,nz+1) = -bathyT(i,j)
   enddo
 
@@ -691,27 +691,27 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
     ! and loading.  This should really be based on bottom pressure anomalies,
     ! but that is not yet implemented, and the current form is correct for
     ! barotropic tides.
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1)) ; SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0) ; enddo
-      do k=1,nz ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1)) ; SSH(i,j) = min(-bathyT(i,j) - meanSL(i,j), 0.0) ; enddo
+      do k=1,nz ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         SSH(i,j) = SSH(i,j) + h(i,j,k)*H_to_Z
       enddo ; enddo
     enddo
     call Mont_calc_SAL_host(host, SSH, e_sal)
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       e(i,j,nz+1) = e(i,j,nz+1) - e_sal(i,j)
     enddo
   endif
 
   ! Calculate and add the tidal geopotential anomaly.
   if (CS%tides) then
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       e(i,j,nz+1) = e(i,j,nz+1) - (e_tide_eq(i,j) + e_tide_sal(i,j))
     enddo
   endif
 
-  do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-  do k=nz,1,-1 ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+  do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+  do k=nz,1,-1 ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
     e(i,j,K) = e(i,j,K+1) + h(i,j,k)*H_to_Z
   enddo ; enddo ; enddo
 
@@ -721,22 +721,22 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
 
 !    Here the layer Montgomery potentials, M, are calculated.
   if (use_EOS) then
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,1) = CS%GFS_scale * (rho_star(i,j,1) * e(i,j,1))
         if (use_p_atm) M(i,j,1) = M(i,j,1) + p_atm(i,j) * I_Rho0
       enddo
-      do k=2,nz ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do k=2,nz ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,k) = M(i,j,k-1) + (rho_star(i,j,k) - rho_star(i,j,k-1)) * e(i,j,K)
       enddo ; enddo
     enddo
   else ! not use_EOS
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,1) = g_prime(1) * e(i,j,1)
         if (use_p_atm) M(i,j,1) = M(i,j,1) + p_atm(i,j) * I_Rho0
       enddo
-      do k=2,nz ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do k=2,nz ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         M(i,j,k) = M(i,j,k-1) + g_prime(K) * e(i,j,K)
       enddo ; enddo
     enddo
@@ -744,7 +744,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
 
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call Set_pbce_Bouss(bxQ0, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, CS%Rho0, CS%GFS_scale, pbce_a, &
+    call Set_pbce_Bouss(bxQ0, bxHgrad, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, CS%Rho0, CS%GFS_scale, pbce_a, &
                         c_loc(ctx%pbce), rho_star_a, 1)
   endif
 
@@ -752,7 +752,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
 !      PFu = - dM/dx   and  PFv = - dM/dy.
   if (use_EOS) then
     do k=1,nz
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         h_star(i,j) = (e(i,j,K) - e(i,j,K+1)) + dz_neglect
       enddo
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1)) DO_LOCALITY(local(PFu_bc))
@@ -785,23 +785,22 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a,
     ! eta is the sea surface height relative to a time-invariant geoid, for
     ! comparison with what is used for eta in btstep.  See how e was calculated
     ! about 200 lines above.
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       eta(i,j) = e(i,j,1)*Z_to_H
     enddo
     if (CS%tides) then
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         eta(i,j) = eta(i,j) + (e_tide_eq(i,j)+e_tide_sal(i,j))*Z_to_H
       enddo
     endif
     if (CS%calculate_SAL) then
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         eta(i,j) = eta(i,j) + e_sal(i,j)*Z_to_H
       enddo
     endif
   endif
 
   call e_a%free() ; call rho_star_a%free()
-  call bxQ0_pij%free()
 end subroutine PressureForce_Mont_Bouss
 
 !> The Fortran-only work PressureForce_Mont_Bouss needs done before it: checks that the module is initialized
@@ -861,10 +860,12 @@ end subroutine PressureForce_Mont_Bouss_post
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
-subroutine Set_pbce_Bouss(bxQ0, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, Rho0, GFS_scale, pbce_a, host, &
+subroutine Set_pbce_Bouss(bxQ0, bxHgrad, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, Rho0, GFS_scale, pbce_a, host, &
                           rho_star_a, nkblock)
   type(Box_t),                          intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
                                                             !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),                          intent(in)  :: bxHgrad !< The h points on both sides of every u and v face,
+                                                               !! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real,                                 intent(in)  :: H_to_Z !< A constant that translates thickness units to the
                                                               !! units of depth [Z H-1 ~> 1 or m3 kg-1].
   real,                                 intent(in)  :: dZ_subroundoff !< A thickness in height units that is so small
@@ -890,7 +891,6 @@ subroutine Set_pbce_Bouss(bxQ0, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, Rho
   integer, intent(in) :: nkblock !< The number of vertical levels in each block for the variable density
                                  !! near-surface layer.  This is needed to determine whether rho_star is
                                  !! compressibility compensated or not.
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown at its i and j ends, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real :: Ihtot(e_a%lb(1):e_a%ub(1), &
                 e_a%lb(2):e_a%ub(2))  ! The inverse of the sum of the layer thicknesses [H-1 ~> m-1 or m2 kg-1].
   real :: dz_neglect         ! A vertical distance that is so small it is usually lost
@@ -910,20 +910,19 @@ subroutine Set_pbce_Bouss(bxQ0, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, Rho
   call pbce_a%view(pbce)
 
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = bxQ0%idxE(3)
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
   dz_neglect = dZ_subroundoff
 
   if (use_EOS) then
     if (use_rho_star) then
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2))
-        do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2))
+        do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
           Ihtot(i,j) = H_to_Z / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
           pbce(i,j,1) = GFS_scale * rho_star(i,j,1) * H_to_Z
         enddo
 
         do k=2,nz
-          do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+          do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
             pbce(i,j,k) = pbce(i,j,k-1) + (rho_star(i,j,k) - rho_star(i,j,k-1)) &
                 * ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j))
           enddo
@@ -934,28 +933,29 @@ subroutine Set_pbce_Bouss(bxQ0, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, Rho
                                    dz_neglect, Ihtot, pbce)
     endif
   else
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         Ihtot(i,j) = 1.0 / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
         pbce(i,j,1) = g_prime(1) * H_to_Z
       enddo
       do k=2,nz
-        do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+        do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
           pbce(i,j,k) = pbce(i,j,k-1) + (g_prime(K) * H_to_Z) &
               * ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j))
         enddo
       enddo
     enddo
   endif
-  call bxQ0_pij%free()
 end subroutine Set_pbce_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the column mass.
-subroutine Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff, vgrid, GFS_scale, pbce_a, host, &
-                             alpha_star_a)
+subroutine Set_pbce_nonBouss(bxQ0, bxHgrad, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff, vgrid, GFS_scale, pbce_a, &
+                             host, alpha_star_a)
   type(Box_t),                          intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
                                                             !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),                          intent(in)  :: bxHgrad !< The h points on both sides of every u and v face,
+                                                               !! [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real,                                 intent(in)  :: g_Earth !< The gravitational acceleration
                                                                !! [L2 Z-1 T-2 ~> m s-2].
   real,                                 intent(in)  :: H_to_RZ !< A constant that translates thickness units to the
@@ -982,7 +982,6 @@ subroutine Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff
   type(RealArray_t),                    intent(in)  :: alpha_star_a !< The layer specific volumes
                                                           !! (maybe compressibility compensated) [R-1 ~> m3 kg-1].
   ! Local variables
-  type(Box_t) :: bxQ0_pij ! bxQ0 grown at its i and j ends, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   type(Box_t) :: bxQ0_sk ! bxQ0 with its k start moved in, [IscB:IecB, JscB:JecB, 2:nz]
   real, dimension(p_a%lb(1):p_a%ub(1),p_a%lb(2):p_a%ub(2)) :: &
     dpbce, &      !   A barotropic correction to the pbce to enable the use of
@@ -1001,7 +1000,6 @@ subroutine Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
 
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = bxQ0%idxE(3)
-  bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
   bxQ0_sk = bxQ0%growLo(3,-1)
 
   nullify(Rlay)
@@ -1016,12 +1014,12 @@ subroutine Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff
 
   if (use_EOS) then
     if (alpha_star_a%associated()) then
-      do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-        do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+        do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
           C_htot(i,j) = dP_dH / ((p(i,j,nz+1)-p(i,j,1)) + dp_neglect)
           pbce(i,j,nz) = dP_dH * alpha_star(i,j,nz)
         enddo
-        do k=nz-1,1,-1 ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+        do k=nz-1,1,-1 ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
           pbce(i,j,k) = pbce(i,j,k+1) + ((p(i,j,K+1)-p(i,j,1)) * C_htot(i,j)) * &
               (alpha_star(i,j,k) - alpha_star(i,j,k+1))
         enddo ; enddo
@@ -1034,12 +1032,12 @@ subroutine Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff
     do concurrent (k=bxQ0%idxS(3):bxQ0%idxE(3)) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
     do concurrent (k=bxQ0_sk%idxS(3):bxQ0_sk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2)) DO_LOCALITY(local(k))
-      do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
+      do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         C_htot(i,j) = dP_dH / ((p(i,j,nz+1)-p(i,j,1)) + dp_neglect)
         pbce(i,j,nz) = dP_dH * alpha_Lay(nz)
       enddo
-      do k=nz-1,1,-1 ; do concurrent (i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+      do k=nz-1,1,-1 ; do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
         pbce(i,j,k) = pbce(i,j,k+1) + ((p(i,j,K+1)-p(i,j,1))*C_htot(i,j)) * dalpha_int(K+1)
       enddo ; enddo
     enddo
@@ -1047,15 +1045,15 @@ subroutine Set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff
 
   if (GFS_scale < 1.0) then
     ! Adjust the Montgomery potential to make this a reduced gravity model.
-    do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       dpbce(i,j) = (GFS_scale - 1.0) * pbce(i,j,1)
     enddo
-    do concurrent (k=bxQ0_pij%idxS(3):bxQ0_pij%idxE(3), j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
-                   i=bxQ0_pij%idxS(1):bxQ0_pij%idxE(1))
+    do concurrent (k=bxHgrad%idxS(3):bxHgrad%idxE(3), j=bxHgrad%idxS(2):bxHgrad%idxE(2), &
+                   i=bxHgrad%idxS(1):bxHgrad%idxE(1))
       pbce(i,j,k) = pbce(i,j,k) + dpbce(i,j)
     enddo
   endif
-  call bxQ0_pij%free() ; call bxQ0_sk%free()
+  call bxQ0_sk%free()
 
 end subroutine Set_pbce_nonBouss
 
