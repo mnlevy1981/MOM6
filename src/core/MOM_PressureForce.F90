@@ -190,21 +190,26 @@ subroutine PressureForce_TR(h, use_EOS, PFu, PFv, G, GV, US, CS, have_ALE_CSp, p
 
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
-      call PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_FV, have_ALE_CSp, p_atm, &
-                                  host, e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, &
-                                  intx_dpa, inty_dpa, pbce, eta)
+      call PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_FV%PF_FV_opts_CS, &
+                                  CS%PressureForce_FV%PF_vgrid_consts_CS, have_ALE_CSp, p_atm, host, e_sal, &
+                                  e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, intx_dpa, &
+                                  inty_dpa, pbce, eta)
     else
-      call PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_FV, have_ALE_CSp, &
-                                     p_atm, host, e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, &
-                                     MassWt_v, pbce, eta)
+      call PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_FV%PF_FV_opts_CS, &
+                                     CS%PressureForce_FV%PF_vgrid_consts_CS, have_ALE_CSp, p_atm, host, e_sal, &
+                                     e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, pbce, eta)
     endif
   else
     if (GV%Boussinesq) then
-      call PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_Mont, p_atm, host, &
-                                    e_sal, e_tidal_eq, e_tidal_sal, pbce, eta)
+      call PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_Mont%PF_Mont_opts_CS, &
+                                    CS%PressureForce_Mont%PF_vgrid_consts_CS, p_atm, host, e_sal, e_tidal_eq, &
+                                    e_tidal_sal, pbce, eta, CS%PressureForce_Mont%PFu_bc, &
+                                    CS%PressureForce_Mont%PFv_bc)
     else
-      call PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_Mont, p_atm, host, &
-                                       e_sal, e_tidal_eq, e_tidal_sal, pbce, eta)
+      call PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS%PressureForce_Mont%PF_Mont_opts_CS, &
+                                       CS%PressureForce_Mont%PF_vgrid_consts_CS, p_atm, host, e_sal, &
+                                       e_tidal_eq, e_tidal_sal, pbce, eta, CS%PressureForce_Mont%PFu_bc, &
+                                       CS%PressureForce_Mont%PFv_bc)
     endif
   endif
 

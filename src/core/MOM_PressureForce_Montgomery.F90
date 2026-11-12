@@ -19,7 +19,9 @@ use MOM_variables, only : thermo_var_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_EOS, only : calculate_density, calculate_density_derivs
 use MOM_EOS, only : query_compressible
-use iso_c_binding, only : c_ptr, c_loc, c_f_pointer
+use array_mod, only : RealArray_t, RealArray_C
+use turbotmp_helperF, only : io_recorder
+use iso_c_binding, only : c_ptr, c_loc, c_f_pointer, c_bool, c_double
 
 implicit none ; private
 
@@ -29,15 +31,30 @@ public PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss, Set_pbce_Bouss
 public Set_pbce_nonBouss, PressureForce_Mont_init
 public PressureForce_Mont_Bouss_pre, PressureForce_Mont_Bouss_post
 public PressureForce_Mont_nonBouss_pre, PressureForce_Mont_nonBouss_post
+public PF_vgrid_consts_CS_C, PF_vgrid_consts_build, record_PF_vgrid_consts_CS
+#ifdef _TIM
+public PF_vgrid_consts_CS_to_c
+#endif
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with
 ! their mks counterparts with notation like "a velocity [Z T-1 ~> m s-1]".  If the units
 ! vary with the Boussinesq approximation, the Boussinesq variant is given first.
 
-!> Control structure for the Montgomery potential form of pressure gradient
-type, public :: PressureForce_Mont_CS ; private
-  logical :: initialized = .false. !< True if this control structure has been initialized.
+!> Persistent containers of the vertical grid arrays used by the pressure force calculations.
+type, public :: PF_vgrid_consts_CS
+  type(RealArray_t) :: Rlay_a    !< The target coordinate value (potential density) in each layer [R ~> kg m-3].
+  type(RealArray_t) :: g_prime_a !< The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
+end type PF_vgrid_consts_CS
+
+!> bind(C) mirror of PF_vgrid_consts_CS, field-for-field, same order.
+type, bind(C) :: PF_vgrid_consts_CS_C
+  type(RealArray_C) :: Rlay_a    !< The target coordinate value (potential density) in each layer [R ~> kg m-3].
+  type(RealArray_C) :: g_prime_a !< The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
+end type PF_vgrid_consts_CS_C
+
+!> Options used by PressureForce_Mont_Bouss and PressureForce_Mont_nonBouss.
+type, public :: PF_Mont_opts_CS
   logical :: calculate_SAL  !< If true, calculate self-attraction and loading.
   logical :: tides          !< If true, apply tidal momentum forcing.
   real    :: Rho0           !< The density used in the Boussinesq
@@ -45,12 +62,32 @@ type, public :: PressureForce_Mont_CS ; private
   real    :: GFS_scale      !< Ratio between gravity applied to top interface and the
                             !! gravitational acceleration of the planet [nondim].
                             !! Usually this ratio is 1.
+end type PF_Mont_opts_CS
+
+!> bind(C) mirror of PF_Mont_opts_CS, field-for-field, same order.
+type, bind(C) :: PF_Mont_opts_CS_C
+  logical(c_bool) :: calculate_SAL !< If true, calculate self-attraction and loading.
+  logical(c_bool) :: tides         !< If true, apply tidal momentum forcing.
+  real(c_double)  :: Rho0          !< The density used in the Boussinesq
+                                   !! approximation [R ~> kg m-3].
+  real(c_double)  :: GFS_scale     !< Ratio between gravity applied to top interface and the
+                                   !! gravitational acceleration of the planet [nondim].
+                                   !! Usually this ratio is 1.
+end type PF_Mont_opts_CS_C
+
+!> Control structure for the Montgomery potential form of pressure gradient
+type, public :: PressureForce_Mont_CS ; private
+  logical :: initialized = .false. !< True if this control structure has been initialized.
+  type(PF_Mont_opts_CS), public :: PF_Mont_opts_CS !< Options used by PressureForce_Mont_Bouss and
+                            !! PressureForce_Mont_nonBouss
+  type(PF_vgrid_consts_CS), public :: PF_vgrid_consts_CS !< Persistent containers of the vertical grid
+                            !! arrays used by the pressure force calculations
   type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate
                             !! the timing of diagnostic output.
-  real, allocatable :: PFu_bc(:,:,:) !< Zonal accelerations due to pressure gradients
+  real, allocatable, public :: PFu_bc(:,:,:) !< Zonal accelerations due to pressure gradients
                             !! deriving from density gradients within layers [L T-2 ~> m s-2].
-  real, allocatable :: PFv_bc(:,:,:) !< Meridional accelerations due to pressure gradients
+  real, allocatable, public :: PFv_bc(:,:,:) !< Meridional accelerations due to pressure gradients
                             !! deriving from density gradients within layers [L T-2 ~> m s-2].
   !>@{ Diagnostic IDs
   integer :: id_PFu_bc = -1, id_PFv_bc = -1, id_e_sal = -1
@@ -88,6 +125,72 @@ end type PF_Mont_host_ctx
 
 contains
 
+!> Converts a PF_Mont_opts_CS to its bind(C) mirror.
+function PF_Mont_opts_CS_to_c(opts) result(cdesc)
+  type(PF_Mont_opts_CS), intent(in) :: opts !< Options to convert
+  type(PF_Mont_opts_CS_C) :: cdesc          !< bind(C) mirror of opts
+  cdesc%calculate_SAL = opts%calculate_SAL
+  cdesc%tides = opts%tides
+  cdesc%Rho0 = opts%Rho0
+  cdesc%GFS_scale = opts%GFS_scale
+end function PF_Mont_opts_CS_to_c
+
+!> Records the members of a PF_Mont_opts_CS in a capture file, with names starting with prefix.
+subroutine record_PF_Mont_opts_CS(rec, prefix, opts)
+  type(io_recorder),     intent(inout) :: rec    !< The capture file being written
+  character(len=*),      intent(in)    :: prefix !< The start of each record name
+  type(PF_Mont_opts_CS), intent(in)    :: opts   !< The options to record
+
+  call rec%add(prefix//"_calculate_SAL", opts%calculate_SAL)
+  call rec%add(prefix//"_tides", opts%tides)
+  call rec%add(prefix//"_Rho0", opts%Rho0)
+  call rec%add(prefix//"_GFS_scale", opts%GFS_scale)
+end subroutine record_PF_Mont_opts_CS
+
+!> Converts a PF_vgrid_consts_CS to its bind(C) mirror.
+#ifdef _TIM
+function PF_vgrid_consts_CS_to_c(vgrid) result(cdesc)
+  type(PF_vgrid_consts_CS), intent(in) :: vgrid !< Vertical grid constants to convert
+  type(PF_vgrid_consts_CS_C) :: cdesc           !< bind(C) mirror of vgrid
+  cdesc%Rlay_a = vgrid%Rlay_a%to_c()
+  cdesc%g_prime_a = vgrid%g_prime_a%to_c()
+end function PF_vgrid_consts_CS_to_c
+#endif
+
+!> Records which arrays in a PF_vgrid_consts_CS are allocated (with an empty suffix), or the values
+!! of the allocated ones (with a non-empty suffix), in a capture file.
+subroutine record_PF_vgrid_consts_CS(rec, prefix, vgrid, suffix)
+  type(io_recorder),        intent(inout) :: rec    !< The capture file being written
+  character(len=*),         intent(in)    :: prefix !< The start of each record name
+  type(PF_vgrid_consts_CS), intent(in)    :: vgrid  !< The vertical grid constants to record
+  character(len=*),         intent(in)    :: suffix !< The end of each value record name,
+                                                    !! or empty to record which arrays are
+                                                    !! allocated
+
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_Rlay_allocated", vgrid%Rlay_a%associated())
+  elseif (vgrid%Rlay_a%associated()) then
+    call rec%add(prefix//"_Rlay"//suffix, vgrid%Rlay_a)
+  endif
+  if (len(suffix) == 0) then
+    call rec%add(prefix//"_g_prime_allocated", vgrid%g_prime_a%associated())
+  elseif (vgrid%g_prime_a%associated()) then
+    call rec%add(prefix//"_g_prime"//suffix, vgrid%g_prime_a)
+  endif
+end subroutine record_PF_vgrid_consts_CS
+
+!> Copies the vertical grid arrays used by the pressure force calculations into their persistent
+!! containers.
+subroutine PF_vgrid_consts_build(vgrid, GV)
+  type(PF_vgrid_consts_CS), intent(inout) :: vgrid !< Persistent containers of GV%Rlay and GV%g_prime
+  type(verticalGrid_type),  intent(in)    :: GV    !< Vertical grid structure
+
+  if (allocated(GV%Rlay)) &
+    call vgrid%Rlay_a%alloc(lb=LBOUND(GV%Rlay), ub=UBOUND(GV%Rlay), source=GV%Rlay)
+  if (allocated(GV%g_prime)) &
+    call vgrid%g_prime_a%alloc(lb=LBOUND(GV%g_prime), ub=UBOUND(GV%g_prime), source=GV%g_prime)
+end subroutine PF_vgrid_consts_build
+
 !> \brief Non-Boussinesq Montgomery-potential form of pressure gradient
 !!
 !! Determines the acceleration due to pressure forces in a
@@ -97,8 +200,8 @@ contains
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, host, e_sal, e_tide_eq, &
-                                       e_tide_sal, pbce, eta)
+subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, p_atm, host, e_sal, e_tide_eq, &
+                                       e_tide_sal, pbce, eta, PFu_bc3d, PFv_bc3d)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -109,7 +212,8 @@ subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_at
                                                                  !! (equal to -dM/dx) [L T-2 ~> m s-2].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(out) :: PFv !< Meridional acceleration due to pressure gradients
                                                                  !! (equal to -dM/dy) [L T-2 ~> m s-2].
-  type(PressureForce_Mont_CS),                intent(inout) :: CS  !< Control structure for Montgomery potential PGF
+  type(PF_Mont_opts_CS),                      intent(in)  :: CS  !< Montgomery potential PGF options
+  type(PF_vgrid_consts_CS),                   intent(in)  :: vgrid !< Persistent containers of GV%Rlay and GV%g_prime
   real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean or
                                                                  !! atmosphere-ocean [R L2 T-2 ~> Pa].
   type(c_ptr),                         value, intent(in)  :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
@@ -127,6 +231,12 @@ subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_at
                                                                  !! [L2 T-2 H-1 ~> m s-2 or m4 kg-1 s-2].
   real, dimension(SZI_(G),SZJ_(G)), optional, intent(out) :: eta !< The total column mass used to calculate
                                                                  !! PFu and PFv [H ~> kg m-2].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), optional, intent(inout) :: &
+    PFu_bc3d    !< Zonal accelerations due to pressure gradients
+                !! deriving from density gradients within layers [L T-2 ~> m s-2].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), optional, intent(inout) :: &
+    PFv_bc3d    !< Meridional accelerations due to pressure gradients
+                !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     M, &          ! The Montgomery potential, M = (p/rho + gz)  [L2 T-2 ~> m2 s-2].
@@ -160,17 +270,22 @@ subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_at
   real :: alpha_Lay(SZK_(GV)) ! The specific volume of each layer [R-1 ~> m3 kg-1].
   real :: dalpha_int(SZK_(GV)+1) ! The change in specific volume across each
                              ! interface [R-1 ~> m3 kg-1].
+  real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
+                                                  ! in each layer [R ~> kg m-3].
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  nullify(Rlay)
+  if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
 
   use_p_atm = associated(p_atm)
   is_split = present(pbce)
 
   I_gEarth = 1.0 / GV%g_Earth
   dp_neglect = GV%g_Earth * GV%H_to_RZ * GV%H_subroundoff
-  do k=1,nz ; alpha_Lay(k) = 1.0 / (GV%Rlay(k)) ; enddo
+  do k=1,nz ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
   do k=2,nz ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
@@ -298,7 +413,7 @@ subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_at
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    call Set_pbce_nonBouss(p, use_EOS, G, GV, US, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star)
+    call Set_pbce_nonBouss(p, use_EOS, G, GV, US, vgrid, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star)
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -315,14 +430,14 @@ subroutine PressureForce_Mont_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_at
             ((dp_star(i,j)*dp_star(i+1,j) + ((p(i,j,K)*dp_star(i+1,j)) + (p(i+1,j,K)*dp_star(i,j)))) / &
              (dp_star(i,j) + dp_star(i+1,j))))
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * G%IdxCu(I,j) + PFu_bc
-        if (allocated(CS%PFu_bc)) CS%PFu_bc(i,j,k) = PFu_bc
+        if (present(PFu_bc3d)) PFu_bc3d(i,j,k) = PFu_bc
       enddo ; enddo
       do J=Jsq,Jeq ; do i=is,ie
         PFv_bc = (alpha_star(i,j+1,k) - alpha_star(i,j,k)) * (G%IdyCv(i,J) * &
             ((dp_star(i,j)*dp_star(i,j+1) + ((p(i,j,K)*dp_star(i,j+1)) + (p(i,j+1,K)*dp_star(i,j)))) / &
              (dp_star(i,j) + dp_star(i,j+1))))
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * G%IdyCv(i,J) + PFv_bc
-        if (allocated(CS%PFv_bc)) CS%PFv_bc(i,j,k) = PFv_bc
+        if (present(PFv_bc3d)) PFv_bc3d(i,j,k) = PFv_bc
       enddo ; enddo
     enddo ! k-loop
   else ! .not. use_EOS
@@ -363,7 +478,7 @@ subroutine PressureForce_Mont_nonBouss_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_
       "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
   endif
 
-  if (CS%tides) then
+  if (CS%PF_Mont_opts_CS%tides) then
     call calc_tidal_forcing(CS%Time, e_tide_eq, e_tide_sal, G, US, CS%tides_CSp)
   endif
 
@@ -399,8 +514,8 @@ end subroutine PressureForce_Mont_nonBouss_post
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, host, e_sal, e_tide_eq, &
-                                    e_tide_sal, pbce, eta)
+subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, p_atm, host, e_sal, e_tide_eq, &
+                                    e_tide_sal, pbce, eta, PFu_bc3d, PFv_bc3d)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -411,7 +526,8 @@ subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, 
                                                                  !! (equal to -dM/dx) [L T-2 ~> m s-2].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(out) :: PFv !< Meridional acceleration due to pressure gradients
                                                                  !! (equal to -dM/dy) [L T-2 ~> m s-2].
-  type(PressureForce_Mont_CS),                intent(inout) :: CS  !< Control structure for Montgomery potential PGF
+  type(PF_Mont_opts_CS),                      intent(in)  :: CS  !< Montgomery potential PGF options
+  type(PF_vgrid_consts_CS),                   intent(in)  :: vgrid !< Persistent containers of GV%Rlay and GV%g_prime
   real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean or
                                                                 !! atmosphere-ocean [R L2 T-2 ~> Pa].
   type(c_ptr),                         value, intent(in)  :: host !< Opaque pointer to the PF_Mont_host_ctx that holds
@@ -428,6 +544,12 @@ subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, 
                                                                 !! each layer due to free surface height anomalies
                                                                 !! [L2 T-2 H-1 ~> m s-2].
   real, dimension(SZI_(G),SZJ_(G)),          optional, intent(out) :: eta !< Free surface height [H ~> m].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), optional, intent(inout) :: &
+    PFu_bc3d    !< Zonal accelerations due to pressure gradients
+                !! deriving from density gradients within layers [L T-2 ~> m s-2].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), optional, intent(inout) :: &
+    PFv_bc3d    !< Meridional accelerations due to pressure gradients
+                !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     M, &        ! The Montgomery potential, M = (p/rho + gz) [L2 T-2 ~> m2 s-2].
@@ -450,11 +572,15 @@ subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, 
                              ! gradient terms are to be split into
                              ! barotropic and baroclinic pieces.
   type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
+  real, dimension(:), contiguous, pointer :: g_prime ! The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
+
+  nullify(g_prime)
+  if (vgrid%g_prime_a%associated()) call vgrid%g_prime_a%view(g_prime)
 
   use_p_atm = associated(p_atm)
   is_split = present(pbce)
@@ -520,18 +646,18 @@ subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, 
     !$OMP parallel do default(shared)
     do j=Jsq,Jeq+1
       do i=Isq,Ieq+1
-        M(i,j,1) = GV%g_prime(1) * e(i,j,1)
+        M(i,j,1) = g_prime(1) * e(i,j,1)
         if (use_p_atm) M(i,j,1) = M(i,j,1) + p_atm(i,j) * I_Rho0
       enddo
       do k=2,nz ; do i=Isq,Ieq+1
-        M(i,j,k) = M(i,j,k-1) + GV%g_prime(K) * e(i,j,K)
+        M(i,j,k) = M(i,j,k-1) + g_prime(K) * e(i,j,K)
       enddo ; enddo
     enddo
   endif ! use_EOS
 
   if (present(pbce)) then
     call c_f_pointer(host, ctx)
-    call Set_pbce_Bouss(e, use_EOS, G, GV, US, CS%Rho0, CS%GFS_scale, pbce, c_loc(ctx%pbce), rho_star, 1)
+    call Set_pbce_Bouss(e, use_EOS, G, GV, US, vgrid, CS%Rho0, CS%GFS_scale, pbce, c_loc(ctx%pbce), rho_star, 1)
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -547,14 +673,14 @@ subroutine PressureForce_Mont_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, p_atm, 
           ((h_star(i,j) * h_star(i+1,j) - ((e(i,j,K) * h_star(i+1,j)) + &
           (e(i+1,j,K) * h_star(i,j)))) / (h_star(i,j) + h_star(i+1,j))))
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * G%IdxCu(I,j) + PFu_bc
-        if (allocated(CS%PFu_bc)) CS%PFu_bc(i,j,k) = PFu_bc
+        if (present(PFu_bc3d)) PFu_bc3d(i,j,k) = PFu_bc
       enddo ; enddo
       do J=Jsq,Jeq ; do i=is,ie
         PFv_bc = -1.0*(rho_star(i,j+1,k) - rho_star(i,j,k)) * (G%IdyCv(i,J) * &
           ((h_star(i,j) * h_star(i,j+1) - ((e(i,j,K) * h_star(i,j+1)) + &
           (e(i,j+1,K) * h_star(i,j)))) / (h_star(i,j) + h_star(i,j+1))))
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * G%IdyCv(i,J) + PFv_bc
-        if (allocated(CS%PFv_bc)) CS%PFv_bc(i,j,k) = PFv_bc
+        if (present(PFv_bc3d)) PFv_bc3d(i,j,k) = PFv_bc
       enddo ; enddo
     enddo ! k-loop
   else ! .not. use_EOS
@@ -618,7 +744,7 @@ subroutine PressureForce_Mont_Bouss_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_tid
       "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
   endif
 
-  if (CS%tides) then
+  if (CS%PF_Mont_opts_CS%tides) then
     call calc_tidal_forcing(CS%Time, e_tide_eq, e_tide_sal, G, US, CS%tides_CSp)
   endif
 
@@ -650,13 +776,14 @@ end subroutine PressureForce_Mont_Bouss_post
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
-subroutine Set_pbce_Bouss(e, use_EOS, G, GV, US, Rho0, GFS_scale, pbce, host, rho_star, nkblock)
+subroutine Set_pbce_Bouss(e, use_EOS, G, GV, US, vgrid, Rho0, GFS_scale, pbce, host, rho_star, nkblock)
   type(ocean_grid_type),                intent(in)  :: G    !< Ocean grid structure
   type(verticalGrid_type),              intent(in)  :: GV   !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: e !< Interface height [Z ~> m].
   logical,                              intent(in)  :: use_EOS !< If true, density is calculated from T & S using
                                                                !! an equation of state.
   type(unit_scale_type),                intent(in)  :: US   !< A dimensional unit scaling type
+  type(PF_vgrid_consts_CS),             intent(in)  :: vgrid !< Persistent containers of GV%Rlay and GV%g_prime
   real,                                 intent(in)  :: Rho0 !< The "Boussinesq" ocean density [R ~> kg m-3].
   real,                                 intent(in)  :: GFS_scale !< Ratio between gravity applied to top
                                                             !! interface and the gravitational acceleration of
@@ -676,7 +803,11 @@ subroutine Set_pbce_Bouss(e, use_EOS, G, GV, US, Rho0, GFS_scale, pbce, host, rh
   real :: Ihtot(SZI_(G),SZJ_(G))  ! The inverse of the sum of the layer thicknesses [H-1 ~> m-1 or m2 kg-1].
   real :: dz_neglect         ! A vertical distance that is so small it is usually lost
                              ! in roundoff and can be neglected [Z ~> m].
+  real, dimension(:), contiguous, pointer :: g_prime ! The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
+
+  nullify(g_prime)
+  if (vgrid%g_prime_a%associated()) call vgrid%g_prime_a%view(g_prime)
 
   !$omp target data map(alloc: Ihtot)
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
@@ -706,11 +837,11 @@ subroutine Set_pbce_Bouss(e, use_EOS, G, GV, US, Rho0, GFS_scale, pbce, host, rh
     do concurrent (j=Jsq:Jeq+1)
       do concurrent (i=Isq:Ieq+1)
         Ihtot(i,j) = 1.0 / ((e(i,j,1) - e(i,j,nz+1)) + dz_neglect)
-        pbce(i,j,1) = GV%g_prime(1) * GV%H_to_Z
+        pbce(i,j,1) = g_prime(1) * GV%H_to_Z
       enddo
       do k=2,nz
         do concurrent (i=Isq:Ieq+1)
-          pbce(i,j,k) = pbce(i,j,k-1) + (GV%g_prime(K) * GV%H_to_Z) &
+          pbce(i,j,k) = pbce(i,j,k-1) + (g_prime(K) * GV%H_to_Z) &
               * ((e(i,j,K) - e(i,j,nz+1)) * Ihtot(i,j))
         enddo
       enddo
@@ -721,13 +852,14 @@ end subroutine Set_pbce_Bouss
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the column mass.
-subroutine Set_pbce_nonBouss(p, use_EOS, G, GV, US, GFS_scale, pbce, host, alpha_star)
+subroutine Set_pbce_nonBouss(p, use_EOS, G, GV, US, vgrid, GFS_scale, pbce, host, alpha_star)
   type(ocean_grid_type),                intent(in)  :: G  !< Ocean grid structure
   type(verticalGrid_type),              intent(in)  :: GV !< Vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1), intent(in) :: p !< Interface pressures [R L2 T-2 ~> Pa].
   logical,                              intent(in)  :: use_EOS !< If true, density is calculated from T & S using an
                                                                !! equation of state.
   type(unit_scale_type),                intent(in)  :: US !< A dimensional unit scaling type
+  type(PF_vgrid_consts_CS),             intent(in)  :: vgrid !< Persistent containers of GV%Rlay and GV%g_prime
   real,                                 intent(in)  :: GFS_scale !< Ratio between gravity applied to top
                                                           !! interface and the gravitational acceleration of
                                                           !! the planet [nondim]. Usually this ratio is 1.
@@ -749,9 +881,14 @@ subroutine Set_pbce_nonBouss(p, use_EOS, G, GV, US, GFS_scale, pbce, host, alpha
                              ! conversion factors [R L2 T-2 H-1 ~> Pa m2 kg-1].
   real :: dp_neglect         ! A thickness that is so small it is usually lost
                              ! in roundoff and can be neglected [R L2 T-2 ~> Pa].
+  real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
+                                                  ! in each layer [R ~> kg m-3].
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
 
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB ; nz = GV%ke
+
+  nullify(Rlay)
+  if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
 
   dP_dH = GV%g_Earth * GV%H_to_RZ
   dp_neglect = GV%g_Earth * GV%H_to_RZ * GV%H_subroundoff
@@ -774,7 +911,7 @@ subroutine Set_pbce_nonBouss(p, use_EOS, G, GV, US, GFS_scale, pbce, host, alpha
     endif
   else ! not use_EOS
 
-    do k=1,nz ; alpha_Lay(k) = 1.0 / (GV%Rlay(k)) ; enddo
+    do k=1,nz ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
     do k=2,nz ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
     !$OMP parallel do default(shared)
@@ -1308,16 +1445,16 @@ subroutine PressureForce_Mont_init(Time, G, GV, US, param_file, diag, CS, SAL_CS
 
   mdl = "MOM_PressureForce_Mont"
   call log_version(param_file, mdl, version, "")
-  call get_param(param_file, mdl, "RHO_0", CS%Rho0, &
+  call get_param(param_file, mdl, "RHO_0", CS%PF_Mont_opts_CS%Rho0, &
                  "The mean ocean density used with BOUSSINESQ true to "//&
                  "calculate accelerations and the mass for conservation "//&
                  "properties, or with BOUSSINESQ false to convert some "//&
                  "parameters from vertical units of m to kg m-2.", &
                  units="kg m-3", default=1035.0, scale=US%R_to_kg_m3)
-  call get_param(param_file, mdl, "TIDES", CS%tides, &
+  call get_param(param_file, mdl, "TIDES", CS%PF_Mont_opts_CS%tides, &
                  "If true, apply tidal momentum forcing.", default=.false.)
-  call get_param(param_file, mdl, "CALCULATE_SAL", CS%calculate_SAL, &
-                 "If true, calculate self-attraction and loading.", default=CS%tides)
+  call get_param(param_file, mdl, "CALCULATE_SAL", CS%PF_Mont_opts_CS%calculate_SAL, &
+                 "If true, calculate self-attraction and loading.", default=CS%PF_Mont_opts_CS%tides)
   call get_param(param_file, mdl, "USE_EOS", use_EOS, default=.true., &
                  do_not_log=.true.) ! Input for diagnostic use only.
 
@@ -1332,11 +1469,11 @@ subroutine PressureForce_Mont_init(Time, G, GV, US, param_file, diag, CS, SAL_CS
       allocate(CS%PFv_bc(G%isd:G%ied,G%JsdB:G%JedB,GV%ke), source=0.)
   endif
 
-  if (CS%calculate_SAL) then
+  if (CS%PF_Mont_opts_CS%calculate_SAL) then
     CS%id_e_sal = register_diag_field('ocean_model', 'e_sal', diag%axesT1, Time, &
         'Self-attraction and loading height anomaly', 'meter', conversion=US%Z_to_m)
   endif
-  if (CS%tides) then
+  if (CS%PF_Mont_opts_CS%tides) then
     CS%id_e_tide = register_diag_field('ocean_model', 'e_tidal', diag%axesT1, Time, &
         'Tidal Forcing Astronomical and SAL Height Anomaly', 'meter', conversion=US%Z_to_m)
     CS%id_e_tide_eq  = register_diag_field('ocean_model', 'e_tide_eq', diag%axesT1, Time, &
@@ -1345,10 +1482,12 @@ subroutine PressureForce_Mont_init(Time, G, GV, US, param_file, diag, CS, SAL_CS
         'Read-in tidal self-attraction and loading height anomaly', 'meter', conversion=US%Z_to_m)
   endif
 
-  CS%GFS_scale = 1.0
-  if (GV%g_prime(1) /= GV%g_Earth) CS%GFS_scale = GV%g_prime(1) / GV%g_Earth
+  CS%PF_Mont_opts_CS%GFS_scale = 1.0
+  if (GV%g_prime(1) /= GV%g_Earth) CS%PF_Mont_opts_CS%GFS_scale = GV%g_prime(1) / GV%g_Earth
 
-  call log_param(param_file, mdl, "GFS / G_EARTH", CS%GFS_scale, units="nondim")
+  call PF_vgrid_consts_build(CS%PF_vgrid_consts_CS, GV)
+
+  call log_param(param_file, mdl, "GFS / G_EARTH", CS%PF_Mont_opts_CS%GFS_scale, units="nondim")
 
 end subroutine PressureForce_Mont_init
 
