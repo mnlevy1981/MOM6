@@ -253,10 +253,10 @@ end subroutine record_PF_FV_opts_CS
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, Z_ref, g_Earth, &
-                                     H_to_RZ, H_subroundoff, semi_Boussinesq, CS, vgrid, have_ALE_CSp, p_atm_a, host, &
-                                     e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, &
-                                     pbce_a, eta_a)
+subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, Z_ref, &
+                                     g_Earth, H_to_RZ, H_subroundoff, semi_Boussinesq, CS, vgrid, have_ALE_CSp, &
+                                     p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
+                                     MassWt_u_a, MassWt_v_a, pbce_a, eta_a)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),                                intent(in)  :: bxH0 !< The h-point box of the whole column,
                                                                   !! [isc:iec, jsc:jec, 1:nz]
@@ -264,6 +264,8 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_
                                                                   !! [IscB:IecB, JscB:JecB, 1:nz]
   type(Box_t),                                intent(in)  :: bxU0 !< The u-point box of the whole column,
                                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),                                intent(in)  :: bxV0 !< The v-point box of the whole column,
+                                                                  !! [isc:iec, JscB:JecB, 1:nz]
   integer,                                    intent(in)  :: isd !< The start i-index of cell centers within the data
                                                                  !! domain
   integer,                                    intent(in)  :: IsdB !< The start i-index of cell vertices within the data
@@ -472,7 +474,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         intx_dza(i,j,k) = 0.5 * alpha_anom * (dp(i,j)+dp(i+1,j))
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie)
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
         inty_dza(i,j,k) = 0.5 * alpha_anom * (dp(i,j)+dp(i,j+1))
       enddo
     endif
@@ -564,7 +566,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       intx_za(I,j,1) = 0.5*(za(i,j,1) + za(i+1,j,1))
     enddo
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       inty_za(i,J,1) = 0.5*(za(i,j,1) + za(i,j+1,1))
     enddo
   endif
@@ -575,7 +577,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_
     enddo
   enddo
   do k=1,nz
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       inty_za(i,J,K+1) = inty_za(i,J,K) - inty_dza(i,J,k)
     enddo
   enddo
@@ -605,7 +607,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_
                    (2.0*IdxCu(I,j) / ((dp(i,j) + dp(i+1,j)) + dp_neglect))
     enddo
 
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       PFv(i,J,k) = (((za(i,j,K+1)*dp(i,j) + intp_dza(i,j,k)) - &
                      (za(i,j+1,K+1)*dp(i,j+1) + intp_dza(i,j+1,k))) + &
                     ((dp(i,j+1) - dp(i,j)) * inty_za(i,J,K+1) - &
@@ -628,7 +630,7 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         PFu(I,j,k) = PFu(I,j,k) - (dM(i+1,j) - dM(i,j)) * IdxCu(I,j)
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie)
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
         PFv(i,J,k) = PFv(i,J,k) - (dM(i,j+1) - dM(i,j)) * IdyCv(i,J)
       enddo
     enddo
@@ -1695,10 +1697,10 @@ end subroutine FV_nonBouss_chksum_int_za_host
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, g_Earth, &
-                                  H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, CS, vgrid, have_ALE_CSp, &
-                                  p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
-                                  MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a)
+subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, &
+                                  g_Earth, H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, CS, vgrid, &
+                                  have_ALE_CSp, p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
+                                  MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),                                intent(in)  :: bxH0 !< The h-point box of the whole column,
                                                                   !! [isc:iec, jsc:jec, 1:nz]
@@ -1706,6 +1708,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
                                                                   !! [IscB:IecB, JscB:JecB, 1:nz]
   type(Box_t),                                intent(in)  :: bxU0 !< The u-point box of the whole column,
                                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),                                intent(in)  :: bxV0 !< The v-point box of the whole column,
+                                                                  !! [isc:iec, JscB:JecB, 1:nz]
   integer,                                    intent(in)  :: isd !< The start i-index of cell centers within the data
                                                                  !! domain
   integer,                                    intent(in)  :: IsdB !< The start i-index of cell vertices within the data
@@ -2015,7 +2019,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         intx_dpa(I,j,k) = 0.5*(Rlay(k) - rho_ref) * (dz_geo(i,j) + dz_geo(i+1,j))
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie)
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
         inty_dpa(i,J,k) = 0.5*(Rlay(k) - rho_ref) * (dz_geo(i,j) + dz_geo(i,j+1))
       enddo
     enddo
@@ -2078,7 +2082,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
     do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       intx_pa(I,j,1) = 0.5*(pa(i,j,1) + pa(i+1,j,1))
     enddo
-    do concurrent (J=Jsq:Jeq, i=is:ie)
+    do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       inty_pa(i,J,1) = 0.5*(pa(i,j,1) + pa(i,j+1,1))
     enddo
   endif
@@ -2090,9 +2094,9 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
       enddo
     enddo
   enddo
-  do concurrent (J=Jsq:Jeq)
+  do concurrent (J=bxV0%idxS(2):bxV0%idxE(2))
     do k=1,nz
-      do concurrent (i=is:ie)
+      do concurrent (i=bxV0%idxS(1):bxV0%idxE(1))
         inty_pa(i,J,K+1) = inty_pa(i,J,K) + inty_dpa(i,J,k)
       enddo
     enddo
@@ -2121,7 +2125,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
   enddo
 
   ! Compute pressure gradient in y direction
-  do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+  do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
     PFv(i,J,k) = (((pa(i,j,K)*h(i,j,k) + intz_dpa(i,j,k)) - &
                    (pa(i,j+1,K)*h(i,j+1,k) + intz_dpa(i,j+1,k))) + &
                   ((h(i,j+1,k) - h(i,j,k)) * inty_pa(i,J,K) - &
@@ -2137,7 +2141,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
       do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
           PFu(I,j,k) = PFu(I,j,k) + (e_sal(i+1,j) - e_sal(i,j)) * g_Earth * IdxCu(I,j)
       enddo
-      do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+      do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
           PFv(i,J,k) = PFv(i,J,k) + (e_sal(i,j+1) - e_sal(i,j)) * g_Earth * IdyCv(i,J)
       enddo
     endif
@@ -2149,7 +2153,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
           PFu(I,j,k) = PFu(I,j,k) + ((e_tidal_eq(i+1,j) + e_tidal_sal(i+1,j)) &
               - (e_tidal_eq(i,j) + e_tidal_sal(i,j))) * g_Earth * IdxCu(I,j)
       enddo
-      do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+      do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
           PFv(i,J,k) = PFv(i,J,k) + ((e_tidal_eq(i,j+1) + e_tidal_sal(i,j+1)) &
               - (e_tidal_eq(i,j) + e_tidal_sal(i,j))) * g_Earth * IdyCv(i,J)
       enddo
@@ -2170,7 +2174,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, 
     do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       PFu(I,j,k) = PFu(I,j,k) - (dM(i+1,j) - dM(i,j)) * IdxCu(I,j)
     enddo
-    do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
+    do concurrent (k=bxV0%idxS(3):bxV0%idxE(3), J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
       PFv(i,J,k) = PFv(i,J,k) - (dM(i,j+1) - dM(i,j)) * IdyCv(i,J)
     enddo
 

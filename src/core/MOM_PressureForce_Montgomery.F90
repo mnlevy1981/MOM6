@@ -204,7 +204,7 @@ end subroutine PF_vgrid_consts_build
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, g_Earth, H_to_RZ, &
+subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, g_Earth, H_to_RZ, &
                                        H_subroundoff, CS, vgrid, p_atm_a, host, e_sal_a, e_tide_eq_a, e_tide_sal_a, &
                                        pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
@@ -214,6 +214,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PF
                                                                   !! [IscB:IecB, JscB:JecB, 1:nz]
   type(Box_t),                                intent(in)  :: bxU0 !< The u-point box of the whole column,
                                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),                                intent(in)  :: bxV0 !< The v-point box of the whole column,
+                                                                  !! [isc:iec, JscB:JecB, 1:nz]
   real,                                       intent(in)  :: g_Earth !< The gravitational acceleration
                                                                      !! [L2 Z-1 T-2 ~> m s-2].
   real,                                       intent(in)  :: H_to_RZ !< A constant that translates thickness units to
@@ -299,9 +301,9 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PF
   real, dimension(:,:),   contiguous, pointer :: eta
   real, dimension(:,:),   contiguous, pointer :: IdxCu, IdyCv, bathyT, meanSL
   logical :: use_PFu_bc3d, use_PFv_bc3d
-  integer :: is, ie, Isq, Ieq, Jsq, Jeq, nz
+  integer :: Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
-  is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; nz = bxH0%idxE(3)
+  nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
   bxH0_sk = bxH0%growLo(3,-1)
   bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
@@ -474,7 +476,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PF
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j) + PFu_bc
         if (use_PFu_bc3d) PFu_bc3d(i,j,k) = PFu_bc
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie) DO_LOCALITY(local(PFv_bc))
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(local(PFv_bc))
         PFv_bc = (alpha_star(i,j+1,k) - alpha_star(i,j,k)) * (IdyCv(i,J) * &
             ((dp_star(i,j)*dp_star(i,j+1) + ((p(i,j,K)*dp_star(i,j+1)) + (p(i,j+1,K)*dp_star(i,j)))) / &
              (dp_star(i,j) + dp_star(i,j+1))))
@@ -487,7 +489,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PF
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j)
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie)
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * IdyCv(i,J)
       enddo
     enddo
@@ -557,7 +559,7 @@ end subroutine PressureForce_Mont_nonBouss_post
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, H_to_Z, Z_to_H, &
+subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, H_to_Z, Z_to_H, &
                                     dZ_subroundoff, CS, vgrid, p_atm_a, host, e_sal_a, e_tide_eq_a, e_tide_sal_a, &
                                     pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
   type(grid_core_type),                       intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
@@ -567,6 +569,8 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a
                                                                   !! [IscB:IecB, JscB:JecB, 1:nz]
   type(Box_t),                                intent(in)  :: bxU0 !< The u-point box of the whole column,
                                                                   !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),                                intent(in)  :: bxV0 !< The v-point box of the whole column,
+                                                                  !! [isc:iec, JscB:JecB, 1:nz]
   real,                                       intent(in)  :: H_to_Z !< A constant that translates thickness units to
                                                                     !! the units of depth [Z H-1 ~> 1 or m3 kg-1].
   real,                                       intent(in)  :: Z_to_H !< A constant that translates depth units to
@@ -638,10 +642,10 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a
   real, dimension(:,:),   contiguous, pointer :: eta
   real, dimension(:,:),   contiguous, pointer :: IdxCu, IdyCv, bathyT, meanSL
   logical :: use_PFu_bc3d, use_PFv_bc3d
-  integer :: is, ie, Isq, Ieq, Jsq, Jeq, nz
+  integer :: Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
-  is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; nz = bxH0%idxE(3)
+  nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
   bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
@@ -758,7 +762,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j) + PFu_bc
         if (use_PFu_bc3d) PFu_bc3d(i,j,k) = PFu_bc
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie) DO_LOCALITY(local(PFv_bc))
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1)) DO_LOCALITY(local(PFv_bc))
         PFv_bc = -1.0*(rho_star(i,j+1,k) - rho_star(i,j,k)) * (IdyCv(i,J) * &
           ((h_star(i,j) * h_star(i,j+1) - ((e(i,j,K) * h_star(i,j+1)) + &
           (e(i,j+1,K) * h_star(i,j)))) / (h_star(i,j) + h_star(i,j+1))))
@@ -771,7 +775,7 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a
       do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j)
       enddo
-      do concurrent (J=Jsq:Jeq, i=is:ie)
+      do concurrent (J=bxV0%idxS(2):bxV0%idxE(2), i=bxV0%idxS(1):bxV0%idxE(1))
         PFv(i,J,k) = -(M(i,j+1,k) - M(i,j,k)) * IdyCv(i,J)
       enddo
     enddo

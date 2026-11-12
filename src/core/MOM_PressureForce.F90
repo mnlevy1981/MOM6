@@ -101,6 +101,7 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   type(Box_t) :: bxH0  ! The h-point box of the whole column, [isc:iec, jsc:jec, 1:nz]
   type(Box_t) :: bxQ0  ! The B-grid-index box of the whole column, [IscB:IecB, JscB:JecB, 1:nz]
   type(Box_t) :: bxU0  ! The u-point box of the whole column, [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t) :: bxV0  ! The v-point box of the whole column, [isc:iec, JscB:JecB, 1:nz]
 
   if (CS%Analytic_FV_PGF) then
     FV_ctx%G => G ; FV_ctx%GV => GV ; FV_ctx%US => US ; FV_ctx%tv => tv
@@ -148,10 +149,12 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   endif
 
   Gcore => grid_core(G)
-  call bxH0%safe_alloc(ndims=3) ; call bxQ0%safe_alloc(ndims=3) ; call bxU0%safe_alloc(ndims=3)
+  call bxH0%safe_alloc(ndims=3) ; call bxQ0%safe_alloc(ndims=3)
+  call bxU0%safe_alloc(ndims=3) ; call bxV0%safe_alloc(ndims=3)
   call bxH0%set(idxS=[G%isc,G%jsc,1], idxE=[G%iec,G%jec,GV%ke])
   call bxQ0%set(idxS=[G%IscB,G%JscB,1], idxE=[G%IecB,G%JecB,GV%ke])
   call bxU0%set(idxS=[G%IscB,G%jsc,1], idxE=[G%IecB,G%jec,GV%ke])
+  call bxV0%set(idxS=[G%isc,G%JscB,1], idxE=[G%iec,G%JecB,GV%ke])
 
   call h_a%alloc(lb=LBOUND(h), ub=UBOUND(h), source=h)
   call PFu_a%alloc(lb=LBOUND(PFu), ub=UBOUND(PFu), source=PFu)
@@ -166,7 +169,7 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
     call PFv_bc3d_a%alloc(lb=LBOUND(CS%PressureForce_Mont%PFv_bc), ub=UBOUND(CS%PressureForce_Mont%PFv_bc), &
                           source=CS%PressureForce_Mont%PFv_bc)
 
-  call PressureForce_TR(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, G%isd, G%IsdB, G%jsd, G%Z_ref, &
+  call PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, G%isd, G%IsdB, G%jsd, G%Z_ref, &
                         GV%Boussinesq, GV%g_Earth, GV%H_to_RZ, GV%H_subroundoff, GV%H_to_Z, GV%Z_to_H, GV%Rho0, &
                         GV%dZ_subroundoff, GV%semi_Boussinesq, CS%Analytic_FV_PGF, CS%PressureForce_FV%PF_FV_opts_CS, &
                         CS%PressureForce_FV%PF_vgrid_consts_CS, CS%PressureForce_Mont%PF_Mont_opts_CS, &
@@ -182,7 +185,7 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   if (allocated(CS%PressureForce_Mont%PFv_bc)) call PFv_bc3d_a%copy2F(CS%PressureForce_Mont%PFv_bc)
   call h_a%free() ; call PFu_a%free() ; call PFv_a%free() ; call p_atm_a%free()
   call pbce_a%free() ; call eta_a%free() ; call PFu_bc3d_a%free() ; call PFv_bc3d_a%free()
-  call bxH0%free() ; call bxQ0%free() ; call bxU0%free()
+  call bxH0%free() ; call bxQ0%free() ; call bxU0%free() ; call bxV0%free()
 
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
@@ -207,17 +210,19 @@ end subroutine PressureForce
 
 !> The implementation of PressureForce (the root of its call tree): calls the finite volume or
 !! Montgomery potential form of the pressure force, in its Boussinesq or non-Boussinesq version.
-subroutine PressureForce_TR(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, Boussinesq, &
-                            g_Earth, H_to_RZ, H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, semi_Boussinesq, &
-                            Analytic_FV_PGF, FV_opts, FV_vgrid, Mont_opts, Mont_vgrid, have_ALE_CSp, p_atm_a, host, &
-                            e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, &
-                            intx_dpa_a, inty_dpa_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
+subroutine PressureForce_TR(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, &
+                            Boussinesq, g_Earth, H_to_RZ, H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, &
+                            semi_Boussinesq, Analytic_FV_PGF, FV_opts, FV_vgrid, Mont_opts, Mont_vgrid, have_ALE_CSp, &
+                            p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
+                            MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
   type(grid_core_type),    intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
   type(Box_t),             intent(in)  :: bxH0 !< The h-point box of the whole column, [isc:iec, jsc:jec, 1:nz]
   type(Box_t),             intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
                                                !! [IscB:IecB, JscB:JecB, 1:nz]
   type(Box_t),             intent(in)  :: bxU0 !< The u-point box of the whole column,
                                                !! [IscB:IecB, jsc:jec, 1:nz]
+  type(Box_t),             intent(in)  :: bxV0 !< The v-point box of the whole column,
+                                               !! [isc:iec, JscB:JecB, 1:nz]
   integer,                 intent(in)  :: isd !< The start i-index of cell centers within the data domain
   integer,                 intent(in)  :: IsdB !< The start i-index of cell vertices within the data domain
   integer,                 intent(in)  :: jsd !< The start j-index of cell centers within the data domain
@@ -294,23 +299,23 @@ subroutine PressureForce_TR(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore,
 
   if (Analytic_FV_PGF) then
     if (Boussinesq) then
-      call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, g_Earth, &
-                                  H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, FV_opts, FV_vgrid, &
+      call PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, &
+                                  g_Earth, H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, FV_opts, FV_vgrid, &
                                   have_ALE_CSp, p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
                                   MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a)
     else
-      call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, Z_ref, g_Earth, &
-                                     H_to_RZ, H_subroundoff, semi_Boussinesq, FV_opts, FV_vgrid, have_ALE_CSp, &
-                                     p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
-                                     MassWt_u_a, MassWt_v_a, pbce_a, eta_a)
+      call PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, Z_ref, &
+                                     g_Earth, H_to_RZ, H_subroundoff, semi_Boussinesq, FV_opts, FV_vgrid, &
+                                     have_ALE_CSp, p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                     e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, pbce_a, eta_a)
     endif
   else
     if (Boussinesq) then
-      call PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, H_to_Z, Z_to_H, &
+      call PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, H_to_Z, Z_to_H, &
                                     dZ_subroundoff, Mont_opts, Mont_vgrid, p_atm_a, host, e_sal_a, e_tidal_eq_a, &
                                     e_tidal_sal_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
     else
-      call PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, g_Earth, H_to_RZ, &
+      call PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, h_a, use_EOS, PFu_a, PFv_a, Gcore, g_Earth, H_to_RZ, &
                                        H_subroundoff, Mont_opts, Mont_vgrid, p_atm_a, host, e_sal_a, e_tidal_eq_a, &
                                        e_tidal_sal_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
     endif
