@@ -28,6 +28,7 @@ use MOM_density_integrals, only : int_spec_vol_dp_generic_plm
 use MOM_density_integrals, only : int_density_dz_generic_pcm, int_spec_vol_dp_generic_pcm
 use MOM_density_integrals, only : diagnose_mass_weight_Z, diagnose_mass_weight_p
 use MOM_ALE, only : TS_PLM_edge_values, TS_PPM_edge_values, TS_PLM_WLS_edge_values, ALE_CS
+use array_mod, only : RealArray_t
 use turbotmp_helperF, only : io_recorder
 use iso_c_binding, only : c_ptr, c_loc, c_f_pointer, c_bool, c_double, c_int
 
@@ -249,7 +250,7 @@ end subroutine record_PF_FV_opts_CS
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, have_ALE_CSp, p_atm, host, e_sal, &
-                                     e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, pbce, eta)
+                                     e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, pbce_a, eta_a)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -280,10 +281,10 @@ subroutine PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid,
     MassWt_u    !< The fractional mass weighting at a u-point [nondim].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: &
     MassWt_v    !< The fractional mass weighting at a v-point [nondim].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure
+  type(RealArray_t),                          intent(inout) :: pbce_a !< The baroclinic pressure
                                                            !! anomaly in each layer due to eta anomalies
                                                            !! [L2 T-2 H-1 ~> m4 s-2 kg-1].
-  real, dimension(SZI_(G),SZJ_(G)),          optional, intent(out) :: eta !< The total column mass used to
+  type(RealArray_t),                          intent(inout) :: eta_a !< The total column mass used to
                                                            !! calculate PFu and PFv [H ~> kg m-2].
   ! Local variables
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)+1) :: p ! Interface pressure [R L2 T-2 ~> Pa].
@@ -334,6 +335,9 @@ subroutine PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid,
   type(PF_FV_host_ctx), pointer :: ctx ! The objects behind host
   real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
                                                   ! in each layer [R ~> kg m-3].
+  real, dimension(:,:,:), contiguous, pointer :: pbce
+  real, dimension(:,:),   contiguous, pointer :: eta
+  type(RealArray_t) :: alpha_star_a
 
   real :: alpha_ref     ! A reference specific volume [R-1 ~> m3 kg-1] that is used
                         ! to reduce the impact of truncation errors.
@@ -358,6 +362,9 @@ subroutine PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid,
 
   nullify(Rlay)
   if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
+  nullify(pbce, eta)
+  if (pbce_a%associated()) call pbce_a%view(pbce)
+  if (eta_a%associated()) call eta_a%view(eta)
 
   use_p_atm = associated(p_atm)
   use_ALE = .false.
@@ -589,12 +596,12 @@ subroutine PressureForce_FV_nonBouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid,
     enddo
   endif
 
-  if (present(pbce)) then
+  if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call set_pbce_nonBouss(p, use_EOS, G, GV, US, vgrid, CS%GFS_scale, pbce, c_loc(ctx%pbce))
+    call set_pbce_nonBouss(p, use_EOS, G, GV, US, vgrid, CS%GFS_scale, pbce, c_loc(ctx%pbce), alpha_star_a)
   endif
 
-  if (present(eta)) then
+  if (eta_a%associated()) then
     Pa_to_H = 1.0 / (GV%g_Earth * GV%H_to_RZ)
     if (use_p_atm) then
       !$OMP parallel do default(shared)
@@ -1651,7 +1658,7 @@ end subroutine FV_nonBouss_chksum_int_za_host
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
 subroutine PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, have_ALE_CSp, p_atm, host, e_sal, &
                                   e_tidal_eq, e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, intx_dpa, inty_dpa, &
-                                  pbce, eta)
+                                  pbce_a, eta_a)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -1686,10 +1693,10 @@ subroutine PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, ha
     intx_dpa    !< The change in intx_pa through a layer [R L2 T-2 ~> Pa].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: &
     inty_dpa    !< The change in inty_pa through a layer [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), optional, intent(out) :: pbce !< The baroclinic pressure
+  type(RealArray_t),                          intent(inout) :: pbce_a !< The baroclinic pressure
                                                          !! anomaly in each layer due to eta anomalies
                                                          !! [L2 T-2 H-1 ~> m s-2].
-  real, dimension(SZI_(G),SZJ_(G)),          optional, intent(out) :: eta !< The sea-surface height used to
+  type(RealArray_t),                          intent(inout) :: eta_a !< The sea-surface height used to
                                                          !! calculate PFu and PFv [H ~> m], with any
                                                          !! tidal contributions.
   ! Local variables
@@ -1745,6 +1752,9 @@ subroutine PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, ha
   type(PF_FV_host_ctx), pointer :: ctx ! The objects behind host
   real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
                                                   ! in each layer [R ~> kg m-3].
+  real, dimension(:,:,:), contiguous, pointer :: pbce
+  real, dimension(:,:),   contiguous, pointer :: eta
+  type(RealArray_t) :: rho_star_a
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer, dimension(2) :: EOSdom_u ! The i-computational domain for the equation of state at u-velocity points
   integer, dimension(2) :: EOSdom_v ! The i-computational domain for the equation of state at v-velocity points
@@ -1765,6 +1775,9 @@ subroutine PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, ha
 
   nullify(Rlay)
   if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
+  nullify(pbce, eta)
+  if (pbce_a%associated()) call pbce_a%view(pbce)
+  if (eta_a%associated()) call eta_a%view(eta)
 
   ! TODO: This would be done outside of the function!
 
@@ -2095,10 +2108,10 @@ subroutine PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, ha
     !$omp end target data
   endif
 
-  if (present(pbce)) then
+  if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
     call set_pbce_Bouss(e, use_EOS, G, GV, US, vgrid, rho0_set_pbce, CS%GFS_scale, pbce, c_loc(ctx%pbce), &
-                        nkblock=nkblock)
+                        rho_star_a=rho_star_a, nkblock=nkblock)
   endif
 
   call FV_Bouss_tv_exit_data_host(host, use_EOS, EOSdom2d)
@@ -2109,7 +2122,7 @@ subroutine PressureForce_FV_Bouss(h, use_EOS, PFu, PFv, G, GV, US, CS, vgrid, ha
   !$omp   map(delete: pa, dpa) &
   !$omp   map(delete: intx_pa, inty_pa, intx_dpa, inty_dpa, intz_dpa)
 
-  if (present(eta)) then
+  if (eta_a%associated()) then
     ! eta is the sea surface height relative to a time-invariant geoid, for comparison with
     ! what is used for eta in btstep.  See how e was calculated about 200 lines above.
     do concurrent (j=Jsq:Jeq+1, i=Isq:Ieq+1)
