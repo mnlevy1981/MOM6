@@ -255,6 +255,7 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
     PFv_bc3d_a  !< Meridional accelerations due to pressure gradients
                 !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
+  type(Box_t) :: bxH0_sk ! bxH0 with its k start moved in, [isc:iec, jsc:jec, 2:nz]
   type(Box_t) :: bxQ0_pij ! bxQ0 grown at its i and j ends, [IscB:IecB+1, JscB:JecB+1, 1:nz]
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
     M, &          ! The Montgomery potential, M = (p/rho + gz)  [L2 T-2 ~> m2 s-2].
@@ -300,6 +301,7 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   integer :: i, j, k
   is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; js = bxH0%idxS(2) ; je = bxH0%idxE(2) ; nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
+  bxH0_sk = bxH0%growLo(3,-1)
   bxQ0_pij = bxQ0%growBy(lo=[0,0,0], hi=[1,1,0])
 
   nullify(Rlay)
@@ -333,8 +335,8 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
 
   I_gEarth = 1.0 / g_Earth
   dp_neglect = g_Earth * H_to_RZ * H_subroundoff
-  do concurrent (k=1:nz) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-  do concurrent (k=2:nz) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+  do concurrent (k=bxH0%idxS(3):bxH0%idxE(3)) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
+  do concurrent (k=bxH0_sk%idxS(3):bxH0_sk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
     do concurrent (j=bxQ0_pij%idxS(2):bxQ0_pij%idxE(2), &
@@ -479,7 +481,7 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
       enddo
     enddo ! k-loop
   else ! .not. use_EOS
-    do concurrent (k=1:nz)
+    do concurrent (k=bxH0%idxS(3):bxH0%idxE(3))
       do concurrent (j=js:je, I=Isq:Ieq)
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j)
       enddo
@@ -490,7 +492,7 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   endif ! use_EOS
 
   call p_a%free() ; call alpha_star_a%free()
-  call bxQ0_pij%free()
+  call bxQ0_pij%free() ; call bxH0_sk%free()
 end subroutine PressureForce_Mont_nonBouss
 
 !> The Fortran-only work PressureForce_Mont_nonBouss needs done before it: checks that the module is initialized
@@ -761,7 +763,7 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
       enddo
     enddo ! k-loop
   else ! .not. use_EOS
-    do concurrent (k=1:nz)
+    do concurrent (k=bxH0%idxS(3):bxH0%idxE(3))
       do concurrent (j=js:je, I=Isq:Ieq)
         PFu(I,j,k) = -(M(i+1,j,k) - M(i,j,k)) * IdxCu(I,j)
       enddo

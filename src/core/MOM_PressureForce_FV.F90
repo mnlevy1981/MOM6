@@ -622,7 +622,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
       enddo
     endif
 
-    do concurrent (k=1:nz)
+    do concurrent (k=bxH0%idxS(3):bxH0%idxE(3))
       do concurrent (j=js:je, I=Isq:Ieq)
         PFu(I,j,k) = PFu(I,j,k) - (dM(i+1,j) - dM(i,j)) * IdxCu(I,j)
       enddo
