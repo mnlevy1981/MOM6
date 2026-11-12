@@ -19,7 +19,10 @@ Checks, per Phase 3 target:
   1. every dummy can cross bind(C) (container/box, non-pointer scalar, grid_core_type/grid_OBC_type,
      a derived type with a bind(C) mirror, a converter AND a record_* capture helper, all three
      covering every field of the type, the OBC pointer, or one opaque host-context
-     `type(c_ptr) :: host` dummy that reaches Fortran-only helpers);
+     `type(c_ptr) :: host` dummy that reaches Fortran-only helpers).  The three are looked up in
+     the module that defines the type: the file itself, or, for a type the file imports with `use`,
+     the imported module's source (found under the repository's src/ and config_src/), where all
+     three must also be public;
   2. no Fortran-only work in the body (diagnostics, halo passes incl. pass_var/pass_vector,
      checksums, reporting, any --forbid call, %alloc/%free/%rebound of a dummy or a component of one
      (local scratch containers are allowed),
@@ -29,6 +32,7 @@ and, for the per-column primitives:
   4. no tv/VarMix/G/GV/US dummies (OBC pointer allowed).
 Prints PASS/FAIL per item and exits non-zero if anything fails.
 """
+import os
 import re
 import sys
 import argparse
@@ -43,22 +47,30 @@ src = open(opts.file).read()
 TARGETS = [t for t in opts.targets.split(',') if t]
 PRIMITIVES = [p for p in opts.primitives.split(',') if p]
 
-mirrors = {m.lower() for m in re.findall(r'^type, bind\(C\) :: (\w+)', src, re.M)}
-converters = {}
-for m in re.finditer(r'^function (\w+_to_c)\((\w+)\) result\(\w+\)\n((?:.*\n){1,3})', src, re.M):
-    t = re.search(r'type\((\w+)\)', m.group(3))
-    if t: converters[t.group(1).lower()] = m.group(1)
-recorders = {}
-for m in re.finditer(r'^subroutine (record_\w+)\((.*?)\)\s*$(.*?)^end subroutine \1', src, re.M | re.S):
-    args = [a.strip().lower() for a in m.group(2).split(',')]
-    for d in re.finditer(r'type\((\w+)\)[^:\n]*::\s*(\w+)', m.group(3)):
-        if d.group(2).lower() in args[1:]:
-            recorders.setdefault(d.group(1).lower(), (m.group(1), d.group(2), m.group(3)))
+
+def groups(text):
+    """bind(C) mirrors, converters and record_* capture helpers defined in one module's source."""
+    mirrors = {m.lower() for m in re.findall(r'^type\s*,\s*bind\(C\)(?:\s*,\s*public)?\s*::\s*(\w+)', text,
+                                             re.M | re.I)}
+    converters = {}
+    for m in re.finditer(r'^function (\w+_to_c)\((\w+)\) result\(\w+\)\n((?:.*\n){1,3})', text, re.M):
+        t = re.search(r'type\((\w+)\)', m.group(3))
+        if t: converters[t.group(1).lower()] = m.group(1)
+    recorders = {}
+    for m in re.finditer(r'^subroutine (record_\w+)\((.*?)\)\s*$(.*?)^end subroutine \1', text, re.M | re.S):
+        args = [a.strip().lower() for a in m.group(2).split(',')]
+        for d in re.finditer(r'type\((\w+)\)[^:\n]*::\s*(\w+)', m.group(3)):
+            if d.group(2).lower() in args[1:]:
+                recorders.setdefault(d.group(1).lower(), (m.group(1), d.group(2), m.group(3)))
+    return mirrors, converters, recorders
 
 
-def type_fields(tn):
+mirrors, converters, recorders = groups(src)
+
+
+def type_fields(tn, text=src):
     """Component names of derived type tn, lowercased, with a container's `_a` suffix dropped."""
-    m = re.search(r'^type\b[^\n]*::\s*' + tn + r'\b.*?^end type', src, re.M | re.S | re.I)
+    m = re.search(r'^type\b[^\n]*::\s*' + tn + r'\b.*?^end type', text, re.M | re.S | re.I)
     if not m: return None
     out = []
     for l in m.group(0).split('\n')[1:-1]:
@@ -68,18 +80,71 @@ def type_fields(tn):
     return set(out)
 
 
-def group_gaps(tn, mc):
+def group_gaps(tn, mc, text=src, grp=None):
     """Fields of tn missing from its mirror, converter or capture helper."""
+    _, conv_of, rec_of = grp or (mirrors, converters, recorders)
     gaps = []
-    tf, mf = type_fields(tn), type_fields(mc)
+    tf, mf = type_fields(tn, text), type_fields(mc, text)
     if tf != mf: gaps.append('mirror fields differ: %s' % sorted(tf ^ mf))
-    conv = re.search(r'^function ' + converters[tn] + r'\(.*?^end function', src, re.M | re.S).group(0)
+    conv = re.search(r'^function ' + conv_of[tn] + r'\(.*?^end function', text, re.M | re.S).group(0)
     set_ = {re.sub(r'_a$', '', f.lower()) for f in re.findall(r'cdesc%(\w+)\s*=', conv)}
     if mf - set_: gaps.append('converter misses %s' % sorted(mf - set_))
-    name, arg, body = recorders[tn]
+    name, arg, body = rec_of[tn]
     seen = {re.sub(r'_a$', '', f.lower()) for f in re.findall(arg + r'%(\w+)', body, re.I)}
     if tf - seen: gaps.append('%s misses %s' % (name, sorted(tf - seen)))
     return gaps
+
+
+_module_index = None
+
+
+def module_source(name):
+    """Source text of Fortran module `name`, searched under the repository's src/ and config_src/."""
+    global _module_index
+    if _module_index is None:
+        _module_index = {}
+        root = d = os.path.dirname(os.path.abspath(opts.file))
+        while os.path.dirname(d) != d:
+            if os.path.isdir(os.path.join(d, 'src')) and os.path.isdir(os.path.join(d, 'config_src')):
+                root = d
+                break
+            d = os.path.dirname(d)
+        for top in ('src', 'config_src'):
+            for dirpath, _, files in sorted(os.walk(os.path.join(root, top))):
+                for fn in sorted(files):
+                    if not fn.endswith(('.F90', '.f90')): continue
+                    path = os.path.join(dirpath, fn)
+                    text = open(path, errors='replace').read()
+                    for mod in re.findall(r'^\s*module\s+(\w+)\s*$', text, re.M | re.I):
+                        _module_index.setdefault(mod.lower(), path)
+    path = _module_index.get(name.lower())
+    return open(path, errors='replace').read() if path else None
+
+
+def type_home(tn):
+    """(module name, its source, the type's name there) for a type this file imports with `use`."""
+    for st in stmts(src):
+        m = re.match(r'\s*use\s+(\w+)\s*(?:,\s*only\s*:(.*))?$', st, re.I)
+        if not m: continue
+        remote = tn
+        if m.group(2) is not None:
+            names = {}
+            for item in m.group(2).split(','):
+                local, _, rem = item.partition('=>')
+                names[local.strip().lower()] = (rem or local).strip().lower()
+            if tn not in names: continue
+            remote = names[tn]
+        text = module_source(m.group(1))
+        if text and type_fields(remote, text) is not None:
+            return m.group(1), text, remote
+    return None
+
+
+def is_public(name, text):
+    """Whether `name` is accessible from a module that uses the one whose source is text."""
+    if not re.search(r'^\s*(implicit none\s*;\s*)?private\s*$', text, re.M | re.I): return True
+    return bool(re.search(r'^\s*public\b[^\n]*\b' + name + r'\b', text, re.M | re.I) or
+                re.search(r'^type\s*,[^\n]*\bpublic\b[^\n]*::\s*' + name + r'\b', text, re.M | re.I))
 
 
 def sub(name):
@@ -112,10 +177,29 @@ def dummy_types(t):
     return [(n, decl.get(n.lower(), '?')) for n in names]
 
 
-def mirror_of(tn):
+def mirror_of(tn, mset=None):
     tn = tn.lower()
-    cands = {tn + '_c', tn.replace('_type', '_c'), tn.replace('_cs', '_c')}
-    return next((c for c in cands if c in mirrors), None)
+    cands = {tn + '_c', tn.replace('_type', '_c'), tn.replace('_cs', '_c')} - {tn}  # never its own mirror
+    return next((c for c in cands if c in (mirrors if mset is None else mset)), None)
+
+
+def foreign_group(tn):
+    """classify() for a derived type defined in a module this file uses, not in the file itself."""
+    home = type_home(tn)
+    if home is None: return False, 'no bind(C) mirror for %s' % tn
+    mod, text, rtn = home
+    grp = groups(text)
+    mset, conv_of, rec_of = grp
+    mc = mirror_of(rtn, mset)
+    if not mc: return False, 'no bind(C) mirror for %s' % tn
+    if rtn not in conv_of: return False, 'mirror %s but no converter (module %s)' % (mc, mod)
+    if rtn not in rec_of: return False, 'mirror %s + %s but no record_* capture helper (module %s)' % (
+        mc, conv_of[rtn], mod)
+    gaps = group_gaps(rtn, mc, text, grp)
+    hidden = [n for n in (mc, conv_of[rtn], rec_of[rtn][0]) if not is_public(n, text)]
+    if hidden: gaps.append('not public in %s: %s' % (mod, ', '.join(hidden)))
+    if gaps: return False, '; '.join(gaps)
+    return True, 'mirror %s + %s + %s (module %s)' % (mc, conv_of[rtn], rec_of[rtn][0], mod)
 
 
 def classify(name, typ):
@@ -129,6 +213,7 @@ def classify(name, typ):
         if tn in ('grid_core_type', 'grid_obc_type'): return True, 'persistent grid group, %C mirror'
         if tn == 'ocean_obc_type' and 'pointer' in tl: return True, 'OBC -> c_ptr'
         if tn == 'c_ptr' and name.lower() == 'host': return True, 'host context -> c_ptr'
+        if type_fields(tn) is None and not mirror_of(tn): return foreign_group(tn)
         mc = mirror_of(tn)
         if mc and tn in converters and tn in recorders:
             gaps = group_gaps(tn, mc)
