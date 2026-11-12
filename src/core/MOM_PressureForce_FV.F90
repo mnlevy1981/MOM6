@@ -42,6 +42,7 @@ public PressureForce_FV_init
 public PressureForce_FV_Bouss, PressureForce_FV_nonBouss
 public PressureForce_FV_Bouss_pre, PressureForce_FV_Bouss_post
 public PressureForce_FV_nonBouss_pre, PressureForce_FV_nonBouss_post
+public PF_FV_opts_CS_C, PF_FV_opts_CS_to_c, record_PF_FV_opts_CS
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
 ! consistency testing. These are noted in comments with units like Z, H, L, and T, along with

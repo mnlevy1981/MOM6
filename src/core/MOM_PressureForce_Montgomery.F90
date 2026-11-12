@@ -33,6 +33,7 @@ public PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss, Set_pbce_Bouss
 public Set_pbce_nonBouss, PressureForce_Mont_init
 public PressureForce_Mont_Bouss_pre, PressureForce_Mont_Bouss_post
 public PressureForce_Mont_nonBouss_pre, PressureForce_Mont_nonBouss_post
+public PF_Mont_opts_CS_C, PF_Mont_opts_CS_to_c, record_PF_Mont_opts_CS
 public PF_vgrid_consts_CS_C, PF_vgrid_consts_build, record_PF_vgrid_consts_CS
 #ifdef _TIM
 public PF_vgrid_consts_CS_to_c
