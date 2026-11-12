@@ -253,7 +253,7 @@ end subroutine record_PF_FV_opts_CS
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, isd, IsdB, Z_ref, g_Earth, &
+subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, Z_ref, g_Earth, &
                                      H_to_RZ, H_subroundoff, semi_Boussinesq, CS, vgrid, have_ALE_CSp, p_atm_a, host, &
                                      e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, &
                                      pbce_a, eta_a)
@@ -262,6 +262,8 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
                                                                   !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),                                intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
                                                                   !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),                                intent(in)  :: bxU0 !< The u-point box of the whole column,
+                                                                  !! [IscB:IecB, jsc:jec, 1:nz]
   integer,                                    intent(in)  :: isd !< The start i-index of cell centers within the data
                                                                  !! domain
   integer,                                    intent(in)  :: IsdB !< The start i-index of cell vertices within the data
@@ -467,7 +469,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
         dza(i,j,k) = alpha_anom * dp(i,j)
         intp_dza(i,j,k) = 0.5 * alpha_anom * dp(i,j)**2
       enddo
-      do concurrent (j=js:je, I=Isq:Ieq)
+      do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         intx_dza(i,j,k) = 0.5 * alpha_anom * (dp(i,j)+dp(i+1,j))
       enddo
       do concurrent (J=Jsq:Jeq, i=is:ie)
@@ -559,7 +561,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
     ! linearly between the values at thickness points, but the bottom geopotentials
     ! will not now be linear at the sub-grid-scale.  Doing this ensures no motion
     ! with flat isopycnals, even with a nonlinear equation of state.
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       intx_za(I,j,1) = 0.5*(za(i,j,1) + za(i+1,j,1))
     enddo
     do concurrent (J=Jsq:Jeq, i=is:ie)
@@ -568,7 +570,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   endif
 
   do k=1,nz
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       intx_za(I,j,K+1) = intx_za(I,j,K) - intx_dza(I,j,k)
     enddo
   enddo
@@ -595,7 +597,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
     ! Find the horizontal pressure gradient accelerations.
     ! These expressions for the accelerations have been carefully checked in
     ! a set of idealized cases, and should be bug-free.
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       PFu(I,j,k) = ( ((za(i,j,K+1)*dp(i,j) + intp_dza(i,j,k)) - &
                       (za(i+1,j,K+1)*dp(i+1,j) + intp_dza(i+1,j,k))) + &
                      ((dp(i+1,j) - dp(i,j)) * intx_za(I,j,K+1) - &
@@ -623,7 +625,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
     endif
 
     do concurrent (k=bxH0%idxS(3):bxH0%idxE(3))
-      do concurrent (j=js:je, I=Isq:Ieq)
+      do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         PFu(I,j,k) = PFu(I,j,k) - (dM(i+1,j) - dM(i,j)) * IdxCu(I,j)
       enddo
       do concurrent (J=Jsq:Jeq, i=is:ie)
@@ -634,7 +636,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
 
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call set_pbce_nonBouss(p_a, use_EOS, bxQ0, g_Earth, H_to_RZ, H_subroundoff, vgrid, CS%GFS_scale, pbce_a, &
+    call set_pbce_nonBouss(bxQ0, p_a, use_EOS, g_Earth, H_to_RZ, H_subroundoff, vgrid, CS%GFS_scale, pbce_a, &
                            c_loc(ctx%pbce), alpha_star_a)
   endif
 
@@ -1693,7 +1695,7 @@ end subroutine FV_nonBouss_chksum_int_za_host
 !! To work, the following fields must be set outside of the usual (is:ie,js:je)
 !! range before this subroutine is called:
 !!   h(isB:ie+1,jsB:je+1), T(isB:ie+1,jsB:je+1), and S(isB:ie+1,jsB:je+1).
-subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, isd, IsdB, jsd, Z_ref, g_Earth, &
+subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, h_a, use_EOS, PFu_a, PFv_a, Gcore, isd, IsdB, jsd, Z_ref, g_Earth, &
                                   H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, CS, vgrid, have_ALE_CSp, &
                                   p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
                                   MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a)
@@ -1702,6 +1704,8 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
                                                                   !! [isc:iec, jsc:jec, 1:nz]
   type(Box_t),                                intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
                                                                   !! [IscB:IecB, JscB:JecB, 1:nz]
+  type(Box_t),                                intent(in)  :: bxU0 !< The u-point box of the whole column,
+                                                                  !! [IscB:IecB, jsc:jec, 1:nz]
   integer,                                    intent(in)  :: isd !< The start i-index of cell centers within the data
                                                                  !! domain
   integer,                                    intent(in)  :: IsdB !< The start i-index of cell vertices within the data
@@ -2008,7 +2012,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
         dpa(i,j,k) = (Rlay(k) - rho_ref) * dz_geo(i,j)
         intz_dpa(i,j,k) = 0.5*(Rlay(k) - rho_ref) * dz_geo(i,j)*h(i,j,k)
       enddo
-      do concurrent (j=js:je, I=Isq:Ieq)
+      do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
         intx_dpa(I,j,k) = 0.5*(Rlay(k) - rho_ref) * (dz_geo(i,j) + dz_geo(i+1,j))
       enddo
       do concurrent (J=Jsq:Jeq, i=is:ie)
@@ -2071,7 +2075,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
     ! assuming that the surface pressure anomaly varies linearly in x and y.
     ! If there is an ice-shelf or icebergs, this linear variation would need to be applied
     ! to an interior interface.
-    do concurrent (j=js:je, I=Isq:Ieq)
+    do concurrent (j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       intx_pa(I,j,1) = 0.5*(pa(i,j,1) + pa(i+1,j,1))
     enddo
     do concurrent (J=Jsq:Jeq, i=is:ie)
@@ -2079,9 +2083,9 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
     enddo
   endif
 
-  do concurrent (j=js:je)
+  do concurrent (j=bxU0%idxS(2):bxU0%idxE(2))
     do k=1,nz
-      do concurrent (I=Isq:Ieq)
+      do concurrent (I=bxU0%idxS(1):bxU0%idxE(1))
         intx_pa(I,j,K+1) = intx_pa(I,j,K) + intx_dpa(I,j,k)
       enddo
     enddo
@@ -2107,7 +2111,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
 
   ! NOTE: e_sal condition could be sharpened, but this is close enough.
 
-  do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+  do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
     PFu(I,j,k) = (((pa(i,j,K)*h(i,j,k) + intz_dpa(i,j,k)) - &
                    (pa(i+1,j,K)*h(i+1,j,k) + intz_dpa(i+1,j,k))) + &
                   ((h(i+1,j,k) - h(i,j,k)) * intx_pa(I,j,K) - &
@@ -2130,7 +2134,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
     ! Calculate SAL geopotential anomaly and add its gradient to pressure
     ! gradient force
     if (CS%calculate_SAL) then
-      do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+      do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
           PFu(I,j,k) = PFu(I,j,k) + (e_sal(i+1,j) - e_sal(i,j)) * g_Earth * IdxCu(I,j)
       enddo
       do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
@@ -2141,7 +2145,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
     ! Calculate tidal geopotential anomaly and add its gradient to pressure
     ! gradient force
     if (CS%tides) then
-      do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+      do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
           PFu(I,j,k) = PFu(I,j,k) + ((e_tidal_eq(i+1,j) + e_tidal_sal(i+1,j)) &
               - (e_tidal_eq(i,j) + e_tidal_sal(i,j))) * g_Earth * IdxCu(I,j)
       enddo
@@ -2163,7 +2167,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
       enddo
     endif
 
-    do concurrent (k=1:nz, j=js:je, I=Isq:Ieq)
+    do concurrent (k=bxU0%idxS(3):bxU0%idxE(3), j=bxU0%idxS(2):bxU0%idxE(2), I=bxU0%idxS(1):bxU0%idxE(1))
       PFu(I,j,k) = PFu(I,j,k) - (dM(i+1,j) - dM(i,j)) * IdxCu(I,j)
     enddo
     do concurrent (k=1:nz, J=Jsq:Jeq, i=is:ie)
@@ -2174,7 +2178,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
 
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call set_pbce_Bouss(e_a, use_EOS, bxQ0, H_to_Z, dZ_subroundoff, vgrid, rho0_set_pbce, CS%GFS_scale, pbce_a, &
+    call set_pbce_Bouss(bxQ0, e_a, use_EOS, H_to_Z, dZ_subroundoff, vgrid, rho0_set_pbce, CS%GFS_scale, pbce_a, &
                         c_loc(ctx%pbce), rho_star_a=rho_star_a, nkblock=nkblock)
   endif
 
