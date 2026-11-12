@@ -261,7 +261,8 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use
     PFv_bc3d_a  !< Meridional accelerations due to pressure gradients
                 !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
-  type(Box_t) :: bxH0_sk ! bxH0 with its k start moved in, [isc:iec, jsc:jec, 2:nz]
+  type(Box_t) :: bxHdalpha ! The interior interfaces of bxH0, [isc:iec, jsc:jec, 2:nz], where dalpha_int, the
+                           ! change in specific volume across an interface, is defined; only k is iterated.
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
     M, &          ! The Montgomery potential, M = (p/rho + gz)  [L2 T-2 ~> m2 s-2].
     dz_geo        !   The change in geopotential across a layer [L2 T-2 ~> m2 s-2].
@@ -306,7 +307,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use
   integer :: i, j, k
   nz = bxH0%idxE(3)
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
-  bxH0_sk = bxH0%growLo(3,-1)
+  bxHdalpha = bxH0%growLo(3,-1)
 
   nullify(Rlay)
   if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
@@ -340,7 +341,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use
   I_gEarth = 1.0 / g_Earth
   dp_neglect = g_Earth * H_to_RZ * H_subroundoff
   do concurrent (k=bxH0%idxS(3):bxH0%idxE(3)) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-  do concurrent (k=bxH0_sk%idxS(3):bxH0_sk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+  do concurrent (k=bxHdalpha%idxS(3):bxHdalpha%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
   if (use_p_atm) then
     do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2), &
@@ -496,7 +497,7 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use
   endif ! use_EOS
 
   call p_a%free() ; call alpha_star_a%free()
-  call bxH0_sk%free()
+  call bxHdalpha%free()
 end subroutine PressureForce_Mont_nonBouss
 
 !> The Fortran-only work PressureForce_Mont_nonBouss needs done before it: checks that the module is initialized
@@ -982,7 +983,9 @@ subroutine Set_pbce_nonBouss(bxQ0, bxHgrad, p_a, use_EOS, g_Earth, H_to_RZ, H_su
   type(RealArray_t),                    intent(in)  :: alpha_star_a !< The layer specific volumes
                                                           !! (maybe compressibility compensated) [R-1 ~> m3 kg-1].
   ! Local variables
-  type(Box_t) :: bxQ0_sk ! bxQ0 with its k start moved in, [IscB:IecB, JscB:JecB, 2:nz]
+  type(Box_t) :: bxHdalpha ! The interior interfaces of bxHgrad, [IscB:IecB+1, JscB:JecB+1, 2:nz], where
+                           ! dalpha_int, the change in specific volume across an interface, is defined; only k
+                           ! is iterated.
   real, dimension(p_a%lb(1):p_a%ub(1),p_a%lb(2):p_a%ub(2)) :: &
     dpbce, &      !   A barotropic correction to the pbce to enable the use of
                   ! a reduced gravity form of the equations [L2 H-1 T-2 ~> m4 kg-1 s-2].
@@ -1000,7 +1003,7 @@ subroutine Set_pbce_nonBouss(bxQ0, bxHgrad, p_a, use_EOS, g_Earth, H_to_RZ, H_su
   integer :: Isq, Ieq, Jsq, Jeq, nz, i, j, k
 
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2) ; nz = bxQ0%idxE(3)
-  bxQ0_sk = bxQ0%growLo(3,-1)
+  bxHdalpha = bxHgrad%growLo(3,-1)
 
   nullify(Rlay)
   if (vgrid%Rlay_a%associated()) call vgrid%Rlay_a%view(Rlay)
@@ -1030,7 +1033,7 @@ subroutine Set_pbce_nonBouss(bxQ0, bxHgrad, p_a, use_EOS, g_Earth, H_to_RZ, H_su
   else ! not use_EOS
 
     do concurrent (k=bxQ0%idxS(3):bxQ0%idxE(3)) ; alpha_Lay(k) = 1.0 / (Rlay(k)) ; enddo
-    do concurrent (k=bxQ0_sk%idxS(3):bxQ0_sk%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
+    do concurrent (k=bxHdalpha%idxS(3):bxHdalpha%idxE(3)) ; dalpha_int(K) = alpha_Lay(k-1) - alpha_Lay(k) ; enddo
 
     do concurrent (j=bxHgrad%idxS(2):bxHgrad%idxE(2)) DO_LOCALITY(local(k))
       do concurrent (i=bxHgrad%idxS(1):bxHgrad%idxE(1))
@@ -1053,7 +1056,7 @@ subroutine Set_pbce_nonBouss(bxQ0, bxHgrad, p_a, use_EOS, g_Earth, H_to_RZ, H_su
       pbce(i,j,k) = pbce(i,j,k) + dpbce(i,j)
     enddo
   endif
-  call bxQ0_sk%free()
+  call bxHdalpha%free()
 
 end subroutine Set_pbce_nonBouss
 

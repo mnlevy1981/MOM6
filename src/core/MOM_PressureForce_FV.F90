@@ -1778,7 +1778,8 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS,
                                                          !! calculate PFu and PFv [H ~> m], with any
                                                          !! tidal contributions.
   ! Local variables
-  type(Box_t) :: bxQ0_pijk ! bxQ0 grown at its i, j and k ends, [IscB:IecB+1, JscB:JecB+1, 1:nz+1]
+  type(Box_t) :: bxHintf ! The bxHgrad points at all nz+1 interfaces, [IscB:IecB+1, JscB:JecB+1, 1:nz+1],
+                         ! where e and pa get their SAL and tidal corrections: one level more than the layers.
   type(RealArray_t) :: e_a ! Interface height in depth units [Z ~> m].
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2))  :: &
     Z_0p, &       ! The height at which the pressure used in the equation of state is 0 [Z ~> m]
@@ -1848,7 +1849,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS,
   is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; js = bxH0%idxS(2) ; je = bxH0%idxE(2) ; nz = bxH0%idxE(3)
   nkblock = CS%nkblock ; if (nkblock <= 0) nkblock = nz
   Isq = bxQ0%idxS(1) ; Ieq = bxQ0%idxE(1) ; Jsq = bxQ0%idxS(2) ; Jeq = bxQ0%idxE(2)
-  bxQ0_pijk = bxQ0%growBy(lo=[0,0,0], hi=[1,1,1])
+  bxHintf = bxHgrad%growHi(3,1)
   EOSdom(1) = Isq - (isd-1) ;  EOSdom(2) = bxH0%idxE(1)+1 - (isd-1)
   EOSdom_u(1) = Isq - (IsdB-1) ; EOSdom_u(2) = Ieq - (IsdB-1)
   EOSdom_v(1) = is - (isd-1)   ; EOSdom_v(2) = ie - (isd-1)
@@ -2048,9 +2049,9 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS,
       enddo
       call FV_calc_SAL_host(host, SSH, e_sal)
     endif
-    if (.not.CS%bq_sal_tides) then ; do concurrent (K=bxQ0_pijk%idxS(3):bxQ0_pijk%idxE(3), &
-                                                    j=bxQ0_pijk%idxS(2):bxQ0_pijk%idxE(2), &
-                                                    i=bxQ0_pijk%idxS(1):bxQ0_pijk%idxE(1))
+    if (.not.CS%bq_sal_tides) then ; do concurrent (K=bxHintf%idxS(3):bxHintf%idxE(3), &
+                                                    j=bxHintf%idxS(2):bxHintf%idxE(2), &
+                                                    i=bxHintf%idxS(1):bxHintf%idxE(1))
         e(i,j,K) = e(i,j,K) - e_sal(i,j)
         pa(i,j,K) = pa(i,j,K) - GxRho_ref * e_sal(i,j)
     enddo ; endif
@@ -2058,9 +2059,9 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS,
 
   ! Calculate and add tidal geopotential anomaly to interface height (new answers)
   if (CS%tides .and. CS%tides_answer_date>20250131) then
-    if (.not.CS%bq_sal_tides) then ; do concurrent (K=bxQ0_pijk%idxS(3):bxQ0_pijk%idxE(3), &
-                                                    j=bxQ0_pijk%idxS(2):bxQ0_pijk%idxE(2), &
-                                                    i=bxQ0_pijk%idxS(1):bxQ0_pijk%idxE(1))
+    if (.not.CS%bq_sal_tides) then ; do concurrent (K=bxHintf%idxS(3):bxHintf%idxE(3), &
+                                                    j=bxHintf%idxS(2):bxHintf%idxE(2), &
+                                                    i=bxHintf%idxS(1):bxHintf%idxE(1))
         e(i,j,K) = e(i,j,K) - (e_tidal_eq(i,j) + e_tidal_sal(i,j))
         pa(i,j,K) = pa(i,j,K) - GxRho_ref * (e_tidal_eq(i,j) + e_tidal_sal(i,j))
     enddo ; endif
@@ -2214,7 +2215,7 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS,
   endif
 
   call e_a%free()
-  call bxQ0_pijk%free()
+  call bxHintf%free()
 end subroutine PressureForce_FV_Bouss
 
 !> The Fortran-only work PressureForce_FV_Bouss needs done before it: checks that the module is initialized
