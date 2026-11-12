@@ -76,24 +76,26 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
                  optional, intent(out) :: eta  !< The bottom mass used to calculate PFu and PFv,
                                                !! [H ~> m or kg m-2], with any tidal contributions.
   ! Local variables
-  real, dimension(SZI_(G),SZJ_(G)) :: &
-    e_sal, &          ! The bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
-    e_tidal_eq, &     ! The bottom geopotential anomaly due to tidal forces from astronomical sources [Z ~> m].
-    e_tidal_sal, &    ! The bottom geopotential anomaly due to harmonic self-attraction and loading
+  type(RealArray_t) :: &
+    e_sal_a, &        ! The bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
+    e_tidal_eq_a, &   ! The bottom geopotential anomaly due to tidal forces from astronomical sources [Z ~> m].
+    e_tidal_sal_a, &  ! The bottom geopotential anomaly due to harmonic self-attraction and loading
                       ! specific to tides [Z ~> m].
-    e_sal_and_tide    ! The summation of self-attraction and loading and tidal forcing [Z ~> m].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
-    MassWt_u, &       ! The fractional mass weighting at a u-point [nondim].
-    intx_dpa          ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
-    MassWt_v, &       ! The fractional mass weighting at a v-point [nondim].
-    inty_dpa          ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+    e_sal_and_tide_a  ! The summation of self-attraction and loading and tidal forcing [Z ~> m].
+  type(RealArray_t) :: &
+    MassWt_u_a, &     ! The fractional mass weighting at a u-point [nondim].
+    intx_dpa_a        ! The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+  type(RealArray_t) :: &
+    MassWt_v_a, &     ! The fractional mass weighting at a v-point [nondim].
+    inty_dpa_a        ! The change in inty_pa through a layer [R L2 T-2 ~> Pa].
+  real, dimension(:,:),   contiguous, pointer :: e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide
+  real, dimension(:,:,:), contiguous, pointer :: MassWt_u, intx_dpa, MassWt_v, inty_dpa
   type(PF_FV_host_ctx),   target :: FV_ctx   ! The objects used by the finite volume form's host helpers
   type(PF_Mont_host_ctx), target :: Mont_ctx ! The objects used by the Montgomery potential form's host helpers
   type(c_ptr) :: host ! Opaque pointer to the host context of the form in use
   logical :: use_EOS ! If true, density is calculated from T & S using an equation of state.
-  type(RealArray_t) :: h_a, PFu_a, PFv_a, p_atm_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a
-  type(RealArray_t) :: MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a
+  type(RealArray_t) :: h_a, PFu_a, PFv_a, p_atm_a
+  type(RealArray_t) :: pbce_a, eta_a
   type(RealArray_t) :: PFu_bc3d_a, PFv_bc3d_a
   type(grid_core_type), pointer :: Gcore ! The persistent grid core containers
   type(Box_t) :: bxH0  ! The h-point box of the whole column, [isc:iec, jsc:jec, 1:nz]
@@ -112,6 +114,23 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   endif
 
   use_EOS = associated(tv%eqn_of_state)
+
+  call e_sal_a%alloc(lb=[LBOUND(h,1), LBOUND(h,2)], ub=[UBOUND(h,1), UBOUND(h,2)])
+  call e_sal_a%view(e_sal)
+  call e_tidal_eq_a%alloc(lb=[LBOUND(h,1), LBOUND(h,2)], ub=[UBOUND(h,1), UBOUND(h,2)])
+  call e_tidal_eq_a%view(e_tidal_eq)
+  call e_tidal_sal_a%alloc(lb=[LBOUND(h,1), LBOUND(h,2)], ub=[UBOUND(h,1), UBOUND(h,2)])
+  call e_tidal_sal_a%view(e_tidal_sal)
+  call e_sal_and_tide_a%alloc(lb=[LBOUND(h,1), LBOUND(h,2)], ub=[UBOUND(h,1), UBOUND(h,2)])
+  call e_sal_and_tide_a%view(e_sal_and_tide)
+  call MassWt_u_a%alloc(lb=LBOUND(PFu), ub=UBOUND(PFu))
+  call MassWt_u_a%view(MassWt_u)
+  call intx_dpa_a%alloc(lb=LBOUND(PFu), ub=UBOUND(PFu))
+  call intx_dpa_a%view(intx_dpa)
+  call MassWt_v_a%alloc(lb=LBOUND(PFv), ub=UBOUND(PFv))
+  call MassWt_v_a%view(MassWt_v)
+  call inty_dpa_a%alloc(lb=LBOUND(PFv), ub=UBOUND(PFv))
+  call inty_dpa_a%view(inty_dpa)
 
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
@@ -136,14 +155,6 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   call PFu_a%alloc(lb=LBOUND(PFu), ub=UBOUND(PFu), source=PFu)
   call PFv_a%alloc(lb=LBOUND(PFv), ub=UBOUND(PFv), source=PFv)
   if (associated(p_atm)) call p_atm_a%alloc(lb=LBOUND(p_atm), ub=UBOUND(p_atm), source=p_atm)
-  call e_sal_a%alloc(lb=LBOUND(e_sal), ub=UBOUND(e_sal), source=e_sal)
-  call e_tidal_eq_a%alloc(lb=LBOUND(e_tidal_eq), ub=UBOUND(e_tidal_eq), source=e_tidal_eq)
-  call e_tidal_sal_a%alloc(lb=LBOUND(e_tidal_sal), ub=UBOUND(e_tidal_sal), source=e_tidal_sal)
-  call e_sal_and_tide_a%alloc(lb=LBOUND(e_sal_and_tide), ub=UBOUND(e_sal_and_tide), source=e_sal_and_tide)
-  call MassWt_u_a%alloc(lb=LBOUND(MassWt_u), ub=UBOUND(MassWt_u), source=MassWt_u)
-  call MassWt_v_a%alloc(lb=LBOUND(MassWt_v), ub=UBOUND(MassWt_v), source=MassWt_v)
-  call intx_dpa_a%alloc(lb=LBOUND(intx_dpa), ub=UBOUND(intx_dpa), source=intx_dpa)
-  call inty_dpa_a%alloc(lb=LBOUND(inty_dpa), ub=UBOUND(inty_dpa), source=inty_dpa)
   if (present(pbce)) call pbce_a%alloc(lb=LBOUND(pbce), ub=UBOUND(pbce), source=pbce)
   if (present(eta)) call eta_a%alloc(lb=LBOUND(eta), ub=UBOUND(eta), source=eta)
   if (allocated(CS%PressureForce_Mont%PFu_bc)) &
@@ -164,21 +175,11 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
 
   call PFu_a%copy2F(PFu)
   call PFv_a%copy2F(PFv)
-  call e_sal_a%copy2F(e_sal)
-  call e_tidal_eq_a%copy2F(e_tidal_eq)
-  call e_tidal_sal_a%copy2F(e_tidal_sal)
-  call e_sal_and_tide_a%copy2F(e_sal_and_tide)
-  call MassWt_u_a%copy2F(MassWt_u)
-  call MassWt_v_a%copy2F(MassWt_v)
-  call intx_dpa_a%copy2F(intx_dpa)
-  call inty_dpa_a%copy2F(inty_dpa)
   if (present(pbce)) call pbce_a%copy2F(pbce)
   if (present(eta)) call eta_a%copy2F(eta)
   if (allocated(CS%PressureForce_Mont%PFu_bc)) call PFu_bc3d_a%copy2F(CS%PressureForce_Mont%PFu_bc)
   if (allocated(CS%PressureForce_Mont%PFv_bc)) call PFv_bc3d_a%copy2F(CS%PressureForce_Mont%PFv_bc)
   call h_a%free() ; call PFu_a%free() ; call PFv_a%free() ; call p_atm_a%free()
-  call e_sal_a%free() ; call e_tidal_eq_a%free() ; call e_tidal_sal_a%free() ; call e_sal_and_tide_a%free()
-  call MassWt_u_a%free() ; call MassWt_v_a%free() ; call intx_dpa_a%free() ; call inty_dpa_a%free()
   call pbce_a%free() ; call eta_a%free() ; call PFu_bc3d_a%free() ; call PFv_bc3d_a%free()
   call bxH0%free() ; call bxQ0%free()
 
@@ -197,6 +198,9 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
       call PressureForce_Mont_nonBouss_post(G, CS%PressureForce_Mont, e_sal, e_tidal_eq, e_tidal_sal)
     endif
   endif
+
+  call e_sal_a%free() ; call e_tidal_eq_a%free() ; call e_tidal_sal_a%free() ; call e_sal_and_tide_a%free()
+  call MassWt_u_a%free() ; call MassWt_v_a%free() ; call intx_dpa_a%free() ; call inty_dpa_a%free()
 
 end subroutine PressureForce
 

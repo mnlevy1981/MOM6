@@ -256,10 +256,9 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   ! Local variables
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
     M, &          ! The Montgomery potential, M = (p/rho + gz)  [L2 T-2 ~> m2 s-2].
-    alpha_star, & ! Compression adjusted specific volume [R-1 ~> m3 kg-1].
     dz_geo        !   The change in geopotential across a layer [L2 T-2 ~> m2 s-2].
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2), &
-                  bxH0%idxS(3):bxH0%idxE(3)+1) :: p ! Interface pressure [R L2 T-2 ~> Pa].
+  type(RealArray_t) :: alpha_star_a ! Compression adjusted specific volume [R-1 ~> m3 kg-1].
+  type(RealArray_t) :: p_a ! Interface pressure [R L2 T-2 ~> Pa].
                 ! p may be adjusted (with a nonlinear equation of state) so that
                 ! its derivative compensates for the adiabatic compressibility
                 ! in seawater, but p will still be close to the pressure.
@@ -290,12 +289,11 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
                                                   ! in each layer [R ~> kg m-3].
   real, dimension(:,:,:), contiguous, pointer :: pbce, PFu_bc3d, PFv_bc3d
-  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv
+  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, p, alpha_star
   real, dimension(:,:),   contiguous, pointer :: p_atm, e_sal, e_tide_eq, e_tide_sal
   real, dimension(:,:),   contiguous, pointer :: eta
   real, dimension(:,:),   contiguous, pointer :: IdxCu, IdyCv, bathyT, meanSL
   logical :: use_PFu_bc3d, use_PFv_bc3d
-  type(RealArray_t) :: alpha_star_a, p_a
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
   is = bxH0%idxS(1) ; ie = bxH0%idxE(1) ; js = bxH0%idxS(2) ; je = bxH0%idxE(2) ; nz = bxH0%idxE(3)
@@ -322,6 +320,10 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   call Gcore%IdyCv%view(IdyCv)
   call Gcore%bathyT%view(bathyT)
   call Gcore%meanSL%view(meanSL)
+  call p_a%alloc(lb=[h_a%lb(1), h_a%lb(2), bxH0%idxS(3)], ub=[h_a%ub(1), h_a%ub(2), bxH0%idxE(3)+1])
+  call p_a%view(p)
+  call alpha_star_a%alloc(lb=[h_a%lb(1), h_a%lb(2), h_a%lb(3)], ub=[h_a%ub(1), h_a%ub(2), h_a%ub(3)])
+  call alpha_star_a%view(alpha_star)
 
   use_p_atm = associated(p_atm)
   is_split = pbce_a%associated()
@@ -441,12 +443,8 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
   ! Note that ddM/dPb = alpha_star(i,j,1)
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call p_a%alloc(lb=LBOUND(p), ub=UBOUND(p), source=p)
-    call alpha_star_a%alloc(lb=LBOUND(alpha_star), ub=UBOUND(alpha_star), source=alpha_star)
     call Set_pbce_nonBouss(p_a, use_EOS, bxQ0, g_Earth, H_to_RZ, H_subroundoff, vgrid, CS%GFS_scale, pbce_a, &
                            c_loc(ctx%pbce), alpha_star_a)
-    call alpha_star_a%free()
-    call p_a%free()
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -483,6 +481,7 @@ subroutine PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, 
     enddo
   endif ! use_EOS
 
+  call p_a%free() ; call alpha_star_a%free()
 end subroutine PressureForce_Mont_nonBouss
 
 !> The Fortran-only work PressureForce_Mont_nonBouss needs done before it: checks that the module is initialized
@@ -596,11 +595,10 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
                 !! deriving from density gradients within layers [L T-2 ~> m s-2].
   ! Local variables
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
-    M, &        ! The Montgomery potential, M = (p/rho + gz) [L2 T-2 ~> m2 s-2].
-    rho_star    ! In-situ density divided by the derivative with depth of the
-                ! corrected e times (G_Earth/Rho0) [L2 Z-1 T-2 ~> m s-2].
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2), &
-                  bxH0%idxS(3):bxH0%idxE(3)+1) :: e ! Interface height [Z ~> m].
+    M           ! The Montgomery potential, M = (p/rho + gz) [L2 T-2 ~> m2 s-2].
+  type(RealArray_t) :: rho_star_a ! In-situ density divided by the derivative with depth of the
+                                  ! corrected e times (G_Earth/Rho0) [L2 Z-1 T-2 ~> m s-2].
+  type(RealArray_t) :: e_a ! Interface height [Z ~> m].
                 ! e may be adjusted (with a nonlinear equation of state) so that
                 ! its derivative compensates for the adiabatic compressibility
                 ! in seawater, but e will still be close to the interface depth.
@@ -619,12 +617,11 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
   type(PF_Mont_host_ctx), pointer :: ctx ! The objects behind host
   real, dimension(:), contiguous, pointer :: g_prime ! The reduced gravity at each interface [L2 Z-1 T-2 ~> m s-2].
   real, dimension(:,:,:), contiguous, pointer :: pbce, PFu_bc3d, PFv_bc3d
-  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv
+  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, e, rho_star
   real, dimension(:,:),   contiguous, pointer :: p_atm, e_sal, e_tide_eq, e_tide_sal
   real, dimension(:,:),   contiguous, pointer :: eta
   real, dimension(:,:),   contiguous, pointer :: IdxCu, IdyCv, bathyT, meanSL
   logical :: use_PFu_bc3d, use_PFv_bc3d
-  type(RealArray_t) :: rho_star_a, e_a
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
@@ -652,6 +649,10 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
   call Gcore%IdyCv%view(IdyCv)
   call Gcore%bathyT%view(bathyT)
   call Gcore%meanSL%view(meanSL)
+  call e_a%alloc(lb=[h_a%lb(1), h_a%lb(2), bxH0%idxS(3)], ub=[h_a%ub(1), h_a%ub(2), bxH0%idxE(3)+1])
+  call e_a%view(e)
+  call rho_star_a%alloc(lb=[h_a%lb(1), h_a%lb(2), h_a%lb(3)], ub=[h_a%ub(1), h_a%ub(2), h_a%ub(3)])
+  call rho_star_a%view(rho_star)
 
   use_p_atm = associated(p_atm)
   is_split = pbce_a%associated()
@@ -721,12 +722,8 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
 
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call e_a%alloc(lb=LBOUND(e), ub=UBOUND(e), source=e)
-    call rho_star_a%alloc(lb=LBOUND(rho_star), ub=UBOUND(rho_star), source=rho_star)
     call Set_pbce_Bouss(e_a, use_EOS, bxQ0, H_to_Z, dZ_subroundoff, vgrid, CS%Rho0, CS%GFS_scale, pbce_a, &
                         c_loc(ctx%pbce), rho_star_a, 1)
-    call rho_star_a%free()
-    call e_a%free()
   endif
 
 !    Calculate the pressure force. On a Cartesian grid,
@@ -781,6 +778,7 @@ subroutine PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ
     endif
   endif
 
+  call e_a%free() ; call rho_star_a%free()
 end subroutine PressureForce_Mont_Bouss
 
 !> The Fortran-only work PressureForce_Mont_Bouss needs done before it: checks that the module is initialized

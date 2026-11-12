@@ -317,8 +317,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   type(RealArray_t),                          intent(inout) :: eta_a !< The total column mass used to
                                                            !! calculate PFu and PFv [H ~> kg m-2].
   ! Local variables
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2), &
-                  bxH0%idxS(3):bxH0%idxE(3)+1) :: p ! Interface pressure [R L2 T-2 ~> Pa].
+  type(RealArray_t) :: p_a ! Interface pressure [R L2 T-2 ~> Pa].
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2),h_a%lb(3):h_a%ub(3)) :: &
     S_t, S_b, & ! Top and bottom edge values for linear reconstructions
                 ! of salinity within each layer [S ~> ppt].
@@ -367,11 +366,11 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
                                                   ! in each layer [R ~> kg m-3].
   real, dimension(:,:,:), contiguous, pointer :: pbce
-  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, MassWt_u, MassWt_v
+  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, MassWt_u, MassWt_v, p
   real, dimension(:,:),   contiguous, pointer :: p_atm, e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide
   real, dimension(:,:),   contiguous, pointer :: eta
   real, dimension(:,:),   contiguous, pointer :: IdxCu, IdyCv, bathyT, meanSL
-  type(RealArray_t) :: alpha_star_a, p_a
+  type(RealArray_t) :: alpha_star_a
 
   real :: alpha_ref     ! A reference specific volume [R-1 ~> m3 kg-1] that is used
                         ! to reduce the impact of truncation errors.
@@ -414,6 +413,8 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
   call Gcore%IdyCv%view(IdyCv)
   call Gcore%bathyT%view(bathyT)
   call Gcore%meanSL%view(meanSL)
+  call p_a%alloc(lb=[h_a%lb(1), h_a%lb(2), bxH0%idxS(3)], ub=[h_a%ub(1), h_a%ub(2), bxH0%idxE(3)+1])
+  call p_a%view(p)
 
   use_p_atm = associated(p_atm)
   use_ALE = .false.
@@ -629,10 +630,8 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
 
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call p_a%alloc(lb=LBOUND(p), ub=UBOUND(p), source=p)
     call set_pbce_nonBouss(p_a, use_EOS, bxQ0, g_Earth, H_to_RZ, H_subroundoff, vgrid, CS%GFS_scale, pbce_a, &
                            c_loc(ctx%pbce), alpha_star_a)
-    call p_a%free()
   endif
 
   if (eta_a%associated()) then
@@ -647,6 +646,7 @@ subroutine PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bx
       enddo ; enddo
     endif
   endif
+  call p_a%free()
 end subroutine PressureForce_FV_nonBouss
 
 !> The Fortran-only work PressureForce_FV_nonBouss needs done before it: checks that the module is initialized
@@ -1764,8 +1764,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
                                                          !! calculate PFu and PFv [H ~> m], with any
                                                          !! tidal contributions.
   ! Local variables
-  real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2), &
-                  bxH0%idxS(3):bxH0%idxE(3)+1) :: e ! Interface height in depth units [Z ~> m].
+  type(RealArray_t) :: e_a ! Interface height in depth units [Z ~> m].
   real, dimension(h_a%lb(1):h_a%ub(1),h_a%lb(2):h_a%ub(2))  :: &
     Z_0p, &       ! The height at which the pressure used in the equation of state is 0 [Z ~> m]
     SSH, &      ! Sea surfae height anomaly for self-attraction and loading. Used if
@@ -1818,11 +1817,11 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
   real, dimension(:), contiguous, pointer :: Rlay ! The target coordinate value (potential density)
                                                   ! in each layer [R ~> kg m-3].
   real, dimension(:,:,:), contiguous, pointer :: pbce
-  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, MassWt_u, MassWt_v, intx_dpa, inty_dpa
+  real, dimension(:,:,:), contiguous, pointer :: h, PFu, PFv, MassWt_u, MassWt_v, intx_dpa, inty_dpa, e
   real, dimension(:,:),   contiguous, pointer :: p_atm, e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide
   real, dimension(:,:),   contiguous, pointer :: eta
   real, dimension(:,:),   contiguous, pointer :: IdxCu, IdyCv, bathyT, meanSL
-  type(RealArray_t) :: rho_star_a, e_a
+  type(RealArray_t) :: rho_star_a
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
   integer, dimension(2) :: EOSdom_u ! The i-computational domain for the equation of state at u-velocity points
   integer, dimension(2) :: EOSdom_v ! The i-computational domain for the equation of state at v-velocity points
@@ -1863,6 +1862,8 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
   call Gcore%IdyCv%view(IdyCv)
   call Gcore%bathyT%view(bathyT)
   call Gcore%meanSL%view(meanSL)
+  call e_a%alloc(lb=[h_a%lb(1), h_a%lb(2), bxH0%idxS(3)], ub=[h_a%ub(1), h_a%ub(2), bxH0%idxE(3)+1])
+  call e_a%view(e)
 
   ! TODO: This would be done outside of the function!
 
@@ -2164,10 +2165,8 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
 
   if (pbce_a%associated()) then
     call c_f_pointer(host, ctx)
-    call e_a%alloc(lb=LBOUND(e), ub=UBOUND(e), source=e)
     call set_pbce_Bouss(e_a, use_EOS, bxQ0, H_to_Z, dZ_subroundoff, vgrid, rho0_set_pbce, CS%GFS_scale, pbce_a, &
                         c_loc(ctx%pbce), rho_star_a=rho_star_a, nkblock=nkblock)
-    call e_a%free()
   endif
 
   call FV_Bouss_tv_exit_data_host(host, use_EOS, EOSdom2d)
@@ -2198,6 +2197,7 @@ subroutine PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0,
     endif
   endif
 
+  call e_a%free()
 end subroutine PressureForce_FV_Bouss
 
 !> The Fortran-only work PressureForce_FV_Bouss needs done before it: checks that the module is initialized
