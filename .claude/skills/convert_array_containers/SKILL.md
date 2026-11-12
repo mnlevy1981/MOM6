@@ -115,8 +115,16 @@ theirs (lessons §1). Containerizing dummies (Step 1) may go top-down.
 
 A local (or a dummy left raw by decision) sized with `SZI_`/`SZJ_`/`SZK_`/`SZIB_`/`SZJB_` is
 re-sized dimension by dimension from a **mandatory** container dummy with the same extent in that
-dimension: `SZIB_(G)` → `u_a%lb(1):u_a%ub(1)`. Never from an `optional` dummy or a `%view` pointer.
-A dimension with no such dummy stays as it is; report it. If the result exceeds the line limit,
+dimension: `SZIB_(G)` → `u_a%lb(1):u_a%ub(1)`. Never from an `optional` dummy, a container the
+body tests with `%associated()` (it may hold no data; `convert_present_to_associated`), or a
+`%view` pointer.
+
+A dimension no such container matches takes its bounds from a `Box_t` dummy whose range in that
+dimension is the macro's, plus the macro's offset: `SZK_(GV)` is `1:nz`, which a whole-column box
+holds, so `SZK_(GV)+1` (layer interfaces) → `bxH0%idxS(3):bxH0%idxE(3)+1`. Tile scratch already
+takes its k-bounds from a box this way (lessons §5); declare the box dummy before the local. A
+compute-domain box never stands in for `SZI_`/`SZJ_`/`SZIB_`/`SZJB_`, which span the data domain.
+Only a dimension neither matches stays as it is; report it. If the result exceeds the line limit,
 change only line breaks (attribute form, `dimension(...) :: &`, keeps the comment intact).
 
 ### 4. Drop what the body no longer uses
@@ -152,8 +160,8 @@ dummy list; keyword arguments stay keyword arguments.
 
 - **Math unchanged:** every changed body statement differs from before only by a Step 1 rename
   or a Step 2 substitution.
-- **References gone:** the Step 2 grep comes back empty; no grid macro sizes a local that has a
-  mandatory container match.
+- **References gone:** the Step 2 grep comes back empty; no grid macro sizes a local dimension that
+  a mandatory container or a box dummy matches (Step 3).
 - **Declarations:** no undeclared names, no case-insensitive duplicates or clashes with a type
   name, every dummy declared.
 - **Calls:** count, order and container/raw kind match at every site.

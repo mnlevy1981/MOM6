@@ -10,16 +10,19 @@ use MOM_diag_mediator, only : diag_ctrl, time_type
 use MOM_error_handler, only : MOM_error, MOM_mesg, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : get_param, log_version, param_file_type
 use MOM_grid, only : ocean_grid_type
+use MOM_grid_containers, only : grid_core_type, grid_core
 use MOM_PressureForce_FV, only : PressureForce_FV_Bouss, PressureForce_FV_nonBouss
 use MOM_PressureForce_FV, only : PressureForce_FV_init
 use MOM_PressureForce_FV, only : PressureForce_FV_CS
 use MOM_PressureForce_FV, only : PF_FV_host_ctx
+use MOM_PressureForce_FV, only : PF_FV_opts_CS
 use MOM_PressureForce_FV, only : PressureForce_FV_Bouss_pre, PressureForce_FV_Bouss_post
 use MOM_PressureForce_FV, only : PressureForce_FV_nonBouss_pre, PressureForce_FV_nonBouss_post
 use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss
 use MOM_PressureForce_Mont, only : PressureForce_Mont_init
 use MOM_PressureForce_Mont, only : PressureForce_Mont_CS
 use MOM_PressureForce_Mont, only : PF_Mont_host_ctx
+use MOM_PressureForce_Mont, only : PF_Mont_opts_CS, PF_vgrid_consts_CS
 use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss_pre, PressureForce_Mont_Bouss_post
 use MOM_PressureForce_Mont, only : PressureForce_Mont_nonBouss_pre, PressureForce_Mont_nonBouss_post
 use MOM_self_attr_load, only : SAL_CS
@@ -29,6 +32,7 @@ use MOM_variables, only : thermo_var_ptrs, accel_diag_ptrs
 use MOM_verticalGrid, only : verticalGrid_type
 use MOM_ALE, only: ALE_CS
 use array_mod, only : RealArray_t
+use box_mod, only : Box_t
 use iso_c_binding, only : c_ptr, c_loc
 implicit none ; private
 
@@ -90,6 +94,10 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   logical :: use_EOS ! If true, density is calculated from T & S using an equation of state.
   type(RealArray_t) :: h_a, PFu_a, PFv_a, p_atm_a, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a
   type(RealArray_t) :: MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a
+  type(RealArray_t) :: PFu_bc3d_a, PFv_bc3d_a
+  type(grid_core_type), pointer :: Gcore ! The persistent grid core containers
+  type(Box_t) :: bxH0  ! The h-point box of the whole column, [isc:iec, jsc:jec, 1:nz]
+  type(Box_t) :: bxQ0  ! The B-grid-index box of the whole column, [IscB:IecB, JscB:JecB, 1:nz]
 
   if (CS%Analytic_FV_PGF) then
     FV_ctx%G => G ; FV_ctx%GV => GV ; FV_ctx%US => US ; FV_ctx%tv => tv
@@ -119,6 +127,11 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
     endif
   endif
 
+  Gcore => grid_core(G)
+  call bxH0%safe_alloc(ndims=3) ; call bxQ0%safe_alloc(ndims=3)
+  call bxH0%set(idxS=[G%isc,G%jsc,1], idxE=[G%iec,G%jec,GV%ke])
+  call bxQ0%set(idxS=[G%IscB,G%JscB,1], idxE=[G%IecB,G%JecB,GV%ke])
+
   call h_a%alloc(lb=LBOUND(h), ub=UBOUND(h), source=h)
   call PFu_a%alloc(lb=LBOUND(PFu), ub=UBOUND(PFu), source=PFu)
   call PFv_a%alloc(lb=LBOUND(PFv), ub=UBOUND(PFv), source=PFv)
@@ -133,10 +146,21 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   call inty_dpa_a%alloc(lb=LBOUND(inty_dpa), ub=UBOUND(inty_dpa), source=inty_dpa)
   if (present(pbce)) call pbce_a%alloc(lb=LBOUND(pbce), ub=UBOUND(pbce), source=pbce)
   if (present(eta)) call eta_a%alloc(lb=LBOUND(eta), ub=UBOUND(eta), source=eta)
+  if (allocated(CS%PressureForce_Mont%PFu_bc)) &
+    call PFu_bc3d_a%alloc(lb=LBOUND(CS%PressureForce_Mont%PFu_bc), ub=UBOUND(CS%PressureForce_Mont%PFu_bc), &
+                          source=CS%PressureForce_Mont%PFu_bc)
+  if (allocated(CS%PressureForce_Mont%PFv_bc)) &
+    call PFv_bc3d_a%alloc(lb=LBOUND(CS%PressureForce_Mont%PFv_bc), ub=UBOUND(CS%PressureForce_Mont%PFv_bc), &
+                          source=CS%PressureForce_Mont%PFv_bc)
 
-  call PressureForce_TR(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, CS, associated(ALE_CSp), p_atm_a, host, e_sal_a, &
-                        e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, &
-                        inty_dpa_a, pbce_a, eta_a)
+  call PressureForce_TR(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, G%isd, G%IsdB, G%jsd, G%Z_ref, &
+                        GV%Boussinesq, GV%g_Earth, GV%H_to_RZ, GV%H_subroundoff, GV%H_to_Z, GV%Z_to_H, GV%Rho0, &
+                        GV%dZ_subroundoff, GV%semi_Boussinesq, CS%Analytic_FV_PGF, &
+                        CS%PressureForce_FV%PF_FV_opts_CS, CS%PressureForce_FV%PF_vgrid_consts_CS, &
+                        CS%PressureForce_Mont%PF_Mont_opts_CS, CS%PressureForce_Mont%PF_vgrid_consts_CS, &
+                        associated(ALE_CSp), p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                        e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a, &
+                        PFu_bc3d_a, PFv_bc3d_a)
 
   call PFu_a%copy2F(PFu)
   call PFv_a%copy2F(PFv)
@@ -150,10 +174,13 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   call inty_dpa_a%copy2F(inty_dpa)
   if (present(pbce)) call pbce_a%copy2F(pbce)
   if (present(eta)) call eta_a%copy2F(eta)
+  if (allocated(CS%PressureForce_Mont%PFu_bc)) call PFu_bc3d_a%copy2F(CS%PressureForce_Mont%PFu_bc)
+  if (allocated(CS%PressureForce_Mont%PFv_bc)) call PFv_bc3d_a%copy2F(CS%PressureForce_Mont%PFv_bc)
   call h_a%free() ; call PFu_a%free() ; call PFv_a%free() ; call p_atm_a%free()
   call e_sal_a%free() ; call e_tidal_eq_a%free() ; call e_tidal_sal_a%free() ; call e_sal_and_tide_a%free()
   call MassWt_u_a%free() ; call MassWt_v_a%free() ; call intx_dpa_a%free() ; call inty_dpa_a%free()
-  call pbce_a%free() ; call eta_a%free()
+  call pbce_a%free() ; call eta_a%free() ; call PFu_bc3d_a%free() ; call PFv_bc3d_a%free()
+  call bxH0%free() ; call bxQ0%free()
 
   if (CS%Analytic_FV_PGF) then
     if (GV%Boussinesq) then
@@ -175,18 +202,61 @@ end subroutine PressureForce
 
 !> The implementation of PressureForce (the root of its call tree): calls the finite volume or
 !! Montgomery potential form of the pressure force, in its Boussinesq or non-Boussinesq version.
-subroutine PressureForce_TR(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, CS, have_ALE_CSp, p_atm_a, host, e_sal_a, &
-                            e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, &
-                            inty_dpa_a, pbce_a, eta_a)
-  type(ocean_grid_type),   intent(in)  :: G    !< The ocean's grid structure
-  type(verticalGrid_type), intent(in)  :: GV   !< The ocean's vertical grid structure
-  type(unit_scale_type),   intent(in)  :: US   !< A dimensional unit scaling type
+subroutine PressureForce_TR(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, isd, IsdB, jsd, Z_ref, Boussinesq, &
+                            g_Earth, H_to_RZ, H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, &
+                            semi_Boussinesq, Analytic_FV_PGF, FV_opts, FV_vgrid, Mont_opts, Mont_vgrid, &
+                            have_ALE_CSp, p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                            e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, eta_a, &
+                            PFu_bc3d_a, PFv_bc3d_a)
+  type(grid_core_type),    intent(in)  :: Gcore !< Persistent copies of the core ocean grid fields
+  type(Box_t),             intent(in)  :: bxH0 !< The h-point box of the whole column, [isc:iec, jsc:jec, 1:nz]
+  type(Box_t),             intent(in)  :: bxQ0 !< The B-grid-index box of the whole column,
+                                               !! [IscB:IecB, JscB:JecB, 1:nz]
+  integer,                 intent(in)  :: isd !< The start i-index of cell centers within the data domain
+  integer,                 intent(in)  :: IsdB !< The start i-index of cell vertices within the data domain
+  integer,                 intent(in)  :: jsd !< The start j-index of cell centers within the data domain
+  real,                    intent(in)  :: Z_ref !< A reference value for all geometric height fields, such as
+                                                !! bathyT [Z ~> m].
+  logical,                 intent(in)  :: Boussinesq !< If true, make the Boussinesq approximation.
+  real,                    intent(in)  :: g_Earth !< The gravitational acceleration [L2 Z-1 T-2 ~> m s-2].
+  real,                    intent(in)  :: H_to_RZ !< A constant that translates thickness units to the units of
+                                                  !! mass per unit area [R Z H-1 ~> kg m-3 or 1].
+  real,                    intent(in)  :: H_subroundoff !< A thickness that is so small that it can be added to a
+                                                        !! thickness of Angstrom or larger without changing it at
+                                                        !! the bit level [H ~> m or kg m-2]. If Angstrom is 0 or
+                                                        !! exceedingly small, this is negligible compared to
+                                                        !! 1e-17 m.
+  real,                    intent(in)  :: H_to_Z !< A constant that translates thickness units to the units of
+                                                 !! depth [Z H-1 ~> 1 or m3 kg-1].
+  real,                    intent(in)  :: Z_to_H !< A constant that translates depth units to thickness units
+                                                 !! depth [H Z-1 ~> 1 or kg m-3].
+  real,                    intent(in)  :: Rho0 !< The density used in the Boussinesq approximation or nominal
+                                               !! density used to convert depths into mass units [R ~> kg m-3].
+  real,                    intent(in)  :: dZ_subroundoff !< A thickness in height units that is so small that it
+                                                         !! can be added to a vertical distance of Angstrom_Z or
+                                                         !! 1e-17 m without changing it at the bit level
+                                                         !! [Z ~> m].  This is the height equivalent of
+                                                         !! H_subroundoff.
+  logical,                 intent(in)  :: semi_Boussinesq !< If true, do non-Boussinesq pressure force
+                                                          !! calculations and use mass-based "thicknesses, but
+                                                          !! use Rho0 to convert layer thicknesses into certain
+                                                          !! height changes.  This only applies if BOUSSINESQ is
+                                                          !! false.
   type(RealArray_t),       intent(in)  :: h_a !< Layer thicknesses [H ~> m or kg m-2]
   logical,                 intent(in)  :: use_EOS !< If true, density is calculated from T & S using an
                                                   !! equation of state.
   type(RealArray_t),       intent(inout) :: PFu_a !< Zonal pressure force acceleration [L T-2 ~> m s-2]
   type(RealArray_t),       intent(inout) :: PFv_a !< Meridional pressure force acceleration [L T-2 ~> m s-2]
-  type(PressureForce_CS),  intent(inout) :: CS !< Pressure force control structure
+  logical,                 intent(in)  :: Analytic_FV_PGF !< If true, use the analytic finite volume form
+                                                          !! (Adcroft et al., Ocean Mod. 2008) of the PGF.
+  type(PF_FV_opts_CS),     intent(in)  :: FV_opts !< Options used by PressureForce_FV_Bouss and
+                                                  !! PressureForce_FV_nonBouss
+  type(PF_vgrid_consts_CS), intent(in)  :: FV_vgrid !< Persistent containers of the vertical grid
+                                                    !! arrays used by the pressure force calculations
+  type(PF_Mont_opts_CS),   intent(in)  :: Mont_opts !< Options used by PressureForce_Mont_Bouss and
+                                                    !! PressureForce_Mont_nonBouss
+  type(PF_vgrid_consts_CS), intent(in)  :: Mont_vgrid !< Persistent containers of the vertical grid
+                                                      !! arrays used by the pressure force calculations
   logical,                 intent(in)  :: have_ALE_CSp !< If true, the ALE control structure (ALE_CSp)
                                                        !! is associated.
   type(RealArray_t),       intent(in)  :: p_atm_a !< The pressure at the ice-ocean or
@@ -210,42 +280,35 @@ subroutine PressureForce_TR(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, CS, have_ALE_
                                                    !! due to eta anomalies [L2 T-2 H-1 ~> m s-2 or m4 s-2 kg-1].
   type(RealArray_t),       intent(inout) :: eta_a  !< The bottom mass used to calculate PFu and PFv,
                                                    !! [H ~> m or kg m-2], with any tidal contributions.
-  ! Local variables
-  type(RealArray_t) :: PFu_bc3d_a, PFv_bc3d_a
+  type(RealArray_t),       intent(inout) :: PFu_bc3d_a !< Zonal accelerations due to pressure gradients deriving
+                                                       !! from density gradients within layers [L T-2 ~> m s-2].
+  type(RealArray_t),       intent(inout) :: PFv_bc3d_a !< Meridional accelerations due to pressure gradients
+                                                       !! deriving from density gradients within layers
+                                                       !! [L T-2 ~> m s-2].
 
-  if (CS%Analytic_FV_PGF) then
-    if (GV%Boussinesq) then
-      call PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, CS%PressureForce_FV%PF_FV_opts_CS, &
-                                  CS%PressureForce_FV%PF_vgrid_consts_CS, have_ALE_CSp, p_atm_a, host, e_sal_a, &
-                                  e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, &
-                                  intx_dpa_a, inty_dpa_a, pbce_a, eta_a)
+  if (Analytic_FV_PGF) then
+    if (Boussinesq) then
+      call PressureForce_FV_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, isd, IsdB, jsd, Z_ref, &
+                                  g_Earth, H_subroundoff, H_to_Z, Z_to_H, Rho0, dZ_subroundoff, FV_opts, &
+                                  FV_vgrid, have_ALE_CSp, p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, &
+                                  e_sal_and_tide_a, MassWt_u_a, MassWt_v_a, intx_dpa_a, inty_dpa_a, pbce_a, &
+                                  eta_a)
     else
-      call PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, CS%PressureForce_FV%PF_FV_opts_CS, &
-                                     CS%PressureForce_FV%PF_vgrid_consts_CS, have_ALE_CSp, p_atm_a, host, &
-                                     e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, MassWt_u_a, &
-                                     MassWt_v_a, pbce_a, eta_a)
+      call PressureForce_FV_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, isd, IsdB, Z_ref, g_Earth, &
+                                     H_to_RZ, H_subroundoff, semi_Boussinesq, FV_opts, FV_vgrid, have_ALE_CSp, &
+                                     p_atm_a, host, e_sal_a, e_tidal_eq_a, e_tidal_sal_a, e_sal_and_tide_a, &
+                                     MassWt_u_a, MassWt_v_a, pbce_a, eta_a)
     endif
   else
-    if (allocated(CS%PressureForce_Mont%PFu_bc)) &
-      call PFu_bc3d_a%alloc(lb=LBOUND(CS%PressureForce_Mont%PFu_bc), ub=UBOUND(CS%PressureForce_Mont%PFu_bc), &
-                            source=CS%PressureForce_Mont%PFu_bc)
-    if (allocated(CS%PressureForce_Mont%PFv_bc)) &
-      call PFv_bc3d_a%alloc(lb=LBOUND(CS%PressureForce_Mont%PFv_bc), ub=UBOUND(CS%PressureForce_Mont%PFv_bc), &
-                            source=CS%PressureForce_Mont%PFv_bc)
-    if (GV%Boussinesq) then
-      call PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, &
-                                    CS%PressureForce_Mont%PF_Mont_opts_CS, &
-                                    CS%PressureForce_Mont%PF_vgrid_consts_CS, p_atm_a, host, e_sal_a, &
+    if (Boussinesq) then
+      call PressureForce_Mont_Bouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, H_to_Z, Z_to_H, &
+                                    dZ_subroundoff, Mont_opts, Mont_vgrid, p_atm_a, host, e_sal_a, &
                                     e_tidal_eq_a, e_tidal_sal_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
     else
-      call PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, G, GV, US, &
-                                       CS%PressureForce_Mont%PF_Mont_opts_CS, &
-                                       CS%PressureForce_Mont%PF_vgrid_consts_CS, p_atm_a, host, e_sal_a, &
+      call PressureForce_Mont_nonBouss(h_a, use_EOS, PFu_a, PFv_a, Gcore, bxH0, bxQ0, g_Earth, H_to_RZ, &
+                                       H_subroundoff, Mont_opts, Mont_vgrid, p_atm_a, host, e_sal_a, &
                                        e_tidal_eq_a, e_tidal_sal_a, pbce_a, eta_a, PFu_bc3d_a, PFv_bc3d_a)
     endif
-    if (allocated(CS%PressureForce_Mont%PFu_bc)) call PFu_bc3d_a%copy2F(CS%PressureForce_Mont%PFu_bc)
-    if (allocated(CS%PressureForce_Mont%PFv_bc)) call PFv_bc3d_a%copy2F(CS%PressureForce_Mont%PFv_bc)
-    call PFu_bc3d_a%free() ; call PFv_bc3d_a%free()
   endif
 
 end subroutine PressureForce_TR
