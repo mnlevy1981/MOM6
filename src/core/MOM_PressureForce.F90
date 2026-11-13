@@ -16,15 +16,13 @@ use MOM_PressureForce_FV, only : PressureForce_FV_init
 use MOM_PressureForce_FV, only : PressureForce_FV_CS
 use MOM_PressureForce_FV, only : PF_FV_host_ctx
 use MOM_PressureForce_FV, only : PF_FV_opts_CS
-use MOM_PressureForce_FV, only : PressureForce_FV_Bouss_pre, PressureForce_FV_Bouss_post
-use MOM_PressureForce_FV, only : PressureForce_FV_nonBouss_pre, PressureForce_FV_nonBouss_post
+use MOM_PressureForce_FV, only : PressureForce_FV_pre, PressureForce_FV_post
 use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss
 use MOM_PressureForce_Mont, only : PressureForce_Mont_init
 use MOM_PressureForce_Mont, only : PressureForce_Mont_CS
 use MOM_PressureForce_Mont, only : PF_Mont_host_ctx
 use MOM_PressureForce_Mont, only : PF_Mont_opts_CS, PF_vgrid_consts_CS
-use MOM_PressureForce_Mont, only : PressureForce_Mont_Bouss_pre, PressureForce_Mont_Bouss_post
-use MOM_PressureForce_Mont, only : PressureForce_Mont_nonBouss_pre, PressureForce_Mont_nonBouss_post
+use MOM_PressureForce_Mont, only : PressureForce_Mont_pre, PressureForce_Mont_post
 use MOM_self_attr_load, only : SAL_CS
 use MOM_tidal_forcing, only : tidal_forcing_CS
 use MOM_unit_scaling, only : unit_scale_type
@@ -139,17 +137,9 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   call inty_dpa_a%view(inty_dpa)
 
   if (CS%Analytic_FV_PGF) then
-    if (GV%Boussinesq) then
-      call PressureForce_FV_Bouss_pre(G, US, CS%PressureForce_FV, e_tidal_eq, e_tidal_sal)
-    else
-      call PressureForce_FV_nonBouss_pre(G, GV, US, CS%PressureForce_FV, e_tidal_eq, e_tidal_sal)
-    endif
+    call PressureForce_FV_pre(G, GV, US, CS%PressureForce_FV, e_tidal_eq, e_tidal_sal)
   else
-    if (GV%Boussinesq) then
-      call PressureForce_Mont_Bouss_pre(G, US, CS%PressureForce_Mont, use_EOS, tv, e_tidal_eq, e_tidal_sal)
-    else
-      call PressureForce_Mont_nonBouss_pre(G, US, CS%PressureForce_Mont, use_EOS, tv, e_tidal_eq, e_tidal_sal)
-    endif
+    call PressureForce_Mont_pre(G, US, CS%PressureForce_Mont, use_EOS, tv, e_tidal_eq, e_tidal_sal)
   endif
 
   Gcore => grid_core(G)
@@ -193,19 +183,10 @@ subroutine PressureForce(h, tv, PFu, PFv, G, GV, US, CS, ALE_CSp, ADp, p_atm, pb
   call bxH0%free() ; call bxQ0%free() ; call bxU0%free() ; call bxV0%free() ; call bxHgrad%free()
 
   if (CS%Analytic_FV_PGF) then
-    if (GV%Boussinesq) then
-      call PressureForce_FV_Bouss_post(h, tv, G, GV, CS%PressureForce_FV, ADp, p_atm, e_sal, e_tidal_eq, &
-                                       e_tidal_sal, e_sal_and_tide, MassWt_u, MassWt_v, intx_dpa, inty_dpa)
-    else
-      call PressureForce_FV_nonBouss_post(G, GV, CS%PressureForce_FV, ADp, e_sal, e_tidal_eq, e_tidal_sal, &
-                                          e_sal_and_tide, MassWt_u, MassWt_v)
-    endif
+    call PressureForce_FV_post(h, tv, G, GV, CS%PressureForce_FV, ADp, p_atm, e_sal, e_tidal_eq, e_tidal_sal, &
+                               e_sal_and_tide, MassWt_u, MassWt_v, intx_dpa, inty_dpa)
   else
-    if (GV%Boussinesq) then
-      call PressureForce_Mont_Bouss_post(G, CS%PressureForce_Mont, e_sal, e_tidal_eq, e_tidal_sal)
-    else
-      call PressureForce_Mont_nonBouss_post(G, CS%PressureForce_Mont, e_sal, e_tidal_eq, e_tidal_sal)
-    endif
+    call PressureForce_Mont_post(G, CS%PressureForce_Mont, e_sal, e_tidal_eq, e_tidal_sal)
   endif
 
   call e_sal_a%free() ; call e_tidal_eq_a%free() ; call e_tidal_sal_a%free() ; call e_sal_and_tide_a%free()

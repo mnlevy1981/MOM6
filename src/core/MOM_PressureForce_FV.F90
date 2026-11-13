@@ -41,8 +41,7 @@ implicit none ; private
 
 public PressureForce_FV_init
 public PressureForce_FV_Bouss, PressureForce_FV_nonBouss
-public PressureForce_FV_Bouss_pre, PressureForce_FV_Bouss_post
-public PressureForce_FV_nonBouss_pre, PressureForce_FV_nonBouss_post
+public PressureForce_FV_pre, PressureForce_FV_post
 public PF_FV_opts_CS_C, PF_FV_opts_CS_to_c, record_PF_FV_opts_CS
 
 ! A note on unit descriptions in comments: MOM6 uses units that can be rescaled for dimensional
@@ -657,9 +656,10 @@ subroutine PressureForce_FV_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_E
   call p_a%free()
 end subroutine PressureForce_FV_nonBouss
 
-!> The Fortran-only work PressureForce_FV_nonBouss needs done before it: checks that the module is initialized
-!! and that the Stanley parameterization is off, and finds the tidal geopotential anomalies.
-subroutine PressureForce_FV_nonBouss_pre(G, GV, US, CS, e_tidal_eq, e_tidal_sal)
+!> The Fortran-only work PressureForce_FV_Bouss and PressureForce_FV_nonBouss need done before them: checks
+!! that the module is initialized and, in non-Boussinesq mode, that the Stanley parameterization is off, and
+!! finds the tidal geopotential anomalies.
+subroutine PressureForce_FV_pre(G, GV, US, CS, e_tidal_eq, e_tidal_sal)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
@@ -671,10 +671,10 @@ subroutine PressureForce_FV_nonBouss_pre(G, GV, US, CS, e_tidal_eq, e_tidal_sal)
                 !! specific to tides [Z ~> m].
 
   if (.not.CS%initialized) call MOM_error(FATAL, &
-       "MOM_PressureForce_FV_nonBouss: Module must be initialized before it is used.")
+       "MOM_PressureForce_FV: Module must be initialized before it is used.")
 
-  if (CS%use_stanley_pgf) call MOM_error(FATAL, &
-       "MOM_PressureForce_FV_nonBouss: The Stanley parameterization is not yet "//&
+  if (CS%use_stanley_pgf .and. .not.GV%Boussinesq) call MOM_error(FATAL, &
+       "MOM_PressureForce_FV: The Stanley parameterization is not yet "//&
        "implemented in non-Boussinesq mode.")
 
   if (CS%PF_FV_opts_CS%tides) then
@@ -683,39 +683,118 @@ subroutine PressureForce_FV_nonBouss_pre(G, GV, US, CS, e_tidal_eq, e_tidal_sal)
     endif
   endif
 
-end subroutine PressureForce_FV_nonBouss_pre
+end subroutine PressureForce_FV_pre
 
-!> The Fortran-only diagnostics of PressureForce_FV_nonBouss, done after it: the posted fields, and the tidal
-!! and self-attraction and loading accelerations in ADp.
-subroutine PressureForce_FV_nonBouss_post(G, GV, CS, ADp, e_sal, e_tidal_eq, e_tidal_sal, e_sal_and_tide, &
-                                          MassWt_u, MassWt_v)
+!> The Fortran-only diagnostics of PressureForce_FV_Bouss and PressureForce_FV_nonBouss, done after them: the
+!! Stanley parameterization diagnostics, the posted fields, and the tidal and self-attraction and loading
+!! accelerations in ADp.
+subroutine PressureForce_FV_post(h, tv, G, GV, CS, ADp, p_atm, e_sal, e_tidal_eq, e_tidal_sal, &
+                                 e_sal_and_tide, MassWt_u, MassWt_v, intx_dpa, inty_dpa)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)  :: h   !< Layer thickness [H ~> m]
+  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
   type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
   type(accel_diag_ptrs),                      pointer     :: ADp !< Acceleration diagnostic pointers
+  real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean
+                                                         !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
     e_sal       !< The bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
   real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
-    e_tidal_eq  !< The bottom geopotential anomaly due to tidal forces from astronomical sources [Z ~> m].
+    e_tidal_eq  !< The bottom geopotential anomaly due to tidal forces from astronomical sources
+                !! [Z ~> m].
   real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
     e_tidal_sal !< The bottom geopotential anomaly due to harmonic self-attraction and loading
                 !! specific to tides [Z ~> m].
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_sal_and_tide!< The summation of self-attraction and loading and tidal forcing, used for recovering
-                !! old answers only [Z ~> m].
+    e_sal_and_tide!< The summation of self-attraction and loading and tidal forcing [Z ~> m].
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in) :: &
     MassWt_u    !< The fractional mass weighting at a u-point [nondim].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in) :: &
     MassWt_v    !< The fractional mass weighting at a v-point [nondim].
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in) :: &
+    intx_dpa    !< The change in intx_pa through a layer [R L2 T-2 ~> Pa].
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in) :: &
+    inty_dpa    !< The change in inty_pa through a layer [R L2 T-2 ~> Pa].
   ! Local variables
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
+    rho_pgf, rho_stanley_pgf ! Density [R ~> kg m-3] from EOS with and without SGS T variance
+                             ! in Stanley parameterization.
+  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
+    p_stanley   ! Pressure [R L2 T-2 ~> Pa] estimated with Rho_0
+  real :: zeros(SZI_(G))     ! An array of zero values that can be used as an argument [various]
+  real :: GxRho0             ! The gravitational acceleration times mean ocean density [R L2 Z-1 T-2 ~> Pa m-1]
+  real :: GxRho_ref          ! The gravitational acceleration times reference density [R L2 Z-1 T-2 ~> Pa m-1]
+  real :: h_neglect          ! A thickness that is so small it is usually lost
+                             ! in roundoff and can be neglected [H ~> m].
+  real :: I_Rho0             ! The inverse of the Boussinesq reference density [R-1 ~> m3 kg-1].
+  real :: rho_ref            ! The reference density [R ~> kg m-3].
+  real :: H_to_RL2_T2        ! A factor to convert from thickness units (H) to pressure
+                             ! units [R L2 T-2 H-1 ~> Pa m-1 or Pa m2 kg-1].
+  logical :: use_p_atm       ! If true, use the atmospheric pressure.
+  integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
   integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: i, j, k
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
 
+  use_p_atm = associated(p_atm)
+
+  h_neglect = GV%H_subroundoff
+  I_Rho0 = 1.0 / GV%Rho0
+  GxRho0 = GV%g_Earth * GV%Rho0
+  rho_ref = CS%PF_FV_opts_CS%rho_ref
+
+  if (CS%PF_FV_opts_CS%rho_ref_bug) then
+    GxRho_ref = GxRho0
+  else
+    GxRho_ref = GV%g_Earth * rho_ref
+  endif
+
+  if (CS%use_stanley_pgf) then
+    ! Calculated diagnostics related to the Stanley parameterization
+    zeros(:) = 0.0
+    EOSdom_h(:) = EOS_domain(G%HI)
+    if ((CS%id_p_stanley>0) .or. (CS%id_rho_pgf>0) .or. (CS%id_rho_stanley_pgf>0)) then
+      ! Find the pressure at the mid-point of each layer.
+      H_to_RL2_T2 = GV%g_Earth*GV%H_to_RZ
+      if (use_p_atm) then
+        do j=js,je ; do i=is,ie
+          p_stanley(i,j,1) = 0.5*h(i,j,1) * H_to_RL2_T2 + p_atm(i,j)
+        enddo ; enddo
+      else
+        do j=js,je ; do i=is,ie
+          p_stanley(i,j,1) = 0.5*h(i,j,1) * H_to_RL2_T2
+        enddo ; enddo
+      endif
+      do k=2,nz ; do j=js,je ; do i=is,ie
+        p_stanley(i,j,k) = p_stanley(i,j,k-1) + 0.5*(h(i,j,k-1) + h(i,j,k)) * H_to_RL2_T2
+      enddo ; enddo ; enddo
+    endif
+    if (CS%id_p_stanley>0) call post_data(CS%id_p_stanley, p_stanley, CS%diag)
+    if (CS%id_rho_pgf>0) then
+      do k=1,nz ; do j=js,je
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p_stanley(:,j,k), zeros, &
+                               zeros, zeros, rho_pgf(:,j,k), tv%eqn_of_state, EOSdom_h)
+      enddo ; enddo
+      call post_data(CS%id_rho_pgf, rho_pgf, CS%diag)
+    endif
+    if (CS%id_rho_stanley_pgf>0) then
+      do k=1,nz ; do j=js,je
+        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p_stanley(:,j,k), tv%varT(:,j,k), &
+                               zeros, zeros, rho_stanley_pgf(:,j,k), tv%eqn_of_state, EOSdom_h)
+      enddo ; enddo
+      call post_data(CS%id_rho_stanley_pgf, rho_stanley_pgf, CS%diag)
+    endif
+  endif
+
   if (CS%id_MassWt_u>0) call post_data(CS%id_MassWt_u, MassWt_u, CS%diag)
   if (CS%id_MassWt_v>0) call post_data(CS%id_MassWt_v, MassWt_v, CS%diag)
+
+  if (CS%id_rho_pgf>0) call post_data(CS%id_rho_pgf, rho_pgf, CS%diag)
+  if (CS%id_rho_stanley_pgf>0) call post_data(CS%id_rho_stanley_pgf, rho_stanley_pgf, CS%diag)
+  if (CS%id_p_stanley>0) call post_data(CS%id_p_stanley, p_stanley, CS%diag)
 
   ! Diagnostics for tidal forcing and SAL height anomaly
   if (CS%id_e_tide>0) then
@@ -731,32 +810,58 @@ subroutine PressureForce_FV_nonBouss_post(G, GV, CS, ADp, e_sal, e_tidal_eq, e_t
   if (CS%id_e_tidal_sal>0) call post_data(CS%id_e_tidal_sal, e_tidal_sal, CS%diag)
 
   ! Diagnostics for tidal forcing and SAL horizontal gradients
-  if (CS%PF_FV_opts_CS%calculate_SAL .and. (associated(ADp%sal_u) .or. associated(ADp%sal_v))) then
+  if (CS%PF_FV_opts_CS%calculate_SAL .and. ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
     if (CS%PF_FV_opts_CS%tides) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
       e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
     enddo ; enddo ; endif
-    if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-      ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * G%IdxCu(I,j)
-    enddo ; enddo ; enddo ; endif
-    if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-      ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * G%IdyCv(i,J)
-    enddo ; enddo ; enddo ; endif
+    if (CS%PF_FV_opts_CS%bq_sal_tides .or. .not.GV%Boussinesq) then
+      ! sal_u = ( e(i+1) - e(i) ) * g / dx
+      if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+        ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * G%IdxCu(I,j)
+      enddo ; enddo ; enddo ; endif
+      if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+        ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * G%IdyCv(i,J)
+      enddo ; enddo ; enddo ; endif
+    else
+      ! sal_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
+      if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+        ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * G%IdxCu(I,j) * I_Rho0 * &
+          (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
+      enddo ; enddo ; enddo ; endif
+      if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+        ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * G%IdyCv(i,J) * I_Rho0 * &
+          (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
+      enddo ; enddo ; enddo ; endif
+    endif
     if (CS%id_sal_u>0) call post_data(CS%id_sal_u, ADp%sal_u, CS%diag)
     if (CS%id_sal_v>0) call post_data(CS%id_sal_v, ADp%sal_v, CS%diag)
   endif
 
-  if (CS%PF_FV_opts_CS%tides .and. (associated(ADp%tides_u) .or. associated(ADp%tides_v))) then
-    if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-      ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * G%IdxCu(I,j)
-    enddo ; enddo ; enddo ; endif
-    if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-      ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * G%IdyCv(i,J)
-    enddo ; enddo ; enddo ; endif
+  if (CS%PF_FV_opts_CS%tides .and. ((associated(ADp%tides_u) .or. associated(ADp%tides_v)))) then
+    if (CS%PF_FV_opts_CS%bq_sal_tides .or. .not.GV%Boussinesq) then
+      ! tides_u = ( e(i+1) - e(i) ) * g / dx
+      if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+        ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * G%IdxCu(I,j)
+      enddo ; enddo ; enddo ; endif
+      if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+        ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * G%IdyCv(i,J)
+      enddo ; enddo ; enddo ; endif
+    else
+      ! tides_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
+      if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
+        ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * G%IdxCu(I,j) * I_Rho0 * &
+          (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
+      enddo ; enddo ; enddo ; endif
+      if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
+        ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * G%IdyCv(i,J) * I_Rho0 * &
+          (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
+      enddo ; enddo ; enddo ; endif
+    endif
     if (CS%id_tides_u>0) call post_data(CS%id_tides_u, ADp%tides_u, CS%diag)
     if (CS%id_tides_v>0) call post_data(CS%id_tides_v, ADp%tides_v, CS%diag)
   endif
 
-end subroutine PressureForce_FV_nonBouss_post
+end subroutine PressureForce_FV_post
 
 !> Calls FV_nonBouss_tv_tmp with the grid, vertical grid, thermodynamic variables and temporary
 !! T and S storage in the PF_FV_host_ctx that host points to, then points the thermodynamic
@@ -2217,211 +2322,6 @@ subroutine PressureForce_FV_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EOS,
   call e_a%free()
   call bxHintf%free()
 end subroutine PressureForce_FV_Bouss
-
-!> The Fortran-only work PressureForce_FV_Bouss needs done before it: checks that the module is initialized
-!! and finds the tidal geopotential anomalies.
-subroutine PressureForce_FV_Bouss_pre(G, US, CS, e_tidal_eq, e_tidal_sal)
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
-  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
-  type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_tidal_eq  !< The bottom geopotential anomaly due to tidal forces from astronomical sources
-                !! [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_tidal_sal !< The bottom geopotential anomaly due to harmonic self-attraction and loading
-                !! specific to tides [Z ~> m].
-
-  if (.not.CS%initialized) call MOM_error(FATAL, &
-       "MOM_PressureForce_FV_Bouss: Module must be initialized before it is used.")
-
-  if (CS%PF_FV_opts_CS%tides .and. CS%PF_FV_opts_CS%tides_answer_date<=20250131) then
-    if (CS%PF_FV_opts_CS%tides_answer_date>20230630) then ! answers_date between [20230701, 20250131]
-    call calc_tidal_forcing(CS%Time, e_tidal_eq, e_tidal_sal, G, US, CS%tides_CSp)
-    endif
-  endif
-
-  if (CS%PF_FV_opts_CS%tides .and. CS%PF_FV_opts_CS%tides_answer_date>20250131) then
-    call calc_tidal_forcing(CS%Time, e_tidal_eq, e_tidal_sal, G, US, CS%tides_CSp)
-  endif
-
-end subroutine PressureForce_FV_Bouss_pre
-
-!> The Fortran-only diagnostics of PressureForce_FV_Bouss, done after it: the Stanley parameterization
-!! diagnostics, the posted fields, and the tidal and self-attraction and loading accelerations in ADp.
-subroutine PressureForce_FV_Bouss_post(h, tv, G, GV, CS, ADp, p_atm, e_sal, e_tidal_eq, e_tidal_sal, &
-                                       e_sal_and_tide, MassWt_u, MassWt_v, intx_dpa, inty_dpa)
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure
-  type(verticalGrid_type),                    intent(in)  :: GV  !< Vertical grid structure
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)  :: h   !< Layer thickness [H ~> m]
-  type(thermo_var_ptrs),                      intent(in)  :: tv  !< Thermodynamic variables
-  type(PressureForce_FV_CS),                  intent(in)  :: CS  !< Finite volume PGF control structure
-  type(accel_diag_ptrs),                      pointer     :: ADp !< Acceleration diagnostic pointers
-  real, dimension(:,:),                       pointer     :: p_atm !< The pressure at the ice-ocean
-                                                         !! or atmosphere-ocean interface [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_sal       !< The bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
-    e_tidal_eq  !< The bottom geopotential anomaly due to tidal forces from astronomical sources
-                !! [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
-    e_tidal_sal !< The bottom geopotential anomaly due to harmonic self-attraction and loading
-                !! specific to tides [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_sal_and_tide!< The summation of self-attraction and loading and tidal forcing [Z ~> m].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in) :: &
-    MassWt_u    !< The fractional mass weighting at a u-point [nondim].
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in) :: &
-    MassWt_v    !< The fractional mass weighting at a v-point [nondim].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in) :: &
-    intx_dpa    !< The change in intx_pa through a layer [R L2 T-2 ~> Pa].
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in) :: &
-    inty_dpa    !< The change in inty_pa through a layer [R L2 T-2 ~> Pa].
-  ! Local variables
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
-    rho_pgf, rho_stanley_pgf ! Density [R ~> kg m-3] from EOS with and without SGS T variance
-                             ! in Stanley parameterization.
-  real, dimension(SZI_(G),SZJ_(G),SZK_(G)) :: &
-    p_stanley   ! Pressure [R L2 T-2 ~> Pa] estimated with Rho_0
-  real :: zeros(SZI_(G))     ! An array of zero values that can be used as an argument [various]
-  real :: GxRho0             ! The gravitational acceleration times mean ocean density [R L2 Z-1 T-2 ~> Pa m-1]
-  real :: GxRho_ref          ! The gravitational acceleration times reference density [R L2 Z-1 T-2 ~> Pa m-1]
-  real :: h_neglect          ! A thickness that is so small it is usually lost
-                             ! in roundoff and can be neglected [H ~> m].
-  real :: I_Rho0             ! The inverse of the Boussinesq reference density [R-1 ~> m3 kg-1].
-  real :: rho_ref            ! The reference density [R ~> kg m-3].
-  real :: H_to_RL2_T2        ! A factor to convert from thickness units (H) to pressure
-                             ! units [R L2 T-2 H-1 ~> Pa m-1 or Pa m2 kg-1].
-  logical :: use_p_atm       ! If true, use the atmospheric pressure.
-  integer, dimension(2) :: EOSdom_h ! The i-computational domain for the equation of state at tracer points
-  integer :: is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
-  integer :: i, j, k
-
-  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
-  Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
-
-  use_p_atm = associated(p_atm)
-
-  h_neglect = GV%H_subroundoff
-  I_Rho0 = 1.0 / GV%Rho0
-  GxRho0 = GV%g_Earth * GV%Rho0
-  rho_ref = CS%PF_FV_opts_CS%rho_ref
-
-  if (CS%PF_FV_opts_CS%rho_ref_bug) then
-    GxRho_ref = GxRho0
-  else
-    GxRho_ref = GV%g_Earth * rho_ref
-  endif
-
-  if (CS%use_stanley_pgf) then
-    ! Calculated diagnostics related to the Stanley parameterization
-    zeros(:) = 0.0
-    EOSdom_h(:) = EOS_domain(G%HI)
-    if ((CS%id_p_stanley>0) .or. (CS%id_rho_pgf>0) .or. (CS%id_rho_stanley_pgf>0)) then
-      ! Find the pressure at the mid-point of each layer.
-      H_to_RL2_T2 = GV%g_Earth*GV%H_to_RZ
-      if (use_p_atm) then
-        do j=js,je ; do i=is,ie
-          p_stanley(i,j,1) = 0.5*h(i,j,1) * H_to_RL2_T2 + p_atm(i,j)
-        enddo ; enddo
-      else
-        do j=js,je ; do i=is,ie
-          p_stanley(i,j,1) = 0.5*h(i,j,1) * H_to_RL2_T2
-        enddo ; enddo
-      endif
-      do k=2,nz ; do j=js,je ; do i=is,ie
-        p_stanley(i,j,k) = p_stanley(i,j,k-1) + 0.5*(h(i,j,k-1) + h(i,j,k)) * H_to_RL2_T2
-      enddo ; enddo ; enddo
-    endif
-    if (CS%id_p_stanley>0) call post_data(CS%id_p_stanley, p_stanley, CS%diag)
-    if (CS%id_rho_pgf>0) then
-      do k=1,nz ; do j=js,je
-        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p_stanley(:,j,k), zeros, &
-                               zeros, zeros, rho_pgf(:,j,k), tv%eqn_of_state, EOSdom_h)
-      enddo ; enddo
-      call post_data(CS%id_rho_pgf, rho_pgf, CS%diag)
-    endif
-    if (CS%id_rho_stanley_pgf>0) then
-      do k=1,nz ; do j=js,je
-        call calculate_density(tv%T(:,j,k), tv%S(:,j,k), p_stanley(:,j,k), tv%varT(:,j,k), &
-                               zeros, zeros, rho_stanley_pgf(:,j,k), tv%eqn_of_state, EOSdom_h)
-      enddo ; enddo
-      call post_data(CS%id_rho_stanley_pgf, rho_stanley_pgf, CS%diag)
-    endif
-  endif
-
-  if (CS%id_MassWt_u>0) call post_data(CS%id_MassWt_u, MassWt_u, CS%diag)
-  if (CS%id_MassWt_v>0) call post_data(CS%id_MassWt_v, MassWt_v, CS%diag)
-
-  if (CS%id_rho_pgf>0) call post_data(CS%id_rho_pgf, rho_pgf, CS%diag)
-  if (CS%id_rho_stanley_pgf>0) call post_data(CS%id_rho_stanley_pgf, rho_stanley_pgf, CS%diag)
-  if (CS%id_p_stanley>0) call post_data(CS%id_p_stanley, p_stanley, CS%diag)
-
-  ! Diagnostics for tidal forcing and SAL height anomaly
-  if (CS%id_e_tide>0) then
-    ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
-    ! New diagnostics are given for each individual field.
-    if (CS%PF_FV_opts_CS%tides_answer_date>20230630) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      e_sal_and_tide(i,j) = e_sal(i,j) + e_tidal_eq(i,j) + e_tidal_sal(i,j)
-    enddo ; enddo ; endif
-    call post_data(CS%id_e_tide, e_sal_and_tide, CS%diag)
-  endif
-  if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
-  if (CS%id_e_tidal_eq>0) call post_data(CS%id_e_tidal_eq, e_tidal_eq, CS%diag)
-  if (CS%id_e_tidal_sal>0) call post_data(CS%id_e_tidal_sal, e_tidal_sal, CS%diag)
-
-  ! Diagnostics for tidal forcing and SAL horizontal gradients
-  if (CS%PF_FV_opts_CS%calculate_SAL .and. ((associated(ADp%sal_u) .or. associated(ADp%sal_v)))) then
-    if (CS%PF_FV_opts_CS%tides) then ; do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-      e_sal(i,j) = e_sal(i,j) + e_tidal_sal(i,j)
-    enddo ; enddo ; endif
-    if (CS%PF_FV_opts_CS%bq_sal_tides) then
-      ! sal_u = ( e(i+1) - e(i) ) * g / dx
-      if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-        ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * GV%g_Earth * G%IdxCu(I,j)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-        ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * GV%g_Earth * G%IdyCv(i,J)
-      enddo ; enddo ; enddo ; endif
-    else
-      ! sal_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
-      if (associated(ADp%sal_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-        ADp%sal_u(I,j,k) = (e_sal(i+1,j) - e_sal(i,j)) * G%IdxCu(I,j) * I_Rho0 * &
-          (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%sal_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-        ADp%sal_v(i,J,k) = (e_sal(i,j+1) - e_sal(i,j)) * G%IdyCv(i,J) * I_Rho0 * &
-          (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
-    endif
-    if (CS%id_sal_u>0) call post_data(CS%id_sal_u, ADp%sal_u, CS%diag)
-    if (CS%id_sal_v>0) call post_data(CS%id_sal_v, ADp%sal_v, CS%diag)
-  endif
-
-  if (CS%PF_FV_opts_CS%tides .and. ((associated(ADp%tides_u) .or. associated(ADp%tides_v)))) then
-    if (CS%PF_FV_opts_CS%bq_sal_tides) then
-      ! tides_u = ( e(i+1) - e(i) ) * g / dx
-      if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-        ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * GV%g_Earth * G%IdxCu(I,j)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-        ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * GV%g_Earth * G%IdyCv(i,J)
-      enddo ; enddo ; enddo ; endif
-    else
-      ! tides_u = ( e(i+1) - e(i) ) * g / dx * (rho(k) / rho0)
-      if (associated(ADp%tides_u)) then ; do k=1,nz ; do j=js,je ; do I=Isq,Ieq
-        ADp%tides_u(I,j,k) = (e_tidal_eq(i+1,j) - e_tidal_eq(i,j)) * G%IdxCu(I,j) * I_Rho0 * &
-          (2.0 * intx_dpa(I,j,k) * GV%Z_to_H / ((h(i,j,k) + h(i+1,j,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
-      if (associated(ADp%tides_v)) then ; do k=1,nz ; do J=Jsq,Jeq ; do i=is,ie
-        ADp%tides_v(i,J,k) = (e_tidal_eq(i,j+1) - e_tidal_eq(i,j)) * G%IdyCv(i,J) * I_Rho0 * &
-          (2.0 * inty_dpa(i,J,k) * GV%Z_to_H / ((h(i,j,k) + h(i,j+1,k)) + h_neglect) + GxRho_ref)
-      enddo ; enddo ; enddo ; endif
-    endif
-    if (CS%id_tides_u>0) call post_data(CS%id_tides_u, ADp%tides_u, CS%diag)
-    if (CS%id_tides_v>0) call post_data(CS%id_tides_v, ADp%tides_v, CS%diag)
-  endif
-
-end subroutine PressureForce_FV_Bouss_post
 
 !> Calls FV_Bouss_tv_tmp with the grid, vertical grid, thermodynamic variables and temporary
 !! T and S storage in the PF_FV_host_ctx that host points to, then points the thermodynamic

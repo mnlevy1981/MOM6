@@ -32,8 +32,7 @@ implicit none ; private
 
 public PressureForce_Mont_Bouss, PressureForce_Mont_nonBouss, Set_pbce_Bouss
 public Set_pbce_nonBouss, PressureForce_Mont_init
-public PressureForce_Mont_Bouss_pre, PressureForce_Mont_Bouss_post
-public PressureForce_Mont_nonBouss_pre, PressureForce_Mont_nonBouss_post
+public PressureForce_Mont_pre, PressureForce_Mont_post
 public PF_Mont_opts_CS_C, PF_Mont_opts_CS_to_c, record_PF_Mont_opts_CS
 public PF_vgrid_consts_CS_C, PF_vgrid_consts_build, record_PF_vgrid_consts_CS
 #ifdef _TIM
@@ -500,9 +499,10 @@ subroutine PressureForce_Mont_nonBouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use
   call bxHdalpha%free()
 end subroutine PressureForce_Mont_nonBouss
 
-!> The Fortran-only work PressureForce_Mont_nonBouss needs done before it: checks that the module is initialized
-!! and that the equation of state is incompressible, and finds the tidal geopotential anomalies.
-subroutine PressureForce_Mont_nonBouss_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_tide_sal)
+!> The Fortran-only work PressureForce_Mont_Bouss and PressureForce_Mont_nonBouss need done before them: checks
+!! that the module is initialized and that the equation of state is incompressible, and finds the tidal
+!! geopotential anomalies.
+subroutine PressureForce_Mont_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_tide_sal)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(PressureForce_Mont_CS),                intent(in)  :: CS !< Control structure for Montgomery potential PGF
@@ -520,7 +520,7 @@ subroutine PressureForce_Mont_nonBouss_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_
 
   if (use_EOS) then
     if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
-      "PressureForce_Mont_nonBouss: The Montgomery form of the pressure force "//&
+      "PressureForce_Mont: The Montgomery form of the pressure force "//&
       "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
   endif
 
@@ -528,10 +528,10 @@ subroutine PressureForce_Mont_nonBouss_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_
     call calc_tidal_forcing(CS%Time, e_tide_eq, e_tide_sal, G, US, CS%tides_CSp)
   endif
 
-end subroutine PressureForce_Mont_nonBouss_pre
+end subroutine PressureForce_Mont_pre
 
-!> Posts the diagnostics of PressureForce_Mont_nonBouss, after it.
-subroutine PressureForce_Mont_nonBouss_post(G, CS, e_sal, e_tide_eq, e_tide_sal)
+!> Posts the diagnostics of PressureForce_Mont_Bouss and PressureForce_Mont_nonBouss, after them.
+subroutine PressureForce_Mont_post(G, CS, e_sal, e_tide_eq, e_tide_sal)
   type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
   type(PressureForce_Mont_CS),                intent(in)  :: CS !< Control structure for Montgomery potential PGF
   real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
@@ -551,7 +551,7 @@ subroutine PressureForce_Mont_nonBouss_post(G, CS, e_sal, e_tide_eq, e_tide_sal)
   if (CS%id_e_tide_eq>0) call post_data(CS%id_e_tide_eq, e_tide_eq, CS%diag)
   if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
 
-end subroutine PressureForce_Mont_nonBouss_post
+end subroutine PressureForce_Mont_post
 
 !> \brief Boussinesq Montgomery-potential form of pressure gradient
 !!
@@ -803,61 +803,6 @@ subroutine PressureForce_Mont_Bouss(bxH0, bxQ0, bxU0, bxV0, bxHgrad, h_a, use_EO
 
   call e_a%free() ; call rho_star_a%free()
 end subroutine PressureForce_Mont_Bouss
-
-!> The Fortran-only work PressureForce_Mont_Bouss needs done before it: checks that the module is initialized
-!! and that the equation of state is incompressible, and finds the tidal geopotential anomalies.
-subroutine PressureForce_Mont_Bouss_pre(G, US, CS, use_EOS, tv, e_tide_eq, e_tide_sal)
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
-  type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
-  type(PressureForce_Mont_CS),                intent(in)  :: CS !< Control structure for Montgomery potential PGF
-  logical,                                    intent(in)  :: use_EOS !< If true, density is calculated from T & S
-                                                                     !! using an equation of state.
-  type(thermo_var_ptrs),                      intent(in)  :: tv !< Thermodynamic variables.
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_tide_eq   !< Bottom geopotential anomaly due to tidal forces from astronomical sources
-                !! [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: &
-    e_tide_sal  !< Bottom geopotential anomaly due to harmonic self-attraction and loading
-                !! specific to tides, in depth units [Z ~> m].
-
-  if (.not.CS%initialized) call MOM_error(FATAL, &
-       "MOM_PressureForce_Mont: Module must be initialized before it is used.")
-
-  if (use_EOS) then
-    if (query_compressible(tv%eqn_of_state)) call MOM_error(FATAL, &
-      "PressureForce_Mont_Bouss: The Montgomery form of the pressure force "//&
-      "can no longer be used with a compressible EOS. Use #define ANALYTIC_FV_PGF.")
-  endif
-
-  if (CS%PF_Mont_opts_CS%tides) then
-    call calc_tidal_forcing(CS%Time, e_tide_eq, e_tide_sal, G, US, CS%tides_CSp)
-  endif
-
-end subroutine PressureForce_Mont_Bouss_pre
-
-!> Posts the diagnostics of PressureForce_Mont_Bouss, after it.
-subroutine PressureForce_Mont_Bouss_post(G, CS, e_sal, e_tide_eq, e_tide_sal)
-  type(ocean_grid_type),                      intent(in)  :: G   !< Ocean grid structure.
-  type(PressureForce_Mont_CS),                intent(in)  :: CS !< Control structure for Montgomery potential PGF
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
-    e_sal       !< The bottom geopotential anomaly due to self-attraction and loading [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
-    e_tide_eq   !< Bottom geopotential anomaly due to tidal forces from astronomical sources
-                !! [Z ~> m].
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: &
-    e_tide_sal  !< Bottom geopotential anomaly due to harmonic self-attraction and loading
-                !! specific to tides, in depth units [Z ~> m].
-
-  if (CS%id_PFu_bc>0) call post_data(CS%id_PFu_bc, CS%PFu_bc, CS%diag)
-  if (CS%id_PFv_bc>0) call post_data(CS%id_PFv_bc, CS%PFv_bc, CS%diag)
-  ! To be consistent with old runs, tidal forcing diagnostic also includes total SAL.
-  ! New diagnostics are given for each individual field.
-  if (CS%id_e_tide>0) call post_data(CS%id_e_tide, e_sal+e_tide_eq+e_tide_sal, CS%diag)
-  if (CS%id_e_sal>0) call post_data(CS%id_e_sal, e_sal, CS%diag)
-  if (CS%id_e_tide_eq>0) call post_data(CS%id_e_tide_eq, e_tide_eq, CS%diag)
-  if (CS%id_e_tide_sal>0) call post_data(CS%id_e_tide_sal, e_tide_sal, CS%diag)
-
-end subroutine PressureForce_Mont_Bouss_post
 
 !> Determines the partial derivative of the acceleration due
 !! to pressure forces with the free surface height.
